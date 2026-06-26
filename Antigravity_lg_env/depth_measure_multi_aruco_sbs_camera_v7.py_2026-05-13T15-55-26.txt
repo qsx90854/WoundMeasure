@@ -1,0 +1,18 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:55:26
+
+[減少的部分]
+行 273 附近 (原建立 Figure 的地方):
+-    fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
+-    fig.subplots_adjust(top=0.82, right=0.98, left=0.05)
+
+[新增的部分]
+行 273 附近 (加入修改標題與隱藏工具列):
++    fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
++    fig.canvas.manager.set_window_title("MeasureTool")
++    try:
++        fig.canvas.toolbar.pack_forget() # 隱藏底部的功能條
++    except:
++        pass
++    fig.subplots_adjust(top=0.82, right=0.98, left=0.05)

@@ -1,0 +1,26 @@
+時間：2026-05-21T14:50:04
+對話：
+User: 能加入時序連續性約束嗎
+User: 好 請實作
+Antigravity:
+已為您實作時序連續性約束與 EMA 平滑濾波功能，以解決 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 的 Baseline 與深度數值突然跳動的隱憂。
+
+### 實作內容
+
+1. **全域設定參數新增**：
+   * 在程式最上方全局設定區新增了 `ENABLE_POSE_SMOOTHING` (預設為 `True`) 與 `POSE_SMOOTHING_ALPHA` (預設為 `0.3`)，以方便您調整時序平滑程度。
+
+2. **核心位姿估計函數 `get_joint_relative_pose` 修改**：
+   * 支持傳入與利用 `prev_marker_poses` (上一次標籤位姿) 以及 `prev_rel_pose` (上一次相對相機位姿)。
+   * 在進行單個 ArUco 標籤角點的 PnP 估計時，將上一次的 `(rvec, tvec)` 作為初始猜測 (`useExtrinsicGuess=True`)，強制約束求解器不發生平面二義性翻轉。
+   * 在估計 Camera L 與 Camera R 的相對位姿時，亦使用上一次解算的相對位姿作為初值約束。
+
+3. **背景解算執行緒 `calc_worker` 改寫**：
+   * 在背景執行緒中持續維護時序狀態變數。
+   * 解算完當前姿態後，若開啟平滑，則使用指數移動平均 (EMA) 公式對相對平移向量 `t_r` 與 Rodrigues 旋轉向量 `rv_r` 進行平滑處理。
+   * 後續的 3D 三角重建、SVD 平面擬合等皆會使用平滑後的高穩定性姿態。
+
+4. **狀態重置邏輯**：
+   * 在點擊「鎖定左圖」、「鎖定右圖」、以及切換「連續計算模式」時，會自動調用 `reset_pose_history = True`，重置所有時序狀態與 EMA 濾波歷史，以防更換影像時的數值污染。
+
+依據您的指示，此 Python 檔案修改完成後，我並未嘗試自己執行，請您在您的環境下運行並進行測試驗證。

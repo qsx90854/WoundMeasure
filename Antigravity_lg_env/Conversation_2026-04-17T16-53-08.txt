@@ -1,0 +1,14 @@
+時間點: 2026-04-17T16:53:08+08:00
+
+【User 訊息】
+D:\Lightglue\lg_env\depth_measure_multi_aruco_lk.py:522: UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.
+  plt.tight_layout(rect=[0, 0.07, 1, 0.95]) # 下方留出空間給按鈕
+Traceback (most recent call last): ... UnboundLocalError: cannot access local variable 'CheckButtons' 
+
+【Assistant 回答】
+啊，真是不好意思！這是我剛剛在加入新的控制選單時，把 LK 優化與手動模式的 CheckButtons 寫在了 `from matplotlib.widgets import CheckButtons` 引用語法之前，導致 Python 認不得這個元件而報錯。
+
+我已經火速將這個引用的語句提早放到正確的位置了。這個 UnboundLocalError 錯誤已被修復。
+這份微小的順序調整與本則訊息已經一併歸檔。
+
+請您再執行一次 `python depth_measure_multi_aruco_lk.py`，這次 UI 介面就能順利彈出，讓您盡情體驗新的手動點擊與 LK 啟閉功能了！

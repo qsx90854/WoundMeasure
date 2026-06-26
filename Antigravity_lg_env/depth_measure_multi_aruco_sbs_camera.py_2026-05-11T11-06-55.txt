@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T11-06-55
+
+[新增的部分]
+行 295-297 (左圖左上角 FPS 文字標籤):
++    fps_text = ax_A.text(0.01, 0.97, "FPS: --", transform=ax_A.transAxes,
++                         color='lime', fontsize=10, fontweight='bold', va='top',
++                         bbox=dict(facecolor='black', alpha=0.6), zorder=10)
+
+行 864-867 (FPS 計時器初始化):
++    import time as _time
++    _fps_t0 = _time.perf_counter()
++    _fps_counter = 0
++    _fps_val = 0.0
+
+行 910-920 (主迴圈 FPS 計算與更新):
++    _fps_counter += 1
++    _now = _time.perf_counter()
++    _elapsed = _now - _fps_t0
++    if _elapsed >= 0.5:   # 每 0.5 秒更新一次
++        _fps_val = _fps_counter / _elapsed
++        fps_text.set_text(f"FPS: {_fps_val:.1f}")
++        _fps_t0 = _now
++        _fps_counter = 0

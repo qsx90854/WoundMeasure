@@ -1,0 +1,16 @@
+時間: 2026-05-11T11:17:08
+使用者請求:
+目前純顯示FPS約10, 能否將各階段耗時計算一下, 印在終端機讓我確認
+
+回答訊息:
+已加入各階段計時！程式每 2 秒會在終端機輸出一行如下格式的報告：
+
+[耗時分析] 20幀平均 | cap.read=45.3ms  frame_buf=0.05ms  calc_q=0.01ms  result_q=0.02ms  process_view=18.7ms  set_data=3.2ms  plt.pause=30.1ms  | FPS=10.2
+
+各欄位說明：
+- cap.read    → 相機讀幀（受 USB 頻寬/曝光時間限制）
+- process_view → remap + resize（CPU 影像處理）
+- set_data    → Matplotlib im.set_data（記憶體傳輸）
+- plt.pause   → Matplotlib 事件迴圈（GUI 繪製）
+
+通常 FPS=10 的元兇會是 cap.read 或 plt.pause 其中之一，看到報告後就能精準針對瓶頸優化。

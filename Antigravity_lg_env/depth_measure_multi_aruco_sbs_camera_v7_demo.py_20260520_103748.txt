@@ -1,0 +1,37 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-20T10:37:48
+
+--- 減少的部份 ---
+第 37-40 行:
+```python
+TARGET_W              = 1024                       # 統一縮放寬度
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+ENFORCE_COPLANAR      = True                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+```
+
+第 442-445 行:
+```python
+        if cand.get('baseline', 0.0) < 15.0:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': '視差不足(<15mm)', 'u': u, 'v': v}
+```
+
+--- 新增的部份 ---
+第 37-41 行:
+```python
+TARGET_W              = 1024                       # 統一縮放寬度
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+MIN_BASELINE_MM       = 15.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
+ENFORCE_COPLANAR      = True                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+```
+
+第 443-446 行:
+```python
+        if cand.get('baseline', 0.0) < MIN_BASELINE_MM:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': f'視差不足(<{MIN_BASELINE_MM}mm)', 'u': u, 'v': v}
+```

@@ -1,0 +1,7 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [新增] 1-229 行: 全新建立。依照「影片多視角量測」計畫，實作了包含：
+  - 影片讀取與播放控制 UI (Slider, Play/Pause 按鈕)。
+  - `get_aruco_pose_to_global`: 尋找畫面中的 ArUco 標籤，並以其為原點 (Z=0) 反推相機的絕對姿態矩陣 P。
+  - 光流法 (Lucas-Kanade): `cv2.calcOpticalFlowPyrLK` 追蹤使用者點擊的兩點。
+  - `multi_view_triangulation`: N-View 超定方程組三角測量 (SVD)，利用歷史追蹤軌跡推算精確 3D 深度與距離。

@@ -1,0 +1,22 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_14-11-24
+
+減少的部份:
+行號 574:
+                d_val = p3d[2]; p3d_val = p3d
+行號 579:
+                print(f"   [計算結果] 深度(Z): {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+行號 689:
+                main_text = f"深度(Z): {res['d']:.1f}mm{p_dist_str}\n外參來源: {pose_info_str}"
+行號 691:
+                main_text = f"深度(Z): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+
+新增的部份:
+行號 574:
+                d_val = np.linalg.norm(p3d); p3d_val = p3d
+行號 579:
+                print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+行號 689:
+                main_text = f"歐式距離: {res['d']:.1f}mm{p_dist_str}\n外參來源: {pose_info_str}"
+行號 691:
+                main_text = f"歐式距離: 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"

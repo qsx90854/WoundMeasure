@@ -1,0 +1,13 @@
+時間點: 2026-04-20T11:46:57+08:00
+
+【減少的部份】
+1. 刪除了 `find_precise_match` 大量基於極線與 3D 射線投影 (Ray-Casting) 去猜測右圖初略位置的舊程式碼（約 50 行）。因為那樣無法解決 `patch_left` 與 `roi_right` 由於相機視角不同產生的仿射透視形變 (Affine Skew)。
+
+【新增的部份】
+1. 完全重寫 `find_precise_match`：
+   - 使用 `np.dot` 算出平面深度 `d`
+   - 使用公式 `H_3D = R_rel + (t_rel @ plane_normal.reshape(1, 3)) / d` 以建構純物理矩陣
+   - 使用公式 `H_AB = K @ H_3D @ K_inv` 得出精確對應 ArUco 表面的影像間單應性 (Homography) 矩陣，並求出逆矩陣 `H_BA`
+   - 利用 `cv2.warpPerspective(imgB_gray, H_BA, ...)` 將右圖**全局逆向扭曲回相機 A 之正視等價視角**，完全消除形變！
+   - 隨後，直接對等視角的 `imgB_warped` 執行 `31x31` 模板匹配與拋物二次插值，抓取不受形變干擾之剛性對應中心。
+   - 最終，用 `H_AB` 乘回匹配點，返回極度準確的 Camera B 原始像面座標。

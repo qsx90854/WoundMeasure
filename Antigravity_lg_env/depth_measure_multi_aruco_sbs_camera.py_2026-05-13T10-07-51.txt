@@ -1,0 +1,71 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T10:07:51
+
+[減少的部分]
+行 474 附近 (compute_measure):
+-                    disp_s = stereo.compute(rectA_s, rectB_s).astype(np.float32) / 16.0
+-                    pts3D_s = cv2.reprojectImageTo3D(disp_s, Q_s)
+-                    
+-                    # 將當前點擊點 (u, v) 投影到 spatial rectified 空間
+
+行 945 附近 (建立按鈕):
+-    ax_btn_lock_R = fig.add_axes([0.72, 0.92, 0.15, 0.04])
+-    btn_lock_R = Button(ax_btn_lock_R, "鎖定右圖")
+-    
+-    auto_calc_active = False
+
+行 958 附近 (on_auto_calc):
+-            print("⏸️ 關閉連續計算模式")
+-        request_blit_refresh()
+-    
+-    def on_lock_L(event):
+
+行 1115 附近 (繫結事件):
+-    btn_calc.on_clicked(on_calc)
+-    btn_auto_calc.on_clicked(on_auto_calc)
+
+[新增的部分]
+行 474 附近 (compute_measure):
++                    disp_s = stereo.compute(rectA_s, rectB_s).astype(np.float32) / 16.0
++                    pts3D_s = cv2.reprojectImageTo3D(disp_s, Q_s)
++                    
++                    # 儲存視差圖
++                    try:
++                        disp_vis = cv2.normalize(disp_s, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8U)
++                        disp_color = cv2.applyColorMap(disp_vis, cv2.COLORMAP_JET)
++                        cv2.imwrite('disparity_last.png', disp_color)
++                        print("💾 已儲存最新 SGBM 視差圖至 disparity_last.png")
++                    except Exception as e:
++                        print(f"⚠️ 儲存視差圖失敗: {e}")
++                    
++                    # 將當前點擊點 (u, v) 投影到 spatial rectified 空間
+
+行 945 附近 (建立按鈕):
++    ax_btn_lock_R = fig.add_axes([0.72, 0.92, 0.15, 0.04])
++    btn_lock_R = Button(ax_btn_lock_R, "鎖定右圖")
++    
++    ax_btn_show_disp = fig.add_axes([0.88, 0.92, 0.10, 0.04])
++    btn_show_disp = Button(ax_btn_show_disp, "顯示視差圖")
++    
++    auto_calc_active = False
+
+行 958 附近 (on_auto_calc):
++            print("⏸️ 關閉連續計算模式")
++        request_blit_refresh()
++    
++    def on_show_disp(event):
++        import os
++        if os.path.exists('disparity_last.png'):
++            img = cv2.imread('disparity_last.png')
++            cv2.imshow('SGBM Disparity Map', img)
++            cv2.waitKey(1)
++        else:
++            print("⚠️ 尚未產生視差圖！")
++    
++    def on_lock_L(event):
+
+行 1115 附近 (繫結事件):
++    btn_calc.on_clicked(on_calc)
++    btn_auto_calc.on_clicked(on_auto_calc)
++    btn_show_disp.on_clicked(on_show_disp)

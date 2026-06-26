@@ -1,0 +1,81 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T14:34:45+08:00
+
+--- 減少的部份 ---
+行號 100-106:
+    patch_size = 15
+    u, v = int(round(pt_A[0])), int(round(pt_A[1]))
+    u0, u1 = max(0, u-patch_size), min(w, u+patch_size+1)
+    v0, v1 = max(0, v-patch_size), min(h, v+patch_size+1)
+    patch_l = imgA_gray[v0:v1, u0:u1]
+    if patch_l.size == 0: return None
+    search = 30
+
+行號 366:
+        if np.min(dists) < 10:
+
+行號 628:
+                sobel_range = 12
+
+行號 645:
+                    rad = 20; uei, vei = int(round(u_exp)), int(round(v_exp))
+
+行號 680-685:
+                                H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
+                                if H_local is not None:
+                                    pt_h = H_local @ np.array([u, v, 1.0])
+                                    mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
+                            if mapped is None and len(ptsA_m) >= 3:
+                                M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+
+行號 709-718:
+            tmpl = get_patch(snap_imgA_gray, (u, v), 31)
+            roi = get_patch(cand['gray'], m_pt, 61)
+            if tmpl is not None and roi is not None:
+                warp = np.eye(2, 3, dtype=np.float32)
+                warp[0, 2] = (61 - 31) / 2.0; warp[1, 2] = (61 - 31) / 2.0
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-4)
+                try:
+                    _, warp = cv2.findTransformECC(tmpl, roi, warp, cv2.MOTION_TRANSLATION, criteria)
+                    m_pt = np.array([m_pt[0] - 30.5 + warp[0, 2] + 15.5,
+                                     m_pt[1] - 30.5 + warp[1, 2] + 15.5])
+
+
+--- 新增的部份 ---
+行號 100-106:
+    patch_size = 20
+    u, v = int(round(pt_A[0])), int(round(pt_A[1]))
+    u0, u1 = max(0, u-patch_size), min(w, u+patch_size+1)
+    v0, v1 = max(0, v-patch_size), min(h, v+patch_size+1)
+    patch_l = imgA_gray[v0:v1, u0:u1]
+    if patch_l.size == 0: return None
+    search = 45
+
+行號 366:
+        if np.min(dists) < 15:
+
+行號 628:
+                sobel_range = 18
+
+行號 645:
+                    rad = 30; uei, vei = int(round(u_exp)), int(round(v_exp))
+
+行號 680-685:
+                                H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 4.0)
+                                if H_local is not None:
+                                    pt_h = H_local @ np.array([u, v, 1.0])
+                                    mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
+                            if mapped is None and len(ptsA_m) >= 3:
+                                M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=4.0)
+
+行號 709-718:
+            tmpl = get_patch(snap_imgA_gray, (u, v), 45)
+            roi = get_patch(cand['gray'], m_pt, 91)
+            if tmpl is not None and roi is not None:
+                warp = np.eye(2, 3, dtype=np.float32)
+                warp[0, 2] = (91 - 45) / 2.0; warp[1, 2] = (91 - 45) / 2.0
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-4)
+                try:
+                    _, warp = cv2.findTransformECC(tmpl, roi, warp, cv2.MOTION_TRANSLATION, criteria)
+                    m_pt = np.array([m_pt[0] - 45.5 + warp[0, 2] + 22.5,
+                                     m_pt[1] - 45.5 + warp[1, 2] + 22.5])

@@ -1,0 +1,12 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-05 08:12
+
+[新增的部分]
+- 新增全域配置 SAVE_ARUCO_DEBUG_IMG。
+- 新增 ArUco 視覺化存檔邏輯：
+    - 左圖：存為 debug_L_frame_{index}.png (綠色標記)。
+    - 右圖：存為 debug_R_frame_{index}.png (黃色標記)。
+    - 存放路徑：專案目錄下的 debug_aruco 資料夾。
+
+[備註]
+此功能可幫助確認為何「無候選幀」，透過觀察 debug 圖片可以清楚看到哪些標籤有被正確偵測到，哪些則沒有。

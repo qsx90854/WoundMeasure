@@ -1,0 +1,5 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 70-87 行: 在 `get_aruco_pose_to_global` 中，加入防範 Planar Ambiguity (ArUco 姿態翻轉) 的邏輯。藉由檢查 ArUco 標籤的法向量 `R_w2c[:, 2]` 與相機平移向量 `tvec` 的內積是否大於 0，來過濾掉翻轉的無效姿態解，防止錯誤的投影矩陣污染三角測量。
+- [新增] 89-94 行: 新增 `undistort_points_for_triangulation` 函式。使用 `cv2.undistortPoints` 將光流追蹤到的畸變像素重新校正回理想的線性透視相機座標。
+- [修改] 275-283 行: 在 `on_calc_btn` 函式中，在執行多視角三角測量前，先將收集到的所有 2D 追蹤點透過 `undistort_points_for_triangulation` 消除畸變，解決深度計算誤差的根本原因。

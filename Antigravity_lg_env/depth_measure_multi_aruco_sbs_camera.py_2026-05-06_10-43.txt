@@ -1,0 +1,8 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-06 10:43
+
+[修改的部分]
+- 移除了全域變數 `videoframe_gap_number`。
+- 新增了 `videoframe_left_to_right_gap`：專門用來設定「左圖」與「第一張右圖」之間的 Frame 間距。
+- 新增了 `videoframe_right_to_right_gap`：專門用來設定第一張右圖之後，「後續每張右圖之間」的 Frame 間距。
+- 更新了 `main` 函式中讀取候選幀的公式。現在第一張候選幀的索引為 `leftImage_index + left_to_right_gap`，後續的幀則為 `leftImage_index + left_to_right_gap + i * right_to_right_gap`。

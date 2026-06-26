@@ -1,0 +1,11 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-21 16:46:26
+
+【修改】
+行數：668 ~ 671
+內容：
+修正全域極線 1D 搜尋的起點計算錯誤。原先直接使用 `raw_match_pt` 導致搜尋軌跡平行於極線但有垂直偏移。
+現在加入投影公式，將 `search_center` 強制投影到 $ax+by+c=0$ 的極線上作為唯一物理起點。
+x0, y0 = raw_match_pt[0], raw_match_pt[1]
+err_dist = (a*x0 + b*y0 + c) / (a*a + b*b)
+search_center = np.array([x0 - a*err_dist, y0 - b*err_dist])

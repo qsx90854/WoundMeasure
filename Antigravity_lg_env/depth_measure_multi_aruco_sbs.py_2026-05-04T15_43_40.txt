@@ -1,0 +1,55 @@
+修改檔案: depth_measure_multi_aruco_sbs.py
+時間點: 2026-05-04T15:43:40+08:00
+
+--- 減少部分 (原行數 709-726) ---
+-                        ptsA_match, ptsB_match = [], []
+-                        click_pt = np.array([click_u, click_v])
+-                        
+-                        for m in good_all:
+-                            ptL = kpts_inject[m.queryIdx].pt
+-                            ptR = kpts_r[m.trainIdx].pt
+-                            if np.linalg.norm(np.array(ptL) - click_pt) < 50:
+-                                ptsA_match.append(ptL)
+-                                ptsB_match.append(ptR)
+-                        
+-                        if ptsA_match:
+-                            ptsA_match, ptsB_match = np.array(ptsA_match), np.array(ptsB_match)
+-                            dist_sq = np.sum((ptsA_match - click_pt)**2, axis=1)
+-                            weights = 1.0 / (dist_sq + 1e-5)
+-                            off = ptsB_match - ptsA_match
+-                            match_pt = np.array([click_u, click_v]) + np.sum(off * weights[:, np.newaxis], axis=0) / np.sum(weights)
+-                            method = "局部 ROI 梯度 SIFT"
+-                            print(f"  [ROI-Grad-SIFT] 匹配成功數: {len(ptsA_match)} / 100")
+
+--- 新增部分 (新行數 709 起) ---
++                        # (1) 多對一過濾：確保每個右圖點只對應到最合適的左圖點
++                        best_matches_dict = {}
++                        for m in good_all:
++                            if m.trainIdx not in best_matches_dict or m.distance < best_matches_dict[m.trainIdx].distance:
++                                best_matches_dict[m.trainIdx] = m
++                        good_all = list(best_matches_dict.values())
++                        
++                        # (2) 區域一致性過濾 (位移向量中位數過濾)
++                        pts_info = []
++                        click_pt = np.array([click_u, click_v])
++                        for m in good_all:
++                            pL = np.array(kpts_inject[m.queryIdx].pt)
++                            pR = np.array(kpts_r[m.trainIdx].pt)
++                            if np.linalg.norm(pL - click_pt) < 50:
++                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
++                        
++                        if len(pts_info) >= 3:
++                            offs = np.array([x['off'] for x in pts_info])
++                            med_off = np.median(offs, axis=0)
++                            # 剔除位移向量離中位數超過 15 像素的點
++                            pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 15]
++                        
++                        if pts_info:
++                            ptsA_match = np.array([x['pL'] for x in pts_info])
++                            ptsB_match = np.array([x['pR'] for x in pts_info])
++                            dist_sq = np.sum((ptsA_match - click_pt)**2, axis=1)
++                            weights = 1.0 / (dist_sq + 1e-5)
++                            off_vectors = ptsB_match - ptsA_match
++                            match_pt = np.array([click_u, click_v]) + np.sum(off_vectors * weights[:, np.newaxis], axis=0) / np.sum(weights)
++                            method = "局部 ROI 梯度 SIFT (二階段過濾)"
++                            print(f"  [ROI-Grad-SIFT] 最終匹配數: {len(pts_info)} (原始: {len(good_all)})")

@@ -1,0 +1,11 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T15-35-30
+
+[減少的部分]
+行 756 附近:
+-            frame_buffer.pop(0)
+
+[新增的部分]
+行 756 附近:
++            frame_buffer.popleft()

@@ -1,0 +1,16 @@
+時間: 2026-05-11T11:25:00
+使用者請求:
+依你建議, 先試方案2吧
+
+回答訊息:
+已完成 Matplotlib Blit 優化！主要變更如下：
+
+1. im_A, im_B, fps_text 標記為 animated=True → 不進入靜態背景 buffer
+2. 建立 blit_state {'bg': None, 'needs_refresh': True} 管理背景狀態
+3. 建立 request_blit_refresh() helper 函式
+4. 所有 fig.canvas.draw_idle() 呼叫（共 11 處）改為 request_blit_refresh()
+5. 主迴圈 plt.pause(0.001) 改為：
+   - needs_refresh 時：fig.canvas.draw() → copy_from_bbox → 存 background
+   - 一般幀（無 UI 更新）：restore_region → draw_artist(im_A/im_B/fps_text) → blit → flush_events
+
+這樣只有 UI 確實有更新時才做完整 draw，其他幀只做影像 blit，預計 plt.pause 的 75ms 可降到 5~15ms，FPS 提升至 30+。

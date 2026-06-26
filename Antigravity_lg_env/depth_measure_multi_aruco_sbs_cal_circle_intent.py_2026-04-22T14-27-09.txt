@@ -1,0 +1,17 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_cal_circle_intent.py
+時間：2026-04-22 14:27:09
+
+【新增功能】橢圓區域批次量測
+內容：
+1. 整合 SGBM (Stereo Semi-Global Block Matching) 到主流程，載入圖片後自動計算全域視差圖 (disparity_map)。
+2. UI 介面新增「橢圓量測模式」勾選框與「計算統計」按鈕。
+3. 實作橢圓繪製互動：
+   - 滑鼠下壓：設定中心。
+   - 滑鼠拖曳：動態調整水平/垂直半軸 (a, b)。
+   - 滑鼠放開：完成橢圓並存入列表。
+4. 實作 `calculate_ellipse_stats()`：
+   - 遍歷所有選取橢圓區域內的像素。
+   - 透過 SGBM 視差圖轉換為 3D 座標。
+   - 計算每個點到 ArUco 擬合平面的垂直距離。
+   - 輸出統計資訊：總點數、平均距離、標準差 (SD)。
+原因：回應使用者需求，支援複數橢圓形 ROI 的批次平面度測量。

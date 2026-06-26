@@ -1,0 +1,6 @@
+camera_calibrate.py 修改紀錄：
+[修改] 行數: 19-153 (全面改寫 calibrate 函式)
+1. 移除了讀取影像後將影像「左右切半」的邏輯 (`img_L` 與 `img_R`)，改為直接將整張圖 (`cv2.imread(fname)`) 轉為灰階後進行 `cv2.findChessboardCorners`。
+2. 廢除雙眼校正 `cv2.stereoCalibrate`，改為使用 `cv2.calibrateCamera` 對全部抓取到的棋盤格點進行單一相機的內部參數校正。
+3. 移除「挑選誤差最小的 5 張圖進行 Stereo 校正」的機制，改為直接計算所有相片平均重投影誤差，以確保能利用所有照片求出最精準的焦距與畸變矩陣。
+4. JSON 寫出邏輯調整：為了確保與舊版專案的相容性 (其他腳本仍會讀取 intrinsic_L, intrinsic_R 與 extrinsic)，把算出來的單一相機內部參數與畸變分別複製到 `"intrinsic_L"` 與 `"intrinsic_R"` 中；並且將 `"extrinsic"` 的旋轉矩陣 (R) 設為單位矩陣 (np.eye)，平移矩陣 (T) 設為零。

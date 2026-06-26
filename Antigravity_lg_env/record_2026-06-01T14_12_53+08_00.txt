@@ -1,0 +1,9 @@
+對話時間：2026-06-01T14:12:53+08:00
+
+使用者提問：
+depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py是從depth_measure_multi_aruco_sbs_camera_v7_demo複製過來的, 請幫忙把depth_measure_multi_aruco_sbs_camera_v7_demo_zebra改成直接用1920x1080的相機影像, 而不是只用影像左半邊, 我已經把解析度改好了
+
+回答內容：
+已成功將 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 改為直接使用完整寬度的相機影像（不進行剖半）。
+修改邏輯是將第 383 行的 `w_alg = w_raw // 2` 替換為 `w_alg = w_raw`。如此一來，後續程式中所有影像切片（如 `first_frame[:, :w_alg]` 與 `frame[:, :w_alg]`）都將取得完整寬度的 1920 像素，不再只使用左半邊。
+由於規則限制，此處不會嘗試執行此 Python 檔案。請您重新執行以驗證是否能正常以完整 1920x1080 的解析度運行。

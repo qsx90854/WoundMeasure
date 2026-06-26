@@ -1,0 +1,13 @@
+時間點：2026-05-05T15:30:30+08:00
+使用者請求：
+depth_measure_multi_aruco_sbs_camera.py 請修改這隻程式, 
+1.改成讀取影片, 以變數videoframe_leftImage_index指定要用哪一幀當左圖, 以變數videoframe_total_number作為右圖候選張數, 以變數videoframe_gap_number決定從videoframe_leftImage_index開始後, 每隔幾張要取frame當作右圖候選,直到取夠數量=videoframe_total_number
+2.假設videoframe_total_number=3, 那程式就是以左圖與這三張都做特徵匹配, 流程與原本的相同只是改成做三次, 當使用者在左圖上點擊一個位置後, 計算這個點與這三張圖的匹配結果並計算距離資訊, 並顯示各自的結果與平均結果
+3.目前UI是左邊顯示左圖, 右邊顯示右圖, 請修改成右邊的部分加一個動態下拉選單, 可以決定右邊要顯示videoframe_total_number內的哪一張圖
+
+回答摘要：
+我已制定影片多幀候選匹配系統的升級計畫：
+1. 修改讀取邏輯，支援從影片指定幀號提取左圖及多個間隔右圖。
+2. 重構資料結構以支援多個右圖候選點的並行匹配與量測。
+3. 更新 UI 介面，加入 RadioButtons 選單以切換右圖顯示內容。
+4. 量測結果將會顯示單幀詳細資訊與多幀平均值，提升精準度與穩定性分析能力。

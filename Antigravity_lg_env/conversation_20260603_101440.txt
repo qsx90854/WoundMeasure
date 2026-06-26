@@ -1,0 +1,9 @@
+時間點: 2026-06-03T10:14:40+08:00
+
+使用者提問:
+OK, 但我記得找特徵點的範圍參數也不太一樣 記得一併改回來
+
+助手回答:
+好的，已為您將此特徵點匹配參數細節補充至實施計劃 [implementation_plan.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/implementation_plan.md) 中。
+我們在複製 `zebra.py` 的代碼至 `live.py` 後，會將 `compute_measure` 內的 Grad-SIFT 與 ECC 精修搜尋半徑及補償值公式改回 Live 原始適配的數值（如 `sobel_range=12`, `rad=20`, `RANSAC=3.0`, ECC=31/61 與偏移修正 `30.5`/`15.5`）。
+請您審查更新後的計劃，如同意請回覆以利開始進行程式調整。

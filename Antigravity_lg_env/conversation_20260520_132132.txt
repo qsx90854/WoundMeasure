@@ -1,0 +1,27 @@
+時間：2026-05-20T13:21:32
+對話：
+User: 目前depth_measure_multi_aruco_sbs_camera_v7_demo.py這隻程式的流程中有用到時序性嗎
+Antigravity:
+在這隻程式 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中，**核心的計算流程基本上是「無時序性（不依賴歷史影格）」的**，但有少部分輔助功能使用了時序緩衝或平滑。
+
+以下為您詳細拆解：
+
+### 1. 核心位姿解算與特徵點匹配 (Pose & Matching)：無時序性
+*   **獨立解算**：每次觸發計算時，程式都是將「當前的左圖快照（`raw_imgA`）」與「鎖定的右圖（`locked_R`）」當作**一對獨立的靜態立體影像對 (Image Pair)** 來處理。
+*   **不進行跨幀追蹤**：ArUco 的偵測、Sift/LightGlue 的特徵提取與匹配，都是在當前這兩張圖上從頭計算，**沒有**使用前一影格的偵測位置來做預測（例如沒有使用光流法進行跨影格追蹤，也沒有使用卡爾曼濾波器等軌跡預測演算法）。
+
+### 2. 影像快取 (Frame Buffer)：時序性僅用於快照回溯
+*   程式中宣告了 `frame_buffer = collections.deque(maxlen=FRAME_GAP + 1)`，用來儲存最近 30 影格的影像。
+*   這項時序資訊**僅用於「Lock Left」或「Lock Right」的回溯鎖定**（讓您能鎖定幾幀以前的畫面以獲得足夠的 Baseline），一旦鎖定後，計算過程就不再理會這些歷史影像。
+
+### 3. 測量數值平滑 (Value Smoothing)：有微弱的時序平均
+*   當您開啟 **Auto 模式（即時計算模式）**時，程式會使用 `plane_dist_history` 陣列來記錄連續解算出的「距平面深度」數值。
+*   在顯示時，程式會對這個陣列計算**移動平均值 (Moving Average)**（約第 704 行的 `np.mean(plane_dist_history)`），這是為了消除即時計算時的數值微小抖動（Jitter）。這也是本程式在數值輸出上唯一具有「時序濾波」特性的地方。
+
+---
+
+### 補充對比 (相較於 `depth_measure_video_mode.py`)
+如果您指的是另一支單相機影片量測程式 `depth_measure_video_mode.py`，該程式就具有強烈的**時序性**：
+1. 它會跨影格建立並維護一個 3D 虛擬板 `virtual_board`。
+2. 當 ArUco 標籤因為模糊而偵測不到時，它會利用上一影格的位置，透過 **LK 光流法 (Optical Flow)** 強行向後追蹤角點。
+而這支 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 則沒有這些跨影格的動態追蹤機制。

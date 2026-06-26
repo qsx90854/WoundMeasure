@@ -1,0 +1,82 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-09T11:46:02+08:00
+
+說明：
+新增特徵匹配信心度與品質評估指標 (極線距離、ZNCC 相似度與綜合信心度分數)，並於 UI 新增控制按鈕 `c8`。
+
+--------------------------------------------------
+[新增] 行 65 (全域參數宣告)
+--------------------------------------------------
++SHOW_SCORE_DEFAULT = True                         # 預設是否顯示匹配品質與信心分數
+
+--------------------------------------------------
+[修改] 行 1996 - 2021 (在 compute_measure 中計算指標並寫入回傳 dict)
+--------------------------------------------------
+-        return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+-                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+-                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res}
++        # 品質與信心分數評估指標計算
++        d_epi = 999.0
++        zncc_score = 0.0
++        confidence_score = 0.0
++        if p3d_val is not None and m_pt is not None:
++            # 1. 極線偏離距離
++            if m_pt_raw is not None:
++                l_B = cand['F'] @ np.array([u, v, 1.0])
++                denom = l_B[0]**2 + l_B[1]**2
++                if denom > 1e-9:
++                    d_epi = float(abs(l_B[0]*m_pt_raw[0] + l_B[1]*m_pt_raw[1] + l_B[2]) / np.sqrt(denom))
++            # 2. ZNCC 外觀相似度 (使用 size=31 窗口)
++            tmpl = get_patch(snap_imgA_gray, (u, v), 31)
++            roi = get_patch(cand['gray'], m_pt, 31)
++            if tmpl is not None and roi is not None:
++                res_zncc = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
++                zncc_score = float(res_zncc[0, 0])
++            # 3. 綜合信心度分數 (幾何與外觀聯立)
++            sigma = 1.5
++            geom_factor = np.exp(-(d_epi**2) / (2.0 * sigma**2)) if d_epi != 999.0 else 0.0
++            confidence_score = float(max(0.0, zncc_score) * geom_factor)
++            print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | 信心度: {confidence_score:.3f}")
++
++        return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
++                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
++                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
++                'd_epi': d_epi, 'zncc_score': zncc_score, 'confidence_score': confidence_score}
+
+--------------------------------------------------
+[修改] 行 2252 - 2263 (更新 update_display 以在啟動 show_score 時顯示分數文字)
+--------------------------------------------------
+-                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
+-                             f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
+-                             )
++                score_str = ""
++                if view_state.get('show_score', False) and res.get('confidence_score') is not None:
++                    score_str = f"\n信心分數: {res['confidence_score']:.3f} (極線:{res['d_epi']:.1f}px, ZNCC:{res['zncc_score']:.2f})"
++                
++                if custom_plane_fitted:
++                    main_text = f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}{score_str}\n"
++                else:
++                    main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}{score_str}\n"
++                                 f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
++                                 )
+
+--------------------------------------------------
+[修改] 行 1604 - 1621 (UI 按鈕與視窗狀態字典擴展)
+--------------------------------------------------
+     ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
++    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+...
+     c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
++    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+ 
+     view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                   'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
++                  'show_score': SHOW_SCORE_DEFAULT,
+                   'manual_pt_A': None, ...}
+
+--------------------------------------------------
+[新增] 行 1681 (綁定按鈕事件)
+--------------------------------------------------
+     c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
++    c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))

@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T17-36-09
+
+[減少的部分]
+行 716:         if not (has_set_L and has_set_R):
+行 717:             print("⚠️ 請先設定左圖和右圖至少一次！")
+行 724:         imgB_bgr, _ = process_view(locked_R, mtxL_o, distL, newKL_o)
+
+[新增的部分]
+行 716 附近:
++        if not has_set_L:
++            print("⚠️ 請先設定左圖！")
+行 724 附近:
++        # 右圖若未鎖定，使用當前相機緩衝區最新畫面
++        current_R = frame_buffer[-1].copy() if live_R and len(frame_buffer) > 0 else locked_R
++        imgB_bgr, _ = process_view(current_R, mtxL_o, distL, newKL_o)

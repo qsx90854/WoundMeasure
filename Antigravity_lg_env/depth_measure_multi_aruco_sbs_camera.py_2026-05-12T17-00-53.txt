@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T17:00:53
+
+[減少的部分]
+行 555-558:
+-                            pyr_scale=0.5, levels=3, winsize=21,
+...
+-                        dx, dy = flow[rad, rad]
+
+[新增的部分]
+行 555-560:
++                            pyr_scale=0.5, levels=5, winsize=31,
+...
++                        # 取中心 5x5 區域的平均流速，避免單一像素雜訊影響
++                        center_flow = flow[rad-2:rad+3, rad-2:rad+3]
++                        dx, dy = np.mean(center_flow, axis=(0, 1))

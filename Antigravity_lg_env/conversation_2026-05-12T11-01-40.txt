@@ -1,0 +1,10 @@
+時間: 2026-05-12T11:01:40
+使用者請求:
+優化：在 get_joint_relative_pose 中，將 cv2.solvePnP 的參數加上 flags=cv2.SOLVEPNP_SQPNP 或 cv2.SOLVEPNP_IPPE=> 這兩個參數是假定偵測到的ArUco的pattern都處於同平面上嗎, 如果是的話, 目前拍攝環境的確是這樣, 請加入
+
+回答訊息:
+是的，完全正確。
+`SOLVEPNP_SQPNP` 與 `SOLVEPNP_IPPE` 都是專門為了「共面（Coplanar）」特徵點而改良的姿態估計演算法。
+因為 ArUco 標籤本身就是一個平面的方形，如果環境中所有的標籤也都貼在同一個平面上，使用這些演算法會比 OpenCV 預設的迭代法（Iterative）更穩定，能有效消除視角造成的歧義性（Ambiguity）與數值抖動。
+
+我已經為您將程式中所有呼叫 `cv2.solvePnP` 的地方（包含單一標籤的姿態解算與多標籤的相對姿態解算）都加上了 `flags=cv2.SOLVEPNP_SQPNP` 參數。使用 SQPNP 是因為它不僅對純共面表現極佳，而且在同時處理多個標籤時相容性也最高。

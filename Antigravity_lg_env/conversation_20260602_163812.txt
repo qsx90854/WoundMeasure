@@ -1,0 +1,8 @@
+時間點: 2026-06-02T16:38:12+08:00
+
+使用者提問:
+depth_measure_multi_aruco_sbs_camera_v7_demo_zebra目前這隻程式是載入影片, 請改成一開始先開啟相機 先錄一段影片後, 在使用這段影片作後續動作
+
+助手回答:
+已為您規劃了實施計劃 [implementation_plan.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/implementation_plan.md)。請您審查。本計劃將在深度量測程式啟動時，先開啟相機進行預覽，使用者可按下 `s` 鍵控制錄影開始與結束，並在按下 `q` 鍵後載入該錄製影片進行後續的深度量測。
+請確認此計劃，如同意請回覆以利後續執行修改。

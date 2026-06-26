@@ -1,0 +1,23 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T14:42:55
+
+[減少的部分]
+行 656 附近 (RadioButtons 建立):
+-    ax_radio = plt.axes([0.88, 0.4, 0.1, 0.15], facecolor='#222222')
+-    radio = RadioButtons(ax_radio, [f"F {c['idx']}" for c in candidates])
+-    for l in radio.labels: l.set_color('white'); l.set_fontsize(9)
+-    def change_cand(label):
+-        nonlocal current_cand; idx = int(label.split(' ')[1])
+-        current_cand = next(c for c in candidates if c['idx'] == idx)
+-        ax_B.set_title(f"候選幀: {current_cand['idx']}"); im_B.set_data(current_cand['rgb']); draw_aruco(ax_B, current_cand['cornersB'])
+-        if last_click:
+-            all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+-            summary = [f"F{c['idx']}: {measure_results[c['idx']]['d']:.1f}" if measure_results[c['idx']]['d'] is not None else f"F{c['idx']}: N/A" for c in candidates]
+-            update_display(np.mean(all_d) if all_d else None, summary)
+-        request_blit_refresh()
+
+[新增的部分]
+行 1070 附近 (ArUco 渲染迴圈):
++                if ax == ax_B and not ax_B.get_visible():
++                    continue

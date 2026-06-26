@@ -1,0 +1,14 @@
+時間點: 2026-04-20T15:28:29+08:00
+
+【減少的部份】
+1. 刪除了 `load_raw_camera_params` (INI 指向邏輯)。
+2. 簡化了原本需要存取 `IMAGE_A_INDEX` 與 `IMAGE_B_INDEX` 的分立讀取邏輯。
+
+【新增與修改的部份】
+1. **SBS 分割**：在 `main` 實作 `imgA_raw = full_img[:, :half_w]`, `imgB_raw = full_img[:, half_w:]`。
+2. **JSON 讀取**：新增 `load_json_camera_params` 函式，解析 JSON 內的 `intrinsic_L/R` 與 `extrinsic` 資料結構。
+3. **雙內參重構**：
+   - 修改 `get_joint_relative_pose`, `find_precise_match`, `triangulate_point_3d`, `compute_fundamental_matrix` 之參數簽名，支援同時傳入 `K_L` 與 `K_R`。
+   - 更新所有內部 PnP 與三角計算，確保 Camera A 使用 `K_L`，Camera B 使用 `K_R`。
+4. **Extrinsic Comparison**：於 `main` 中實作誤差對比邏輯，計算基線差距、旋轉殘差角度與位移向量餘弦值。
+5. **UI 更新**：標題改為顯示 SBS 指定的 Index。

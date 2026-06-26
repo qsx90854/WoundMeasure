@@ -1,0 +1,58 @@
+修改時間: 2026-06-02T11:11:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L1922 - L1945):
+-        if ax_B.get_visible():
+-            ax_B.draw_artist(im_B)
+-            ax_B.draw_artist(scatter_B)
+-            ax_B.draw_artist(scatter_grad_match)
+-            ax_B.draw_artist(scatter_all_sift_B)
+-            ax_B.draw_artist(epi_line)
+-            ax_B.draw_artist(sift_rect)
+-            ax_B.draw_artist(sift_rect_center)
+-            
+-            for line in view_state.get('grad_lines', []):
+-                ax_B.draw_artist(line)
+-            if view_state.get('highlighted_grad_line_artist'):
+-                ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
+-                
+-        ax_B.draw_artist(depth_text)
+-
+-        for ax in [ax_A, ax_B]:
+-            if hasattr(ax, 'art'):
+-                if ax == ax_B and not ax_B.get_visible():
+-                    continue
+-                for a in ax.art:
+-                    ax.draw_artist(a)
+
+新增的部份:
+(約新 L1922 - L1952):
++        if ax_B.get_visible():
++            ax_B.draw_artist(im_B)
++            ax_B.draw_artist(scatter_B)
++            ax_B.draw_artist(scatter_B_reproj)
++            ax_B.draw_artist(scatter_grad_match)
++            ax_B.draw_artist(scatter_all_sift_B)
++            ax_B.draw_artist(epi_line)
++            ax_B.draw_artist(sift_rect)
++            ax_B.draw_artist(sift_rect_center)
++            
++            for line in view_state.get('grad_lines', []):
++                ax_B.draw_artist(line)
++            if view_state.get('highlighted_grad_line_artist'):
++                ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
++                
++        ax_B.draw_artist(depth_text)
++
++        for ax in [ax_A, ax_B]:
++            if hasattr(ax, 'art'):
++                if ax == ax_B and not ax_B.get_visible():
++                    continue
++                for a in ax.art:
++                    ax.draw_artist(a)
++            if hasattr(ax, 'reproj_art'):
++                if ax == ax_B and not ax_B.get_visible():
++                    continue
++                for a in ax.reproj_art:
++                    ax.draw_artist(a)

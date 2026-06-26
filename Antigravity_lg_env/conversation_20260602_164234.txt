@@ -1,0 +1,19 @@
+時間點: 2026-06-02T16:42:34+08:00
+
+使用者提問:
+好 請開始修改
+
+助手回答:
+已完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py` 的修改。
+在程式啟動時，會先開啟預覽視窗，讓使用者錄製一段影片。
+操作方式：
+- 按下 `s` 鍵：開始/停止錄影。
+- 按下 `q` 鍵：當已錄製一段影片且未在錄製狀態時，會結束相機預覽，並自動載入該影片進行深度測量。
+
+程式碼變更對比記錄檔已建立於：
+- [depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py_20260602_164234.txt](file:///d:/Lightglue/lg_env/Antigravity_lg_env/depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py_20260602_164234.txt)
+
+詳細的修改說明已記錄於：
+- [walkthrough.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/walkthrough.md)
+
+請您自行啟動程式並測試錄影與量測流程。

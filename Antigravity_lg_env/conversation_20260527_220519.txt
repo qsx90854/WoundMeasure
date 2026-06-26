@@ -1,0 +1,8 @@
+時間點: 2026-05-27T22:05:19+08:00
+
+使用者問題:
+請開始修改
+
+Antigravity 回覆:
+開始進行程式碼修改，並建立 task.md 追蹤進度。
+將依序對 depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py 進行修改，新增切換功能與 UI。

@@ -1,0 +1,29 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-03T10:31:33+08:00
+
+說明：
+修正 Live 版程式在錄影和分析時未還原原本「使用 SBS 相機畫面左半邊」的流程問題。
+
+--------------------------------------------------
+[修改] 行 276 - 277 (analyze_video_frames 讀取影格)
+--------------------------------------------------
+-        frames.append(frame)
++        # SBS 相機：只使用左半邊影像作為量測相機的分析影像
++        frame_left = frame[:, :frame.shape[1] // 2]
++        frames.append(frame_left)
+
+--------------------------------------------------
+[修改] 行 861 - 863 (record_video_from_camera 相機解析度設定)
+--------------------------------------------------
+-    # 設定相機解析度為 1920x1080 且設定編碼格式
+-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
++    # 設定相機解析度且設定編碼格式
++    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
++    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+
+--------------------------------------------------
+[修改] 行 1082 (main 影像處理寬度計算)
+--------------------------------------------------
+-    w_alg = w_raw
++    w_alg = w_raw // 2

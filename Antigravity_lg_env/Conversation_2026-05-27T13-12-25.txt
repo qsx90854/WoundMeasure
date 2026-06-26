@@ -1,0 +1,17 @@
+對話記錄與回答訊息
+時間點: 2026-05-27 13:12:25 (Local Time)
+
+=========================================
+對話背景與問題分析：
+=========================================
+使用者說明：
+「優化無歷史資訊時的二義性判定基準」暫不修改。
+前一問的 bug 是指「ENFORCE_COPLANAR 參數沒有正確傳遞給 Function（`get_joint_relative_pose`）」這件事。
+
+分析與確認：
+1. `ENFORCE_COPLANAR` 由於在 `calc_worker` 中呼叫 `get_joint_relative_pose` 時未傳入 `global_plane_n` 與 `global_plane_c`，導致底層 `get_joint_relative_pose` 中針對該參數的判定皆無效（變數均為預設的 `None`）。
+2. 因此，即使設定了 `ENFORCE_COPLANAR = True`，也沒有執行共面對齊投影優化。
+
+修正方案：
+1. 修改 `calc_worker` 內的 `get_joint_relative_pose` 呼叫程式碼，顯式傳入 `global_plane_n=global_plane_n` 與 `global_plane_c=global_plane_c`。
+2. 同步更新 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py`。

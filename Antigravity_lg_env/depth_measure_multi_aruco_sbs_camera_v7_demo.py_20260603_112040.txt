@@ -1,0 +1,62 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-06-03T11:20:40+08:00
+
+說明：
+新增計算 RT 後，左圖 ArUco Pattern 角點投影到右圖畫 rect (以虛線紅色表示)，以及右圖角點投影到左圖畫 rect。並在終端機印出重投影誤差，便於視覺上 debug。
+
+--------------------------------------------------
+[新增] 行 69 - 111 (在 compute_fundamental_matrix 前插入)
+--------------------------------------------------
++def compute_reprojection_debug_data(cA_dict, cB_dict, curr_marker_poses, R_rel, t_rel, K_L, K_R, marker_size_mm):
++    proj_ptsA_on_B = {}
++    proj_ptsB_on_A = {}
++    errors_A = []
++    ...
++    return proj_ptsA_on_B, proj_ptsB_on_A, mean_err
+
+--------------------------------------------------
+[新增] 行 513 - 527 (在 draw_aruco 下方定義畫投影點的函數)
+--------------------------------------------------
++    def draw_projected_aruco(ax, proj_corners, color='red'):
++        if not hasattr(ax, 'proj_art'): ax.proj_art = []
++        for a in ax.proj_art:
++            try: a.remove()
++            except: pass
++        ...
+
+--------------------------------------------------
+[修改] 行 1490 - 1500 (在背景執行緒中計算投影點並處理無 ArUco 偵測時的預設值)
+--------------------------------------------------
++                    proj_ptsA_on_B, proj_ptsB_on_A, mean_err = compute_reprojection_debug_data(
++                        cA_dict, cB_dict, curr_marker_poses, R_r, t_r, KL, KL, ACTUAL_MARKER_SIZE_MM
++                    )
+...
+-                else:
+-                    print("❌ 未偵測到共享 ArUco")
+-                    n_local, c_local = global_plane_n, global_plane_c
++                else:
++                    print("❌ 未偵測到共享 ArUco")
++                    n_local, c_local = global_plane_n, global_plane_c
++                    proj_ptsA_on_B = {}
++                    proj_ptsB_on_A = {}
++                    mean_err = 0.0
+
+--------------------------------------------------
+[修改] 行 1537 - 1541 (Queue 帶回投影點)
+--------------------------------------------------
+-                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
++                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_,
++                    'proj_ptsA_on_B': proj_ptsA_on_B if pose_valid else {},
++                    'proj_ptsB_on_A': proj_ptsB_on_A if pose_valid else {},
++                    'mean_err': mean_err if pose_valid else 0.0
+
+--------------------------------------------------
+[修改] 行 1621 - 1627 (UI 更新中畫虛線紅框並印出重投影誤差)
+--------------------------------------------------
+             draw_aruco(ax_A, result['cA_dict'])
+             draw_aruco(ax_B, result['cB_dict'])
++            if 'proj_ptsA_on_B' in result:
++                draw_projected_aruco(ax_A, result['proj_ptsB_on_A'])
++                draw_projected_aruco(ax_B, result['proj_ptsA_on_B'])
++                if result['snap_cand'].get('pose_valid'):
++                    print(f"📊 [外參重投影] 當前雙向重投影誤差為: {result['mean_err']:.4f} px")

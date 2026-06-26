@@ -1,0 +1,29 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-54-22
+
+[減少的部分]
+行 77:
+    if pt3d[2] <= 0 or pt3d[2] > MAX_DEPTH_MM: return None
+
+行 447-455 (原始 do_measure 中的三角測距與結果紀錄):
+    未詳細紀錄失敗原因。
+
+行 499-510 (原始 update_display 中的文字顯示):
+    僅顯示「無法三角測距」或「無效點」。
+
+行 629-645 (原始 Live 迴圈中的 Baseline 計算):
+    未記錄 pose_info。
+
+[新增的部分]
+行 77:
+    直接返回 pt3d，交由呼叫者判斷。
+
+行 444-455 附近 (do_measure):
+    加入 fail_reason 判斷（深度為負、超過最大深度、無匹配點），並存入 measure_results。
+
+行 494-510 附近 (update_display):
+    在 UI 畫面上顯示具體的失敗原因與外參來源（例如：ArUco 定位 或 JSON 預設）。
+
+行 626-656 附近 (Live 迴圈):
+    動態產生 pose_info 字串，並更新至 current_cand 中。

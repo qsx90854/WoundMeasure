@@ -1,0 +1,10 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-09T13:17:30+08:00
+
+說明：
+在 `live.py` 中新增 `DISABLE_EXTRA_CANDS_ECC_PRECISE` 全域控制變數，保持與 Zebra 版本的結構一致。
+
+--------------------------------------------------
+[新增] 行 66 (全域設定)
+--------------------------------------------------
++DISABLE_EXTRA_CANDS_ECC_PRECISE = True            # 預設是否在多影格融合的次要影格中停用 ECC 與 Precise 精修 (設為 True 可大幅提升點選反應速度)

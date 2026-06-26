@@ -1,0 +1,12 @@
+時間點: 2026-06-03T11:20:40+08:00
+
+使用者提問:
+depth_measure_multi_aruco_sbs_camera_v7_demo.py是較舊版的程式, 請幫這隻程式加上計算完RT後, 左圖的Aruco Pattern角點投影到右圖畫rect,  右圖的角點投影到左圖畫rect, 用來在視覺上debug, 也在終端機印出當前的重投影誤差
+
+助手回答:
+已為您在 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中實現了重投影偵錯視覺化與終端機輸出功能：
+1. 新增 `compute_reprojection_debug_data` 函數，計算左右圖 ArUco 角點的互投影坐標，並算出雙向重投影誤差。
+2. 新增 `draw_projected_aruco` 函數，在左圖 (ax_A) 以紅色虛線框繪製右圖投影回來的 ArUco 矩形，在右圖 (ax_B) 繪製左圖投影過去的 ArUco 矩形，並在框中心標示 `Proj:ID`。
+3. 在 UI 更新時，當外參成功計算，於終端機輸出例如 `📊 [外參重投影] 當前雙向重投影誤差為: X.XXXX px`。
+4. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py_20260603_112040.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

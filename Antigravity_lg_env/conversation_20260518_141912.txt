@@ -1,0 +1,5 @@
+時間：2026-05-18T14:19:12
+對話：
+User: 請將NewMeasure_v2改為使用畸變參數時, 把畸變參數敢為0, 就是沒有畸變的意思
+Antigravity:
+已經幫您在 `NewMeasure_v2.py` 的 `load_json_camera_params` 函式中完成修改。現在程式會忽略從 JSON 讀取到的 distortion 值，強制宣告一個長度為 5 的全零陣列給 `dist_L`。後續不論是 ArUco 的姿態估計，或者是 OpenCV 的立體校正映射 (Stereo Rectification)，都會以完全無畸變 (0 distortion) 的理想鏡頭模式來進行運算。

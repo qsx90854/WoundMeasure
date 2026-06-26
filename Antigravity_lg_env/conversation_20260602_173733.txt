@@ -1,0 +1,12 @@
+時間點: 2026-06-02T17:37:33+08:00
+
+使用者提問:
+請開始
+
+助手回答:
+已為您完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 的程式修改：
+1. 全局設定區新增 `FRAME_RANGE_MODE = "half_half"`。
+2. 調整 `analyze_video_frames` 的範圍切分邏輯，在 "half_half" 模式下將影片分成前半段和後半段進行 ArUco 標籤偵測。
+3. 更新 `main` 內的呼叫傳入參數。
+4. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_20260602_173733.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

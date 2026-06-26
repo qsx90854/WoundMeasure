@@ -1,0 +1,10 @@
+時間點: 2026-06-03T16:47:03+08:00
+
+使用者提問:
+提供了解析執行拋出的 UnboundLocalError 錯誤：
+UnboundLocalError: cannot access local variable 'undistort_corners_dict' where it is not associated with a value
+
+助手回答:
+已修復該問題。原因為 nested 函數 `undistort_corners_dict` 在程式碼中是在次優右圖檢索邏輯之後才被定義，導致 Python 解譯器在執行到檢索邏輯時發生未宣告先調用的錯誤。我們已將該函數定義移至檢索邏輯上方，以確保變數範疇之正常解析。
+檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_20260603_164703.txt` 中。
+請您重新執行以驗證。

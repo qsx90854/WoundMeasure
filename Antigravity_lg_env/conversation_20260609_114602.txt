@@ -1,0 +1,16 @@
+時間點: 2026-06-09T11:46:02+08:00
+
+使用者提問:
+請協助加上這段程式碼, 並用一個按鈕控制是否顯示分數
+
+助手回答:
+已在 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py` 中完美實作特徵匹配品質分數計算與 UI 按鈕控制功能：
+1. 【評估指標計算】：
+   - 極線距離偏離 ($d_{\text{epi}}$)：藉由未對齊的原始右圖匹配點計算到極線的垂直距離，精準反映幾何真實性。
+   - ZNCC 外觀相似度 ($zncc\_score$)：在最終匹配位置使用 $31 \times 31$ 窗口進行歸一化互相關計算，反映外觀相似度。
+   - 綜合信心分數 ($confidence\_score$)：以 $zncc\_score \times e^{-d_{\text{epi}}^2 / (2\sigma^2)}$（$\sigma=1.5$ 像素）聯立外觀與幾何指標，輸出在 $0.0 \sim 1.0$ 範圍的置信度。
+2. 【UI 顯示與按鈕控制】：
+   - 全局參數 `SHOW_SCORE_DEFAULT = True`（預設開啟）。
+   - 在 UI 中新增 `c8` 按鈕 `[X] 顯示匹配分數`。
+   - 按鈕勾選時，會於深度文字顯示區追加顯示：`信心分數: {confidence_score:.3f} (極線:{d_epi:.1f}px, ZNCC:{zncc_score:.2f})`。
+相關變更對照與對話日誌已存至專案目錄的 `Antigravity_lg_env` 底下。

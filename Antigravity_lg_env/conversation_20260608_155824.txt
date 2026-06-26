@@ -1,0 +1,17 @@
+時間點: 2026-06-08T15:58:24+08:00
+
+使用者提問:
+好 請照你說的修改 最好能夠用一個按鈕, 按下去是執行新流程, 不然就保持舊流程
+
+助手回答:
+已在 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py` 中完美實作改良版特徵匹配流程與 UI 控制按鈕：
+1. 【全域參數與 UI 按鈕】：
+   - 新增全域配置參數 `ENABLE_IMPROVED_MATCHING_DEFAULT` 預設為 `False` (保持舊流程)。
+   - 在 UI 勾選面板第三行新增 `c7` 按鈕 `[ ] 改良匹配流程`。
+   - 點擊按鈕可動態切換狀態，勾選時執行新流程，未勾選時執行原有舊流程，確保舊版相容性。
+2. 【改良版特徵匹配實作】：
+   - 封裝 `run_improved_matching_flow`：包含高光遮罩排除 (>220 灰度)，Harris 角點響應排序選點，收緊視差過濾閾值至 2.5 像素以內，調降 RANSAC 重投影誤差閾值至 2.0 像素。
+   - 封裝 `pyramid_ecc_refinement`：實作二層 Gaussian 金字塔的 Coarse-to-Fine 亞像素 ECC 匹配，顯著擴增收斂 capture range。
+3. 【核心分支整合】：
+   - 修改點選匹配邏輯，依據 `'use_improved_matching'` 變數分流執行對應之特徵與亞像素精修算法。
+相關變更對照與對話日誌已妥善存至專案目錄的 `Antigravity_lg_env` 底下。

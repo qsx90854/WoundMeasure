@@ -1,0 +1,11 @@
+時間點: 2026-04-17T16:27:25+08:00
+
+【減少的部份】
+1. 在 `update_plane` 當中，單純對 `all_obj_pts_A` 子集抽取並計算 SVD 的虛假變更邏輯。
+2. 將一開頭對 `shared_ids` 設為寫死不可刪除的型態。
+
+【新增的部份】
+1. 在 `get_joint_relative_pose` 中新增了 `active_ids=None` 參數，若有傳入，則會透過 `shared_ids = [m for m in shared_ids if m in active_ids]` 過濾被禁用的標籤，使其徹底不參與 solvePnP。
+2. 兩腳本皆在 `main()` 新增保存 `global_shared_ids`，避免 CheckButtons 因為子集計算遺失對應的全標籤紀錄。
+3. `update_plane` 中，將 `check.get_status()` 映射回實際啟用的 ID List 後，重新呼叫 `get_joint_relative_pose`，並動態把算出來的乾淨 `R_rel`, `t_rel`, `F` 全數覆寫。
+4. 在 `do_measure` 執行時新增保存 `measure_state['click_u']`, `measure_state['click_v']`。在 `update_plane` 結尾加入只要有點擊紀錄，就直接喚醒 `do_measure` 觸發重算的機制。

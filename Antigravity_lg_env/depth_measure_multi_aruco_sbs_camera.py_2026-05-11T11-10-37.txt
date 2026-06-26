@@ -1,0 +1,22 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T11-10-37
+
+[減少的部分]
+行 239-241:
+-    def process_view(img, K, dist, nK):
+-        undist = cv2.undistort(img, K, dist, None, nK); s = TARGET_W / undist.shape[1]
+-        return cv2.resize(undist, (TARGET_W, int(undist.shape[0]*s))), s
+
+[新增的部分]
+行 239-248:
++    # 預先建立去畸變查找表（只算一次，之後每幀用 remap 即可）
++    _map1, _map2 = cv2.initUndistortRectifyMap(
++        mtxL_o, distL, None, newKL_o, (w_alg, h_raw), cv2.CV_16SC2
++    )
++
++    def process_view(img, K=None, dist=None, nK=None):
++        """去畸變 + 縮放。K/dist/nK 保留以維持呼叫介面相容，實際使用預建查找表。"""
++        undist = cv2.remap(img, _map1, _map2, cv2.INTER_LINEAR)
++        s = TARGET_W / undist.shape[1]
++        return cv2.resize(undist, (TARGET_W, int(undist.shape[0]*s))), s

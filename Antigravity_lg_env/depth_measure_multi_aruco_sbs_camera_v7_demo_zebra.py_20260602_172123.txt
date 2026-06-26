@@ -1,0 +1,113 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-02T17:21:23+08:00
+
+--------------------------------------------------
+[新增] 行 31 - 38
+--------------------------------------------------
++# ----------------- 全局日誌收集區 -----------------
++ANALYSIS_LOG = []
++COMBINATION_LOG = []
++
++def log_and_print(msg):
++    print(msg)
++    ANALYSIS_LOG.append(str(msg))
+
+--------------------------------------------------
+[新增] 行 465 - 485
+--------------------------------------------------
++    # 收集並記錄所有有計算 baseline 與重投影誤差的組合
++    global COMBINATION_LOG
++    COMBINATION_LOG = []
++    COMBINATION_LOG.append("--- 雙幀 Baseline 與重投影誤差計算組合列表 ---")
++    for item_s in valid_start:
++        for item_e in valid_end:
++            R_s, t_s = item_s['R'], item_s['t']
++            R_e, t_e = item_e['R'], item_e['t']
++            R_rel_cand = R_s @ R_e.T
++            t_rel_cand = t_s - R_rel_cand @ t_e
++            bsl = float(np.linalg.norm(t_rel_cand))
++            
++            err_str = "N/A (Baseline 不足)"
++            if bsl >= MIN_BASELINE_MM:
++                err = compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L)
++                err_str = f"{err:.2f} px"
++            
++            COMBINATION_LOG.append(
++                f"  - Frame B (左/結尾): {item_e['idx']} & Frame A (右/開頭): {item_s['idx']} | Baseline: {bsl:.2f} mm | 重投影誤差: {err_str}"
++            )
+
+--------------------------------------------------
+[修改] 行 268 (原行 260)
+--------------------------------------------------
+-    print(f"🎬 載入影片: {video_path}，總影格數: {total_frames}")
++    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames}")
+
+--------------------------------------------------
+[修改] 行 342 (原行 334) 與 行 381 (原行 373)
+--------------------------------------------------
+-    print(f"📌 選定共享參考標籤 ID: {ref_id} 作為世界坐標系原點")
++    log_and_print(f"📌 選定共享參考標籤 ID: {ref_id} 作為世界坐標系原點")
+...
+-        print(f"📊 [Marker Map Offline] 標籤 ID: {mid} 相對於參考標籤 ID: {ref_id} 的相對平移: {t_avg.flatten()} mm (觀測幀數: {len(poses)})")
++        log_and_print(f"📊 [Marker Map Offline] 標籤 ID: {mid} 相對於參考標籤 ID: {ref_id} 的相對平移: {t_avg.flatten()} mm (觀測幀數: {len(poses)})")
+
+--------------------------------------------------
+[修改] 行 556 (原行 537)、行 564 (原行 545)、行 593 - 596 (原行 574 - 577)
+--------------------------------------------------
+-            print("⚠️ [Reproj Min] 未找到合法的候選對，降級使用首幀與尾幀")
++            log_and_print("⚠️ [Reproj Min] 未找到合法的候選對，降級使用首幀與尾幀")
+...
+-            print(f"✅ [Reproj Min] 挑選出雙向重投影誤差最小的配對，預估平均誤差為: {min_reproj_err:.2f} px")
++            log_and_print(f"✅ [Reproj Min] 挑選出雙向重投影誤差最小的配對，預估平均誤差為: {min_reproj_err:.2f} px")
+...
+-    print(f"✅ 挑選結果：")
+-    print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
+-    print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
+-    print(f"  - 計算 Baseline: {baseline:.2f} mm")
++    log_and_print(f"✅ 挑選結果：")
++    log_and_print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
++    log_and_print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
++    log_and_print(f"  - 計算 Baseline: {baseline:.2f} mm")
+
+--------------------------------------------------
+[修改] 行 665 (原行 617)
+--------------------------------------------------
+-    print(f"✅ [平面擬合成功] 偵測到 {len(idsA)} 個標籤，擬合平面法向量: {n.flatten()}，中心點: {c.flatten()}")
++    log_and_print(f"✅ [平面擬合成功] 偵測到 {len(idsA)} 個標籤，擬合平面法向量: {n.flatten()}，中心點: {c.flatten()}")
+
+--------------------------------------------------
+[修改] 行 920 (原行 900)
+--------------------------------------------------
+-                print(f"🎬 錄影就緒，準備載入: {video_name}")
++                log_and_print(f"🎬 錄影就緒，準備載入: {video_name}")
+
+--------------------------------------------------
+[修改] 行 1118 (原行 1091)
+--------------------------------------------------
+-    print("🔄 正在分析影片中開頭與結尾影格的 ArUco 標籤與最優姿態對...")
++    log_and_print("🔄 正在分析影片中開頭與結尾影格的 ArUco 標籤與最優姿態對...")
+
+--------------------------------------------------
+[修改] 行 1269 (原行 1239)
+--------------------------------------------------
+-            print(f"📊 [{label_prefix}] 標籤 ID: {mid} | 與真實檢測角點的平均重投影誤差: {err_str}")
++            log_and_print(f"📊 [{label_prefix}] 標籤 ID: {mid} | 與真實檢測角點的平均重投影誤差: {err_str}")
+
+--------------------------------------------------
+[新增] 行 1282 - 1297 (在原行 1250 之後)
+--------------------------------------------------
++    # 初始化 TXT 檔案，寫入影片分析與 Baseline 組合日誌
++    init_txt_path = os.path.splitext(VIDEO_PATH)[0] + ".txt"
++    try:
++        with open(init_txt_path, 'w', encoding='utf-8') as f:
++            f.write("=== 影片分析與挑選最優對日誌 ===\n")
++            for line in ANALYSIS_LOG:
++                f.write(line + "\n")
++            f.write("\n")
++            
++            for line in COMBINATION_LOG:
++                f.write(line + "\n")
++            f.write("\n==================================================\n\n")
++        print(f"💾 已初始化分析日誌至: {init_txt_path}")
++    except Exception as e:
++        print(f"❌ 初始化日誌失敗: {e}")

@@ -1,0 +1,12 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T14-57-39
+
+[減少的部分]
+行 416-417:
+-            if m_pt is None and snap_view_state['grad_sift']:
+-            if m_pt is None and snap_view_state['grad_sift']:
+
+[新增的部分]
+行 416:
++            if m_pt is None and snap_view_state['grad_sift']:

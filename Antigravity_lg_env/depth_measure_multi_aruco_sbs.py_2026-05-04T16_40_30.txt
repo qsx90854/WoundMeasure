@@ -1,0 +1,22 @@
+修改檔案: depth_measure_multi_aruco_sbs.py
+時間點: 2026-05-04T16:40:30+08:00
+
+--- 減少部分 (原行數 682-684) ---
+-                # 2. 右圖 400x400 ROI 搜尋 5000 個高梯度點
+-                u0_r, u1_r = max(0, u_i - 60), min(w, u_i + 60)
+-                v0_r, v1_r = max(0, v_i - 60), min(h, v_i + 60)
+
+--- 新增部分 (新行數 682 起) ---
++                # 2. 預測右圖中心並選取 120x120 ROI 搜尋 5000 個高梯度點
++                u_exp, v_exp = click_u, click_v
++                if plane_normal is not None and plane_center is not None:
++                    d_p = np.dot(plane_normal, plane_center)
++                    H_3D = R_rel + (t_rel @ plane_normal.reshape(1, 3)) / d_p
++                    K_L_inv = np.linalg.inv(K_L.astype(np.float64))
++                    H_AB = K_R @ H_3D @ K_L_inv
++                    pt_exp = H_AB @ np.array([click_u, click_v, 1.0])
++                    u_exp, v_exp = pt_exp[0]/pt_exp[2], pt_exp[1]/pt_exp[2]
++                
++                u_exp_i, v_exp_i = int(round(u_exp)), int(round(v_exp))
++                u0_r, u1_r = max(0, u_exp_i - 60), min(w, u_exp_i + 60)
++                v0_r, v1_r = max(0, v_exp_i - 60), min(h, v_exp_i + 60)

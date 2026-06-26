@@ -1,0 +1,12 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py
+修改紀錄:
+- [刪除] 232-233 行: 移除 active_u 與 active_v
+- [新增] 232 行: 增加 active_pts 字典儲存兩點座標
+- [新增] 312-315 行: 增加 scatter_A2, scatter_B2 顯示第二點 (magenta 顏色)，增加 dist_line_A 與 dist_line_B 在兩點之間畫出白色連線，並新增 p2p_text 顯示 3D 歐式距離。
+- [刪除] 427 行: 移除 last_click 單變數
+- [新增] 427 行: 改用 last_clicks = {1: None, 2: None} 儲存雙點。
+- [修改] 587-619 行 (do_measure 與 apply_measure_result): 修改函式簽名以接收 pt_id 進行特定點位同步運算，並讓 measure_results 變為儲存多點結果。
+- [修改] 620-699 行 (update_display): 改寫畫面的 UI 更新邏輯，分別取出點 1 與點 2 的數據，並畫出連線與透過 np.linalg.norm 計算兩點的 3D 距離 (dist_3d)。
+- [修改] 700 行 (on_press): pan_state 新增 btn 記錄按鍵，取消只接左鍵的判斷，改為 button in (1, 2) 皆處理。
+- [修改] 716-800 行 (on_release): 透過 btn_id，將點擊寫入對應的 active_pts。
+- [修改] 932, 986 行 (on_calc, calc_worker): 背景計算執行緒支援透過字典傳入多點座標，以迴圈方式執行 compute_measure，並將結果以 pt_id 為鍵回傳到主執行緒。

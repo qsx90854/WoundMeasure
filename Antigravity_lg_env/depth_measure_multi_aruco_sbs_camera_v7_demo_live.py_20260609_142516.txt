@@ -1,0 +1,45 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-09T14:25:16+08:00
+
+說明：
+新增 `MAX_BASELINE_MM` 全域設定參數（預設 `400.0` mm），並在影片分析自標定對過濾、次佳配對選取、點擊測量時實作 Baseline 的上限約束。
+
+--------------------------------------------------
+[新增] 行 56 (全域設定)
+--------------------------------------------------
++MAX_BASELINE_MM       = 400.0                      # 最大基準線限制 (mm)
+
+--------------------------------------------------
+[修改] 行 742 - 746 (組合記錄上限過濾)
+--------------------------------------------------
+-            err_str = "N/A (Baseline 不足)"
+-            if bsl >= MIN_BASELINE_MM:
++            err_str = "N/A (Baseline 不合規範)"
++            if MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM:
+
+--------------------------------------------------
+[修改] 行 796 - 798 (Reproj Min 搜尋上限過濾)
+--------------------------------------------------
+-                if bsl >= MIN_BASELINE_MM:
++                if MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM:
+
+--------------------------------------------------
+[修改] 行 832 (其他模式搜尋上限過濾)
+--------------------------------------------------
+-                if bsl >= MIN_BASELINE_MM:
++                if MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM:
+
+--------------------------------------------------
+[修改] 行 1753 - 1759 (測量開始時的上限檢查)
+--------------------------------------------------
+-        if cand.get('baseline', 0.0) < MIN_BASELINE_MM:
+-            print(f"❌ [測量失敗] 基準線視差不足 ({cand.get('baseline', 0.0):.2f} mm < {MIN_BASELINE_MM} mm)")
+-            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+-                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+-                    'fail_reason': f'視差不足(<{MIN_BASELINE_MM}mm)', 'u': u, 'v': v, 'trajectory': None}
++        bsl = cand.get('baseline', 0.0)
++        if bsl < MIN_BASELINE_MM or bsl > MAX_BASELINE_MM:
++            print(f"❌ [測量失敗] 基準線不合規範 ({bsl:.2f} mm，限制: {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)")
++            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
++                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                    'fail_reason': f'視差不合規範({MIN_BASELINE_MM}~{MAX_BASELINE_MM}mm)', 'u': u, 'v': v, 'trajectory': None}

@@ -1,0 +1,307 @@
+修改時間：2026-06-10T17:11:14+08:00
+修改檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+---
+
+【變更 1】
+原行號：約第 177 行
+減少：無
+新增：
+def compute_opponent_sift_descriptors(img_bgr, kpts, sift_detector):
+    """
+    計算指定 KeyPoints 在 BGR 影像的 Opponent 色彩空間 (O1, O2, O3) 通道上的 SIFT 描述子並串接。
+    回傳的描述子維度為 N x 384。
+    """
+    if not kpts or img_bgr is None:
+        return None, None
+        
+    # 分離 B, G, R 通道
+    b = img_bgr[:, :, 0].astype(np.float32)
+    g = img_bgr[:, :, 1].astype(np.float32)
+    r = img_bgr[:, :, 2].astype(np.float32)
+    
+    # O1 = (R - G) / sqrt(2)
+    o1 = (r - g) / np.sqrt(2.0)
+    o1 = ((o1 + 255.0 / np.sqrt(2.0)) / (510.0 / np.sqrt(2.0)) * 255.0).astype(np.uint8)
+    
+    # O2 = (R + G - 2*B) / sqrt(6)
+    o2 = (r + g - 2.0 * b) / np.sqrt(6.0)
+    o2 = ((o2 + 510.0 / np.sqrt(6.0)) / (1020.0 / np.sqrt(6.0)) * 255.0).astype(np.uint8)
+    
+    # O3 = (R + G + B) / sqrt(3)
+    o3 = (r + g + b) / np.sqrt(3.0)
+    o3 = (o3 / (765.0 / np.sqrt(3.0)) * 255.0).astype(np.uint8)
+    
+    # 分別對三個通道計算 SIFT 描述子
+    _, des_o1 = sift_detector.compute(o1, kpts)
+    _, des_o2 = sift_detector.compute(o2, kpts)
+    _, des_o3 = sift_detector.compute(o3, kpts)
+    
+    if des_o1 is None or des_o2 is None or des_o3 is None:
+        return None, None
+    if len(des_o1) != len(kpts) or len(des_o2) != len(kpts) or len(des_o3) != len(kpts):
+        return None, None
+        
+    des_opponent = np.hstack([des_o1, des_o2, des_o3])
+    return kpts, des_opponent
+
+---
+
+【變更 2】
+原行號：約第 215 行
+減少：
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift, use_color_hist=False, use_rgb_sift=False):
+新增：
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift, use_color_hist=False, use_rgb_sift=False, use_opponent_sift=False):
+
+---
+
+【變更 3】
+原行號：約第 254 行
+減少：
+        if use_rgb_sift:
+            _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+        else:
+            _, des_inj = sift.compute(imgA_gray, kpts_inj)
+新增：
+        if use_rgb_sift:
+            _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+        elif use_opponent_sift:
+            _, des_inj = compute_opponent_sift_descriptors(locked_L, kpts_inj, sift)
+        else:
+            _, des_inj = sift.compute(imgA_gray, kpts_inj)
+
+---
+
+【變更 4】
+原行號：約第 310 行
+減少：
+        if use_rgb_sift:
+            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+            _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+        else:
+            _, des_r = sift.compute(imgB_gray, kpts_r)
+            
+        if des_r is None or len(des_r) == 0:
+            return None, "Improved-NoDescriptorB", None, None, g_rect
+        bf = cv2.BFMatcher(cv2.NORM_L2)
+        matches = bf.match(des_inj, des_r)
+        sift_thres = 780 if use_rgb_sift else 450
+        good = [m for m in matches if m.distance < sift_thres]
+新增：
+        if use_rgb_sift:
+            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+            _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+        elif use_opponent_sift:
+            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+            _, des_r = compute_opponent_sift_descriptors(imgB_bgr, kpts_r, sift)
+        else:
+            _, des_r = sift.compute(imgB_gray, kpts_r)
+            
+        if des_r is None or len(des_r) == 0:
+            return None, "Improved-NoDescriptorB", None, None, g_rect
+        bf = cv2.BFMatcher(cv2.NORM_L2)
+        matches = bf.match(des_inj, des_r)
+        sift_thres = 780 if (use_rgb_sift or use_opponent_sift) else 450
+        good = [m for m in matches if m.distance < sift_thres]
+
+---
+
+【變更 5】
+原行號：約第 362 行
+減少：
+    method_name = "RGB-SIFT (Improved)" if use_rgb_sift else "Grad-SIFT (Improved)"
+新增：
+    if use_rgb_sift:
+        method_name = "RGB-SIFT (Improved)"
+    elif use_opponent_sift:
+        method_name = "Opponent-SIFT (Improved)"
+    else:
+        method_name = "Grad-SIFT (Improved)"
+
+---
+
+【變更 6】
+原行號：約第 1786 行
+減少：
+    fig.subplots_adjust(top=0.82, right=0.98, left=0.05, bottom=0.15)
+新增：
+    fig.subplots_adjust(top=0.70, right=0.98, left=0.05, bottom=0.08)
+
+---
+
+【變更 7】
+原行號：約第 1914 行
+減少：
+    depth_text = fig.text(0.53, 0.45, "", transform=fig.transFigure, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+新增：
+    depth_text = fig.text(0.53, 0.35, "", transform=fig.transFigure, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+
+---
+
+【變更 8】
+原行號：約第 1967 行
+減少：
+    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+新增：
+    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+
+---
+
+【變更 9】
+原行號：約第 1980 行
+減少：
+    c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+新增：
+    c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+    c11 = Button(ax_c11, "[ ] Opponent-SIFT", **btn_opt_style)
+
+---
+
+【變更 10】
+原行號：約第 1987 行
+減少：
+                  'use_rgb_sift': False,
+新增：
+                  'use_rgb_sift': False,
+                  'use_opponent_sift': False,
+
+---
+
+【變更 11】
+原行號：約第 2020 行
+減少：
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10]:
+新增：
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11]:
+
+---
+
+【變更 12】
+原行號：約第 2049 行
+減少：
+    c10.on_clicked(make_on_opt(c10, 'use_rgb_sift', "啟用 RGB-SIFT"))
+新增：
+    def on_c10_clicked(event):
+        view_state['use_rgb_sift'] = not view_state['use_rgb_sift']
+        c10.label.set_text("[X] 啟用 RGB-SIFT" if view_state['use_rgb_sift'] else "[ ] 啟用 RGB-SIFT")
+        if view_state['use_rgb_sift'] and view_state.get('use_opponent_sift', False):
+            view_state['use_opponent_sift'] = False
+            c11.label.set_text("[ ] Opponent-SIFT")
+        request_blit_refresh()
+
+    def on_c11_clicked(event):
+        view_state['use_opponent_sift'] = not view_state['use_opponent_sift']
+        c11.label.set_text("[X] Opponent-SIFT" if view_state['use_opponent_sift'] else "[ ] Opponent-SIFT")
+        if view_state['use_opponent_sift'] and view_state.get('use_rgb_sift', False):
+            view_state['use_rgb_sift'] = False
+            c10.label.set_text("[ ] 啟用 RGB-SIFT")
+        request_blit_refresh()
+
+    c10.on_clicked(on_c10_clicked)
+    c11.on_clicked(on_c11_clicked)
+
+---
+
+【變更 13】
+原行號：約第 2128 行
+減少：
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift,
+                            snap_view_state.get('use_color_hist', False),
+                            snap_view_state.get('use_rgb_sift', False)
+                        )
+新增：
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift,
+                            snap_view_state.get('use_color_hist', False),
+                            snap_view_state.get('use_rgb_sift', False),
+                            snap_view_state.get('use_opponent_sift', False)
+                        )
+
+---
+
+【變更 14】
+原行號：約第 2217 行
+減少：
+                            else:
+                                if snap_view_state.get('use_rgb_sift', False):
+                                    _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+                                else:
+                                    _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+新增：
+                            else:
+                                if snap_view_state.get('use_rgb_sift', False):
+                                    _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+                                elif snap_view_state.get('use_opponent_sift', False):
+                                    _, des_inj = compute_opponent_sift_descriptors(locked_L, kpts_inj, sift)
+                                else:
+                                    _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+
+---
+
+【變更 15】
+原行號：約第 2244 行
+減少：
+                                else:
+                                    if snap_view_state.get('use_rgb_sift', False):
+                                         imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+                                         _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+                                    else:
+                                         _, des_r = sift.compute(cand['gray'], kpts_r)
+                                         
+                                    if des_r is not None and len(des_r) > 0:
+                                         bf = cv2.BFMatcher(cv2.NORM_L2)
+                                         matches = bf.match(des_inj, des_r)
+                                         sift_thres = 780 if snap_view_state.get('use_rgb_sift', False) else 450
+                                         good = [m for m in matches if m.distance < sift_thres]
+                                    else:
+                                         good = []
+新增：
+                                else:
+                                    if snap_view_state.get('use_rgb_sift', False):
+                                         imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+                                         _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+                                    elif snap_view_state.get('use_opponent_sift', False):
+                                         imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+                                         _, des_r = compute_opponent_sift_descriptors(imgB_bgr, kpts_r, sift)
+                                    else:
+                                         _, des_r = sift.compute(cand['gray'], kpts_r)
+                                         
+                                    if des_r is not None and len(des_r) > 0:
+                                         bf = cv2.BFMatcher(cv2.NORM_L2)
+                                         matches = bf.match(des_inj, des_r)
+                                         sift_thres = 780 if (snap_view_state.get('use_rgb_sift', False) or snap_view_state.get('use_opponent_sift', False)) else 450
+                                         good = [m for m in matches if m.distance < sift_thres]
+                                    else:
+                                         good = []
+
+---
+
+【變更 16】
+原行號：約第 2215 行
+減少：
+                                    method_name = "RGB-SIFT" if snap_view_state.get('use_rgb_sift', False) else "Grad-SIFT"
+新增：
+                                    if snap_view_state.get('use_rgb_sift', False):
+                                        method_name = "RGB-SIFT"
+                                    elif snap_view_state.get('use_opponent_sift', False):
+                                        method_name = "Opponent-SIFT"
+                                    else:
+                                        method_name = "Grad-SIFT"
+
+---
+
+【變更 17】
+原行號：約第 2960 行
+減少：
+            depth_text.set_position((0.53, 0.45))
+        else:
+            depth_text.set_position((0.53, 0.05))
+新增：
+            depth_text.set_position((0.53, 0.35))
+        else:
+            depth_text.set_position((0.53, 0.02))

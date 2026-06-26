@@ -1,0 +1,179 @@
+修改時間: 2026-06-02T11:20:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L330 - L358):
+-    half = marker_size_mm / 2.0
+-    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+-    
+-    def get_pose_for_ref(corners_dict):
+-        if ref_id not in corners_dict: return None, None
+-        ok, rvec, tvec = cv2.solvePnP(
+-            canon, corners_dict[ref_id], K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE
+-        )
+-        if not ok: return None, None
+-        R, _ = cv2.Rodrigues(rvec)
+-        t = tvec.reshape(3, 1)
+-        return R, t
+-
+-    valid_start = []
+-    for item in start_info:
+-        R, t = get_pose_for_ref(item['corners'])
+-        if R is not None:
+-            valid_start.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
+-            
+-    valid_end = []
+-    for item in end_info:
+-        R, t = get_pose_for_ref(item['corners'])
+-        if R is not None:
+-            valid_end.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
+-            
+-    if not valid_start or not valid_end:
+-        print("❌ 無法計算出有效的起點或終點 Pose")
+-        return None
+(約原 L473 - L486):
+-    return {
+-        'frame_A': frames[best_start['idx']],
+-        'frame_B': frames[best_end['idx']],
+-        'idx_A': best_start['idx'],
+-        'idx_B': best_end['idx'],
+-        'R_rel': R_rel,
+-        't_rel': t_rel,
+-        'baseline': baseline,
+-        'cornersA': best_start['corners'],
+-        'cornersB': best_end['corners'],
+-        'all_frames': frames,
+-        'valid_poses': valid_poses
+-    }
+(約原 L617 - L621):
+-            ok_L, rv_L, tv_L = cv2.solvePnP(joint_objW, joint_imgA, K_L, np.zeros(5))
+-            ok_R, rv_R, tv_R = cv2.solvePnP(joint_objW, joint_imgB, K_R, np.zeros(5))
+(約原 L687):
+-            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+(約原 L773 - L790):
+-    current_cand = {
+-        'idx': video_data['idx_B'],
+-        'rgb': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB),
+-        'gray': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY),
+-        'K_R': KL,
+-        'R_rel': R_r,
+-        't_rel': t_r,
+-        'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
+-        'cornersA': video_data['cornersB'],
+-        'cornersB': video_data['cornersA'],
+-        'kpB': [],
+-        'desB': None,
+-        'plane_n': global_plane_n,
+-        'plane_c': global_plane_c,
+-        'pose_valid': True,
+-        'baseline': video_data['baseline'],
+-        'pose_info': f"ArUco 多影格平均 (Bsl: {video_data['baseline']:.1f}mm)" if POSE_SELECT_MODE=="average" else f"ArUco 最優對 (Bsl: {video_data['baseline']:.1f}mm)"
+-    }
+
+新增的部份:
+(約新 L330 - L397):
++    half = marker_size_mm / 2.0
++    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
++    
++    # 1. 全域標籤世界地圖在線自標定 (Map Auto-Calibration)
++    marker_map = {}
++    marker_map[ref_id] = (np.eye(3, dtype=np.float32), np.zeros((3, 1), dtype=np.float32))
++    
++    relative_poses = {} # mid -> list of (R, t)
++    all_info = start_info + end_info
++    for item in all_info:
++        corners_dict = item['corners']
++        if ref_id in corners_dict:
++            ok_ref, rvec_ref, tvec_ref = cv2.solvePnP(canon, corners_dict[ref_id], K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++            if not ok_ref: continue
++            R_ref, _ = cv2.Rodrigues(rvec_ref)
++            t_ref = tvec_ref.reshape(3, 1)
++            
++            for mid, pts in corners_dict.items():
++                if mid == ref_id: continue
++                ok_m, rvec_m, tvec_m = cv2.solvePnP(canon, pts, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++                if not ok_m: continue
++                R_m, _ = cv2.Rodrigues(rvec_m)
++                t_m = tvec_m.reshape(3, 1)
++                
++                R_m2ref = R_ref.T @ R_m
++                t_m2ref = R_ref.T @ (t_m - t_ref)
++                
++                if mid not in relative_poses:
++                    relative_poses[mid] = []
++                relative_poses[mid].append((R_m2ref, t_m2ref))
++                
++    for mid, poses in relative_poses.items():
++        R_list = [p[0] for p in poses]
++        t_list = [p[1] for p in poses]
++        R_avg = average_rotations_svd(R_list)
++        t_avg = np.mean(t_list, axis=0)
++        marker_map[mid] = (R_avg, t_avg)
++        print(f"📊 [Marker Map Offline] 標籤 ID: {mid} 相對於參考標籤 ID: {ref_id} 的相對平移: {t_avg.flatten()} mm (觀測幀數: {len(poses)})")
++
++    def get_joint_pose(corners_dict):
++        obj_pts = []
++        img_pts = []
++        for mid, pts in corners_dict.items():
++            if mid in marker_map:
++                R_m2ref, t_m2ref = marker_map[mid]
++                pts_w = (R_m2ref @ canon.T).T + t_m2ref.T
++                obj_pts.append(pts_w)
++                img_pts.append(pts)
++        if len(obj_pts) == 0:
++            return None, None
++            
++        obj_pts = np.vstack(obj_pts).astype(np.float32)
++        img_pts = np.vstack(img_pts).astype(np.float32)
++        
++        ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++        if not ok:
++            return None, None
++        R, _ = cv2.Rodrigues(rvec)
++        t = tvec.reshape(3, 1)
++        return R, t
++
++    valid_start = []
++    for item in start_info:
++        R, t = get_joint_pose(item['corners'])
++        if R is not None:
++            valid_start.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
++            
++    valid_end = []
++    for item in end_info:
++        R, t = get_joint_pose(item['corners'])
++        if R is not None:
++            valid_end.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
++            
++    if not valid_start or not valid_end:
++        print("❌ 無法計算出有效的起點或終點 Pose")
++        return None
+(約新 L518):
++        'valid_poses': valid_poses,
++        'marker_map': marker_map
+(約新 L654 - L655):
++            ok_L, rv_L, tv_L = cv2.solvePnP(joint_objW, joint_imgA, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++            ok_R, rv_R, tv_R = cv2.solvePnP(joint_objW, joint_imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約新 L723):
++            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約新 L809 - L828):
++    current_cand = {
++        'idx': video_data['idx_B'],
++        'rgb': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB),
++        'gray': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY),
++        'K_R': KL,
++        'R_rel': R_r,
++        't_rel': t_r,
++        'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
++        'cornersA': video_data['cornersB'],
++        'cornersB': video_data['cornersA'],
++        'kpB': [],
++        'desB': None,
++        'plane_n': global_plane_n,
++        'plane_c': global_plane_c,
++        'pose_valid': True,
++        'baseline': video_data['baseline'],
++        'pose_info': f"ArUco 多影格平均 (Bsl: {video_data['baseline']:.1f}mm)" if POSE_SELECT_MODE=="average" else f"ArUco 最優對 (Bsl: {video_data['baseline']:.1f}mm)",
++        'marker_map': video_data['marker_map'],
++        'map_calibrated': True
++    }

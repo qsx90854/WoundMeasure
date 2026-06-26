@@ -1,0 +1,13 @@
+時間點: 2026-05-06 11:39
+
+對話摘要:
+修復高亮連線功能無效問題。根本原因是 ConnectionPatch 是 FancyArrowPatch 子類，直接呼叫 set_color/set_edgecolor 等方法並不保證更新渲染結果。改用「移除舊的、建立新紅色 ConnectionPatch」的方式實現高亮，確保畫面正確更新。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 修改: view_state 新增 `highlighted_grad_line_artist` 欄位。
+- 修改: update_display 中，grad_lines 的清除迴圈改為相容 tuple 格式，並同時移除 `highlighted_grad_line_artist`。
+- 修改: on_release 的右圖點擊高亮邏輯，改為每次點擊時「移除舊的高亮 Artist → 建立新的紅色 ConnectionPatch 加入畫面」，避免依賴 set_color 等可能無效的方法。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

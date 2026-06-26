@@ -1,0 +1,13 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-26-58
+
+[減少的部分]
+行 34-37:
+videoframe_leftImage_index = 40                   # 指定哪一幀當左圖
+videoframe_total_number    = 3                     # 右圖候選張數
+videoframe_left_to_right_gap = 30                  # 左圖與第一張右圖的間距
+videoframe_right_to_right_gap = 5                 # 右圖候選幀之間的間距
+
+[新增的部分]
+無（直接刪除）

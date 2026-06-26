@@ -1,0 +1,49 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-05-28 15:03:25
+
+減少的部份 (原第 185 行至第 205 行)：
+185:             if len(rvecs) == 2:
+186:                 # 1. 優先使用時序連續性約束進行二義性消解
+187:                 if prev_marker_poses is not None and mid in prev_marker_poses:
+188:                     rv_prev, tv_prev = prev_marker_poses[mid]
+189:                     R_prev, _ = cv2.Rodrigues(rv_prev)
+190:                     n_prev = R_prev[:, 2] # 前一幀法向量
+191:                     
+192:                     score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+193:                     score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+194:                     best_idx = 0 if score0 > score1 else 1
+195:                     # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+196:                     R0, _ = cv2.Rodrigues(rvecs[0])
+197:                     R1, _ = cv2.Rodrigues(rvecs[1])
+198:                     n0, n1 = R0[:, 2], R1[:, 2]
+199:                     
+200:                     dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+201:                     dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+202:                     
+203:                     tilt0 = abs(np.dot(n0, dir0))
+204:                     tilt1 = abs(np.dot(n1, dir1))
+205:                     best_idx = 0 if tilt0 > tilt1 else 1
+
+新增的部份 (新第 185 行至第 206 行)：
+185:             if len(rvecs) == 2:
+186:                 # 1. 優先使用時序連續性約束進行二義性消解
+187:                 if prev_marker_poses is not None and mid in prev_marker_poses:
+188:                     rv_prev, tv_prev = prev_marker_poses[mid]
+189:                     R_prev, _ = cv2.Rodrigues(rv_prev)
+190:                     n_prev = R_prev[:, 2] # 前一幀法向量
+191:                     
+192:                     score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+193:                     score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+194:                     best_idx = 0 if score0 > score1 else 1
+195:                 else:
+196:                     # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+197:                     R0, _ = cv2.Rodrigues(rvecs[0])
+198:                     R1, _ = cv2.Rodrigues(rvecs[1])
+199:                     n0, n1 = R0[:, 2], R1[:, 2]
+200:                     
+201:                     dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+202:                     dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+203:                     
+204:                     tilt0 = abs(np.dot(n0, dir0))
+205:                     tilt1 = abs(np.dot(n1, dir1))
+206:                     best_idx = 0 if tilt0 > tilt1 else 1

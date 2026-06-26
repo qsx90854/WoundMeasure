@@ -1,0 +1,149 @@
+修改時間: 2026-06-12 11:21:48
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+=========================================
+變更 1: UI 按鈕註冊與配置
+原始行數: 2150 - 2265
+=========================================
+減少部分:
+-----------------------------------------
+2150:     ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+2151:     ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+2152:     ax_c12 = fig.add_axes([0.29, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+...
+2164:     c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+2165:     c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+2166:     c11 = Button(ax_c11, "[ ] Opponent-SIFT", **btn_opt_style)
+2167:     c12 = Button(ax_c12, "[ ] 過濾高光反光", **btn_opt_style)
+...
+2176:                   'filter_specular': False,
+...
+2209:     for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12]:
+...
+2228:             if key in ('enable_clahe', 'use_improved_matching', 'use_color_hist', 'filter_specular'):
+...
+2264:     c12.on_clicked(make_on_opt(c12, 'filter_specular', "過濾高光反光"))
+
+新增部分:
+-----------------------------------------
+2150:     ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+2151:     ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+2152:     ax_c12 = fig.add_axes([0.29, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+2153:     ax_c13 = fig.add_axes([0.05, 0.68, 0.11, 0.04], facecolor='#1E1E1E')
+...
+2165:     c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+2166:     c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+2167:     c11 = Button(ax_c11, "[ ] Opponent-SIFT", **btn_opt_style)
+2168:     c12 = Button(ax_c12, "[ ] 過濾高光反光", **btn_opt_style)
+2169:     c13 = Button(ax_c13, "[ ] 進階高光過濾", **btn_opt_style)
+...
+2178:                   'filter_specular': False,
+2179:                   'filter_specular_hsv_mser': False,
+...
+2212:     for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13]:
+...
+2231:             if key in ('enable_clahe', 'use_improved_matching', 'use_color_hist', 'filter_specular', 'filter_specular_hsv_mser'):
+...
+2267:     c12.on_clicked(make_on_opt(c12, 'filter_specular', "過濾高光反光"))
+2268:     c13.on_clicked(make_on_opt(c13, 'filter_specular_hsv_mser', "進階高光過濾"))
+
+
+=========================================
+變更 2: compute_measure 內部左圖高光濾除邏輯
+原始行數: 2366 - 2372
+=========================================
+減少部分:
+-----------------------------------------
+                            if snap_view_state.get('filter_specular', False):
+                                thresh = np.percentile(patch_g, 80)
+                                high_light_mask = (patch_g >= thresh)
+                                kernel = np.ones((3, 3), dtype=np.uint8)
+                                excluded_mask = cv2.dilate(high_light_mask.astype(np.uint8), kernel)
+                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
+                                mag[excluded_mask == 1] = -99999.0
+
+新增部分:
+-----------------------------------------
+                            if snap_view_state.get('filter_specular_hsv_mser', False):
+                                # 1. 結合 HSV 進行高光判斷
+                                patch_L_color = locked_L[v0_A:v1_A, u0_A:u1_A]
+                                patch_L_hsv = cv2.cvtColor(patch_L_color, cv2.COLOR_BGR2HSV)
+                                H_L, S_L, V_L = cv2.split(patch_L_hsv)
+                                
+                                # 2. 自適應雙閾值
+                                mean_v = np.mean(V_L)
+                                high_light_mask = (V_L > 230) & (S_L < 38) & (V_L > (mean_v * 1.1))
+                                
+                                # 3. 連通域斑點過濾與動態形狀膨脹
+                                excluded_mask = np.zeros_like(high_light_mask, dtype=np.uint8)
+                                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(high_light_mask.astype(np.uint8))
+                                for label_idx in range(1, num_labels):
+                                    area = stats[label_idx, cv2.CC_STAT_AREA]
+                                    if area >= 2: # 濾除微小噪聲
+                                        k_size = 3 if area < 10 else (5 if area < 50 else 7)
+                                        comp_mask = (labels == label_idx).astype(np.uint8)
+                                        kernel = np.ones((k_size, k_size), dtype=np.uint8)
+                                        dilated_comp = cv2.dilate(comp_mask, kernel)
+                                        excluded_mask = cv2.bitwise_or(excluded_mask, dilated_comp)
+                                        
+                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
+                                mag[excluded_mask == 1] = -99999.0
+                            elif snap_view_state.get('filter_specular', False):
+                                thresh = np.percentile(patch_g, 80)
+                                high_light_mask = (patch_g >= thresh)
+                                kernel = np.ones((3, 3), dtype=np.uint8)
+                                excluded_mask = cv2.dilate(high_light_mask.astype(np.uint8), kernel)
+                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
+                                mag[excluded_mask == 1] = -99999.0
+
+
+=========================================
+變更 3: compute_measure 內部右圖高光濾除邏輯
+原始行數: 2399 - 2406
+=========================================
+減少部分:
+-----------------------------------------
+                                if snap_view_state.get('filter_specular', False):
+                                    thresh_r = np.percentile(patch_r, 80)
+                                    high_light_mask_r = (patch_r >= thresh_r)
+                                    kernel_r = np.ones((3, 3), dtype=np.uint8)
+                                    excluded_mask_r = cv2.dilate(high_light_mask_r.astype(np.uint8), kernel_r)
+                                    if cand['idx'] == current_cand['idx']:
+                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
+                                    magr[excluded_mask_r == 1] = -99999.0
+
+新增部分:
+-----------------------------------------
+                                if snap_view_state.get('filter_specular_hsv_mser', False):
+                                    # 1. 結合 HSV 進行高光判斷
+                                    patch_R_color = locked_R[v0_B:v1_B, u0_B:u1_B]
+                                    patch_R_hsv = cv2.cvtColor(patch_R_color, cv2.COLOR_BGR2HSV)
+                                    H_R, S_R, V_R = cv2.split(patch_R_hsv)
+                                    
+                                    # 2. 自適應雙閾值
+                                    mean_v_r = np.mean(V_R)
+                                    high_light_mask_r = (V_R > 230) & (S_R < 38) & (V_R > (mean_v_r * 1.1))
+                                    
+                                    # 3. 連通域斑點過濾與動態形狀膨脹
+                                    excluded_mask_r = np.zeros_like(high_light_mask_r, dtype=np.uint8)
+                                    num_labels_r, labels_r, stats_r, centroids_r = cv2.connectedComponentsWithStats(high_light_mask_r.astype(np.uint8))
+                                    for label_idx in range(1, num_labels_r):
+                                        area = stats_r[label_idx, cv2.CC_STAT_AREA]
+                                        if area >= 2:
+                                            k_size = 3 if area < 10 else (5 if area < 50 else 7)
+                                            comp_mask = (labels_r == label_idx).astype(np.uint8)
+                                            kernel = np.ones((k_size, k_size), dtype=np.uint8)
+                                            dilated_comp = cv2.dilate(comp_mask, kernel)
+                                            excluded_mask_r = cv2.bitwise_or(excluded_mask_r, dilated_comp)
+                                            
+                                    if cand['idx'] == current_cand['idx']:
+                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
+                                    magr[excluded_mask_r == 1] = -99999.0
+                                elif snap_view_state.get('filter_specular', False):
+                                    thresh_r = np.percentile(patch_r, 80)
+                                    high_light_mask_r = (patch_r >= thresh_r)
+                                    kernel_r = np.ones((3, 3), dtype=np.uint8)
+                                    excluded_mask_r = cv2.dilate(high_light_mask_r.astype(np.uint8), kernel_r)
+                                    if cand['idx'] == current_cand['idx']:
+                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
+                                    magr[excluded_mask_r == 1] = -99999.0

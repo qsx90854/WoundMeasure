@@ -1,0 +1,4 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py
+修改紀錄:
+- [修改] 171行: `cv2.solvePnP` 增加了 `flags=cv2.SOLVEPNP_IPPE`，針對單一標籤 (4個共面點) 會有比預設 ITERATIVE 更穩定的姿態解算，減少 Z 軸方向的翻轉或深度劇烈震盪。
+- [修改] 193行: 聯合解算 `cv2.solvePnP` 增加了 `flags=cv2.SOLVEPNP_SQPNP`。因為多標籤不一定完美共面且帶有獨立解算雜訊，SQPNP 演算法對於帶雜訊的非平面 3D 點雲與 2D 投影能提供更具魯棒性 (Robust) 的平移與旋轉估計，避免因為微小的像素誤差導致解算出破千的極端位移。

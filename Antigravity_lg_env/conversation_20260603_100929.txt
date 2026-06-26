@@ -1,0 +1,11 @@
+時間點: 2026-06-03T10:09:29+08:00
+
+使用者提問:
+目前depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py的流程是開啟相機錄一段影片並進行後續計算, 請將depth_measure_multi_aruco_sbs_camera_v7_demo_live.py也改成這種流程, 錄下來的影片檔請放在跟zebra不同的資料夾
+
+助手回答:
+已為您更新了實施計劃 [implementation_plan.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/implementation_plan.md)。請您審查。
+本計劃提出：
+1. 將 `zebra.py` 已驗證完整的錄影與分析流程邏輯，完整複製覆寫至 `live.py`。
+2. 修改 `live.py` 的參數：將錄影目錄設為 `"test_video_Live"`，相機解析度設為 2560 x 1024，參數 JSON 設為 `"calibration_result.json"`。
+請確認此計劃，如同意請回覆以利開始進行程式調整。

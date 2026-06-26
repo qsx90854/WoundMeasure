@@ -1,0 +1,12 @@
+時間: 2026-05-12T14:57:39
+使用者請求:
+(lg_env) D:\Lightglue\lg_env>python depth_measure_multi_aruco_sbs_camera.py
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera.py", line 417
+    if m_pt is None and snap_view_state['grad_sift']:
+    ^
+IndentationError: expected an indented block after 'if' statement on line 416
+
+回答訊息:
+非常抱歉！這是我在前次替換程式碼時發生的小失誤，不小心將同一行 `if m_pt is None and snap_view_state['grad_sift']:` 複製了兩次，導致 Python 拋出縮排錯誤 (IndentationError)。
+
+我已經將多餘的那行 `if` 刪除，並修正了縮排語法問題！請您再次嘗試執行程式碼！

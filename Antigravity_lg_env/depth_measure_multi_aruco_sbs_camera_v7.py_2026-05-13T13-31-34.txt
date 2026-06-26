@@ -1,0 +1,34 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T13:31:34
+
+[減少的部分]
+行 1039-1059 附近 (Blit 渲染迴圈):
+-        ax_B.draw_artist(im_B)
+-        ax_B.draw_artist(scatter_B)
+-        ax_B.draw_artist(scatter_grad_match)
+-        ax_B.draw_artist(scatter_all_sift_B)
+-        ax_B.draw_artist(epi_line)
+-        ax_B.draw_artist(sift_rect)
+-        ax_B.draw_artist(sift_rect_center)
+-        ax_B.draw_artist(depth_text)
+-        for line in view_state.get('grad_lines', []):
+-            ax_B.draw_artist(line)
+-        if view_state.get('highlighted_grad_line_artist'):
+-            ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
+
+[新增的部分]
+行 1039-1059 附近 (Blit 渲染迴圈):
++        if ax_B.get_visible():
++            ax_B.draw_artist(im_B)
++            ax_B.draw_artist(scatter_B)
++            ax_B.draw_artist(scatter_grad_match)
++            ax_B.draw_artist(scatter_all_sift_B)
++            ax_B.draw_artist(epi_line)
++            ax_B.draw_artist(sift_rect)
++            ax_B.draw_artist(sift_rect_center)
++            ax_B.draw_artist(depth_text)
++            for line in view_state.get('grad_lines', []):
++                ax_B.draw_artist(line)
++            if view_state.get('highlighted_grad_line_artist'):
++                ax_B.draw_artist(view_state['highlighted_grad_line_artist'])

@@ -1,0 +1,8 @@
+NewMeasure_v1.py 修改紀錄：
+[新增] 行數: 約 340-379
+新增 `pan_state` 字典。
+將原有的 `on_click` 拆解並擴充為 `on_press`, `on_release`, `on_motion`, `on_scroll` 四個事件處理函式。
+利用 matplotlib 的 `xlim`, `ylim` 操作達成影像拖曳平移以及滾輪縮放。
+保留左圖點擊(`ax_A`)執行 `process_measure(u, v)` 的判斷，並確保拖曳結束後不會誤判為點擊。
+[刪除] 行數: 約 339-345
+移除了原本單純的 `on_click` 與其事件綁定 `button_press_event`。

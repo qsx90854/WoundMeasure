@@ -1,0 +1,11 @@
+時間: 2026-06-11 14:52:38
+
+使用者回報問題:
+有bug, Exception in Tkinter callback
+...
+NameError: name 'u0' is not defined
+
+工程師分析與修復:
+在之前的修改中，為了進行高光過濾而將右圖 patch 切片的座標變數從 `u0, v0, u1, v1` 改命名為 `u0_B, v0_B, u1_B, v1_B`。
+然而，後續的程式碼第 2268 行的 `g_rect = (u0, v0, u1-u0, v1-v0)` 未被同步修改，導致執行時拋出 NameError。
+修復方式：將第 2268 行修改為 `g_rect = (u0_B, v0_B, u1_B-u0_B, v1_B-v0_B)`。

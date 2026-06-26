@@ -1,0 +1,5 @@
+時間：2026-05-15T17:33:12
+對話：
+User: 請開始實作
+Antigravity:
+已根據 NewDesign.md 完成 NewMeasure_v1.py 核心模組實作，包含即時攝像頭串接、立體校正、ZNCC多尺度搜尋與亞像素精化等功能。因 Python 規則指示不主動執行，請 User 自行測試確認結果。

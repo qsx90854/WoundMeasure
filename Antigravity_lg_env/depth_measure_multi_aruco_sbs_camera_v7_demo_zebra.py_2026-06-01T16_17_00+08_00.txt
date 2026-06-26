@@ -1,0 +1,20 @@
+修改時間: 2026-06-01T16:17:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (約原 L1527 - L1534):
+-    current_cand = {
+-        'idx': 0,
+-        'K_R': KL,
+-        'pose_valid': False,
+-        'baseline': 0.0,
+-        'cornersA': {},
+-        'cornersB': {}
+-    }
+
+新增的部份 (約新 L1527):
++    # 離線模式下已在 main 函數中初始化 current_cand，此處無需重設
+
+新增的部份 (約新 L1173 - L1175):
++        elif p3d is None:
++            fail_reason = "無匹配點"
++            print(f"❌ [計算失敗] 在右圖中找不到與左圖點 ({u:.1f}, {v:.1f}) 的匹配點。請試著點選特徵較明顯的邊緣。")

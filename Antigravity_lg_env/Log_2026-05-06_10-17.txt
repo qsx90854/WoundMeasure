@@ -1,0 +1,14 @@
+時間點: 2026-05-06 10:17
+
+對話摘要:
+修正多幀視訊量測中，ArUco 距離平面產生 10mm 誤差的問題。確認原因為每張候選幀單獨擬合平面，導致參考基準不一致且與三角測距射線產生幾何干涉。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: `compute_global_plane` 函式，用於在左圖（基準圖）提取所有 ArUco 角點並進行 Sub-Pixel 精修，然後擬合出唯一的「全域共面 (Global Plane)」。
+- 修改: `get_joint_relative_pose` 函式，現在接受全域平面的法向量與中心點。在強制共面優化 (`ENFORCE_COPLANAR`) 時，將所有候選幀的 3D 點投影到同一個全域平面上，確保所有幀的 `R_rel`, `t_rel` 都是相對於同一個物理平面進行優化。
+- 修改: `main` 迴圈中，預先計算全域平面，並直接賦值給所有 candidate 的 `plane_n` 與 `plane_c`。
+- 說明: 解決了先前每張圖各自算平面導致的 10mm 誤差。現在所有的量測都基於同一個絕對穩定的左圖基準平面。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

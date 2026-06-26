@@ -1,0 +1,51 @@
+修改時間: 2026-06-11 15:23:28
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+此文件記錄本次點擊重新計算優化的減少與新增部分，供日後恢復代碼使用。
+
+--------------------------------------------------
+變更 1:
+原行號: L2092 - L2094
+減少部分:
+            if key == 'manual' and not view_state['manual']:
+                view_state['manual_pt_A'] = None
+            request_blit_refresh()
+
+新增部分:
+            if key == 'manual' and not view_state['manual']:
+                view_state['manual_pt_A'] = None
+            request_blit_refresh()
+            
+            if key in ('enable_clahe', 'use_improved_matching', 'use_color_hist', 'filter_specular'):
+                if last_click:
+                    do_measure(last_click[0], last_click[1])
+
+--------------------------------------------------
+變2:
+原行號: L2109 - L2112
+減少部分:
+            view_state['use_opponent_sift'] = False
+            c11.label.set_text("[ ] Opponent-SIFT")
+        request_blit_refresh()
+
+新增部分:
+            view_state['use_opponent_sift'] = False
+            c11.label.set_text("[ ] Opponent-SIFT")
+        request_blit_refresh()
+        if last_click:
+            do_measure(last_click[0], last_click[1])
+
+--------------------------------------------------
+變更 3:
+原行號: L2117 - L2120
+減少部分:
+            view_state['use_rgb_sift'] = False
+            c10.label.set_text("[ ] 啟用 RGB-SIFT")
+        request_blit_refresh()
+
+新增部分:
+            view_state['use_rgb_sift'] = False
+            c10.label.set_text("[ ] 啟用 RGB-SIFT")
+        request_blit_refresh()
+        if last_click:
+            do_measure(last_click[0], last_click[1])

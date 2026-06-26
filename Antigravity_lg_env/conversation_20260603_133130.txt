@@ -1,0 +1,13 @@
+時間點: 2026-06-03T13:31:30+08:00
+
+使用者提問:
+pnp和IPPE 差在哪? 分別用的是opencv哪個function? 各自有什麼好壞處
+
+助手回答:
+已為您撰寫了詳細的「PnP 與 IPPE 姿態估計算法比較說明」文件：
+1. 詳細闡述 PnP (Perspective-n-Point) 與 IPPE (Infinitesimal Plane-based Pose Estimation) 的數學背景與幾何限制。
+2. 指出 OpenCV 對應的 API 函式 (如 cv2.solvePnP 與 cv2.solvePnPGeneric + flags=cv2.SOLVEPNP_IPPE)。
+3. 以對比表格方式比較兩者在幾何限制、點數要求、計算複雜度、退化問題、解的唯一性上的好壞處。
+4. 說明本量測專案中如何結合兩者優勢（多 ArUco 時用通用 PnP，單 ArUco 時降級使用 IPPE 避免退化跳變）。
+5. 說明文件存於 `C:\Users\88880445\.gemini\antigravity\brain\072aa733-ab30-4109-8eec-23abca6ce376\pnp_vs_ippe_comparison.md` 中。
+因為此對話為理論說明，並未修改程式碼本身，故不需建立行數變更對照 txt。

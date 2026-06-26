@@ -1,0 +1,6 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-23 11:15:30
+
+【修復】修復 NameError: proj_pt is not defined
+內容：修正了在 UI 更新繪圖點位時，仍在使用舊變數名稱 `proj_pt` 的錯誤。現已統一更換為 `final_pt_B`（配合「強制極線對齊」開關功能的變數重新命名）。
+原因：變數重構不完全導致。

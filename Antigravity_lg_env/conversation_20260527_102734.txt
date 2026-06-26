@@ -1,0 +1,25 @@
+時間點: 2026-05-27 10:27:34
+
+使用者問題:
+目前用右圖三張鎖定模式, log是    [計算結果] 歐式距離: 78.04 mm | 距平面深度: 0.21 mm
+👉 [深度計算] 左圖座標: (671.0, 403.0) | 右圖匹配座標: (846.2, 404.3) | 匹配方式: Grad-SIFT+極線對齊+ECC精修
+   [當前外參] R_rel: [-0.9677  0.0025 -0.2522 -0.0742 -0.9585  0.2754 -0.2411  0.2852  0.9277] | t_rel: [  -8.63  -20.89 -145.28]
+   [計算結果] 歐式距離: 78.18 mm | 距平面深度: 0.08 mm
+👉 [深度計算] 左圖座標: (671.0, 403.0) | 右圖匹配座標: (846.2, 404.3) | 匹配方式: Grad-SIFT+極線對齊+ECC精修
+   [當前外參] R_rel: [-0.9677  0.0025 -0.2522 -0.0742 -0.9585  0.2754 -0.2411  0.2852  0.9277] | t_rel: [  -8.63  -20.89 -145.28]
+   [計算結果] 歐式距離: 78.18 mm | 距平面深度: 0.08 mm
+[calc_worker 錯誤] cannot access local variable 'imgB_bgr_' where it is not associated with a value, 看起來估計baseline的部分有bug, 但居然還能算出深度值?  所以這邊有兩個bug了?
+
+解答說明:
+1. 錯誤原因：
+   在 `calc_worker` 中，啟用 `multi3`（3幀鎖定）模式時，背景執行緒會處理 3 張鎖定的右圖影像，並將解算後的首張 BGR 影像存為 `imgB_bgr_disp`。然而，在此模式下，並沒有定義單幀模式所使用的局部變數 `imgB_bgr_`。
+   當計算完成，背景執行緒欲將結果打包回傳給主執行緒時，在字典建構：
+   `'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_`
+   處發生了 `UnboundLocalError: cannot access local variable 'imgB_bgr_' where it is not associated with a value` 異常。
+
+2. 為什麼仍然能在主控台輸出計算結果？
+   因為在特徵匹配與三角測量的過程中，會呼叫 `compute_measure` 函式。`compute_measure` 內部包含對 `[深度計算]`、`[當前外參]` 以及 `[計算結果]` 等資訊的實時 `print` 輸出。因此，這些運算在背景執行緒報錯之前就已經完全執行完畢並在終端機打印出來。
+   然而，因為隨後的字典打包觸發了 `NameError/UnboundLocalError`，導致回傳結果沒有成功寫入 `calc_result_q` 隊列。主執行緒因未收到新結果，GUI 畫面上顯示的深度值、極線和標註依然維持著上一次成功計算時的舊數據（Stale 狀態），這給人「仍然能算出深度值且程式仍在執行」的錯覺。
+
+3. 修復方案：
+   在 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py` 的 `calc_worker` 函式中，當處於 `multi3` 模式的分支時，增加 `imgB_bgr_ = imgB_bgr_disp` 賦值，確保變數 `imgB_bgr_` 在打包傳送時已被正確初始化。

@@ -1,0 +1,38 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T16-30-24
+
+[減少的部分]
+行 604-616:
+-        if res.get('g_ptsA') is not None:
+-            scatter_grad_inject.set_offsets(res['g_ptsA'])
+-            scatter_grad_match.set_offsets(res['g_ptsB'])
+-            scatter_all_sift_B.set_offsets(res['g_kptsB'])
+-            sift_rect.set_bounds(*res['g_rect'])
+-            sift_rect.set_visible(True)
+-            # 更新 Rect 中心標記
+-            rx, ry, rw, rh = res['g_rect']
+-            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+-            sift_rect_center.set_visible(True)
+-            view_state['grad_data'] = {'ptsA': res['g_ptsA'], 'ptsB': res['g_ptsB']}
+-            redraw_grad_lines(None)  # 初始無高亮
+
+[新增的部分]
+行 604-621:
++        if res.get('g_kptsB') is not None:
++            scatter_all_sift_B.set_offsets(res['g_kptsB'])
++            sift_rect.set_bounds(*res['g_rect'])
++            sift_rect.set_visible(True)
++            # 更新 Rect 中心標記
++            rx, ry, rw, rh = res['g_rect']
++            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
++            sift_rect_center.set_visible(True)
++            
++            if res.get('g_ptsA') is not None:
++                scatter_grad_inject.set_offsets(res['g_ptsA'])
++                scatter_grad_match.set_offsets(res['g_ptsB'])
++                view_state['grad_data'] = {'ptsA': res['g_ptsA'], 'ptsB': res['g_ptsB']}
++                redraw_grad_lines(None)  # 初始無高亮
++            else:
++                scatter_grad_inject.set_offsets(np.empty((0,2)))
++                scatter_grad_match.set_offsets(np.empty((0,2)))

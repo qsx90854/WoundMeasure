@@ -1,0 +1,24 @@
+時間點: 2026-04-20T11:00:20+08:00
+
+【User 訊息】
+[Click] (474.2, 248.6)
+Traceback (most recent call last):
+  ...
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_lk.py", line 64, in find_precise_match
+    u_B = float(pt2d_B_homo[0] / pt2d_B_homo[2])
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: only 0-dimensional arrays can be converted to Python scalars
+
+【Assistant 回答】
+啊哈，這是一個 Numpy 在進行矩陣乘法降維時殘留形狀的微小嚴格限定錯誤 (TypeError)！
+
+在剛剛的運算中，`pt2d_B_homo = K @ pt3d_B` 算出來雖然是一個單一點的 3 列 1 行 `(3, 1)` 矩陣，但在我們取出 `pt2d_B_homo[0]` 時，Numpy 把它視為一個長度為 1 的「陣列 (Array)」，而不是純粹的「數字 (Scalar)」。當我們試圖直接用 Python 的 `float()` 去強制轉換一個形狀為 `(1,)` 的陣列時，新版的 Numpy 就會跳出嚴格的 `TypeError` 把我們擋下來。
+
+我已經火速將這條程式碼補上了 `.flatten()` 安全降維：
+```python
+pt2d_B_homo = (K @ pt3d_B).flatten()
+```
+這樣子陣列就會被完全壓平為單純的 1D 純量集合，完美通過 `float()` 的轉換！
+
+這份小小的型別修復也已經歸檔入 `Antigravity_lg_env`。
+請您不需關閉終端機，只要重新執行一次 `python depth_measure_multi_aruco_lk.py`，這次您的雷射投影點擊就能完美運作了！

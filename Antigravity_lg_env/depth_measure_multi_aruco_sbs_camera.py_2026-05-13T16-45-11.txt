@@ -1,0 +1,31 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T16:45:11
+
+[減少的部分]
+行 475-486 附近 (舊 SGBM 參數):
+-                        minDisparity=64,          # 期望視差約 88px，從 64 開始搜尋
+-                        numDisparities=64,        # 搜尋範圍 64~128px (必須為 16 的倍數)
+-                        blockSize=3,              # 小 block 對細紋理更敏感
+-                        P1=8 * 1 * 3**2,          # = 72 (P1 = 8 * channels * blockSize^2)
+-                        P2=32 * 1 * 3**2,         # = 288 (P2 = 32 * channels * blockSize^2)
+-                        uniquenessRatio=15,       # 提高唯一性要求，減少誤匹配
+-                        speckleWindowSize=50,
+-                        speckleRange=1,           # 降低，對視差不連續更嚴格
+
+行 1062 附近 (時序模式下誤用左圖內參處理右圖):
+-                img_R_undist_bgr, _ = process_view(live_frame_right_box[0], mtxL_o, distL, newKL_o)
+
+[新增的部分]
+行 475 附近 (優化後的 SGBM 參數):
++                        minDisparity=0,           # 從 0 開始搜尋，支援更遠的背景 (深度不設限)
++                        numDisparities=128,       # 搜尋範圍 0~128px (必須為 16 的倍數)
++                        blockSize=5,              # 稍微加大 block size 減少噪聲與破碎感
++                        P1=8 * 1 * 5**2,          # 平滑度懲罰項
++                        P2=32 * 1 * 5**2,
++                        uniquenessRatio=10,       # 稍微放寬唯一性要求，減少無效黑洞
++                        speckleWindowSize=100,    # 加大斑點過濾窗口
++                        speckleRange=2,           # 斑點過濾範圍
+
+行 1062 附近 (正確使用右圖 Mapping 矩陣):
++                img_R_undist_bgr = cv2.remap(live_frame_right_box[0], _map1_R, _map2_R, cv2.INTER_LINEAR)

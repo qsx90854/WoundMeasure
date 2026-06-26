@@ -1,0 +1,12 @@
+Measure_SIFT.py 修改紀錄：
+[新增] 行數: 5-36
+新增了滑鼠事件的狀態變數 (drawing, roi_start, roi_end, roi_rect) 以及 `mouse_callback` 函式。用來處理滑鼠左鍵拖曳繪製矩形 ROI，以及右鍵點擊清除 ROI 的操作。
+
+[修改] 行數: 61-64
+將 `cv2.namedWindow` 加上 `cv2.WINDOW_NORMAL` 旗標，並綁定滑鼠事件。移除原本寫死的 `cv2.resize`，改由 OpenCV 視窗系統接手縮放，確保滑鼠拿到的座標跟 1920x1080 原始影像 1:1 對應。
+
+[修改] 行數: 82-89
+在 `sift.detect` 之前，根據 `roi_rect` 產生 Numpy 的全黑 `mask`，並將 ROI 區域設為 255。這樣 SIFT 演算法就只會在 mask 的白區內去尋找特徵點，大幅降低背景雜點。
+
+[新增] 行數: 100-107
+在最終的彩色畫面上繪製出藍色的選擇框，並加上提示文字，讓使用者知道目前 ROI 正在生效。

@@ -1,0 +1,32 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:18:55
+
+[減少的部分]
+行 332-348 附近 (舊單一區塊 CheckButtons):
+-    ax_opts = fig.add_axes([0.13, 0.78, 0.16, 0.20], facecolor='#1E1E1E')
+-    opt_labels = ["嚴格精細匹配", "梯度 SIFT 匹配", "強制極線對齊", "啟用 ECC 精修", "手動匹配模式"]
+-    check_opt = CheckButtons(ax_opts, opt_labels, [True, True, True, True, False])
+-    for text in check_opt.labels:
+-        text.set_fontsize(8)
+-        text.set_color('white')
+-    def on_opt(label):
+-        s = check_opt.get_status()
+-        view_state.update({'precise': s[0], 'grad_sift': s[1], 'enforce_epi': s[2], 'ecc': s[3], 'manual': s[4]})
+-        ...
+
+[新增的部分]
+行 332 附近 (5 個獨立 CheckButtons 達成兩行排列與白色高亮):
++    # 勾選框面板 (改成兩行排列，每顆獨立以利排版)
++    ax_c1 = fig.add_axes([0.05, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
++    ...
++    c1 = CheckButtons(ax_c1, ["嚴格精細匹配"], [True])
++    ...
++    # 高亮與深色背景適配（邊框與打勾改為白色）
++    for c in [c1, c2, c3, c4, c5]:
++        c.labels[0].set_color('white')
++        c.rectangles[0].set_edgecolor('white')
++        for l in c.lines[0]:
++            l.set_color('white')
++            l.set_linewidth(1.5)
++    # 事件綁定改用閉包 (make_on_opt) 處理

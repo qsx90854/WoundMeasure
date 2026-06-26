@@ -1,0 +1,21 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-04T09:24:42+08:00
+
+說明：
+修復 HUD 姿態估計提示文字在 UI 刷新時消失的問題。在 Blit 機制中將 `pose_status_text` 顯式標記為 animated，並在主渲染刷新迴圈中每次重繪時，呼叫 `ax_A.draw_artist(pose_status_text)`，以確保其始終常駐顯示於左圖畫布上，不被靜態背景覆蓋。
+
+--------------------------------------------------
+[修改] 行 1394 - 1397 (標記為 animated)
+--------------------------------------------------
+     im_A.set_animated(True)
+     im_B.set_animated(True)
+     fps_text.set_animated(True)
++    pose_status_text.set_animated(True)
+
+--------------------------------------------------
+[修改] 行 2534 - 2537 (在渲染迴圈中每次 draw_artist)
+--------------------------------------------------
+         ax_A.draw_artist(fps_text)
++        ax_A.draw_artist(pose_status_text)
+         fig.canvas.blit(fig.bbox)
+         fig.canvas.flush_events()

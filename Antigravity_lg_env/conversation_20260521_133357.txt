@@ -1,0 +1,40 @@
+時間：2026-05-21T13:33:57
+對話：
+User: 目前depth_measure_multi_aruco_sbs_camera_v7_demo.py有時候感覺畫面沒什麼變動(偵測角點的部分), 但計算出來的深度值跟baseline會突然跳動很大, 能否檢查一下目前程式計算的部分是否有什麼隱憂(先檢查,不修改)
+Antigravity:
+經過對 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中相對位姿解算與 3D 重建流程的仔細檢視，發現導致「畫面未顯著變動，但估算出的深度值與 Baseline 卻會突然大幅跳動」的核心原因與以下幾個數學/計算隱憂有關：
+
+### 1. 單個 ArUco 標籤的平面 PnP 二義性 (Planar PnP Pose Ambiguity)
+*   **原因分析**：
+    在 `get_joint_relative_pose` 中，針對每個共享的 ArUco 標籤（4 個共面角點），程式會單獨執行 `cv2.solvePnP` 來計算其相對於左相機的 3D 位姿：
+    `ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))`
+    由於這 4 個點是完全共面的，這屬於典型的 **平面 PnP 二義性問題**。在數學上，可能存在兩個截然不同但重投影誤差極其相似的位姿解（一個是真實的平整方向，另一個是具有虛擬旋轉/傾斜且 Z 軸平移微小偏差的解）。
+*   **跳動機制**：
+    即使影像中的檢測角點只有微小的亞像素噪聲（例如小於 1 像素的微小抖動），優化求解器（`cv2.solvePnP` 預設的 `SOLVEPNP_ITERATIVE` 模式）也可能因為沒有使用上一次迭代的位姿作爲初始猜測（即未啟用 `useExtrinsicGuess=True`），而**隨機在兩個二義性解之間跳躍**。
+*   **漣漪效應**：
+    當單個標籤的位姿（`rv`, `tv`）發生突變跳躍時，算出來的 `objA` 3D 坐標點雲會發生傾斜或 Z 軸整體平移。接著進行第二步相對位姿解算：
+    `ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))`
+    此時因為 `objA` 本身已經跳動，解算出來的 `tv_rel`（Baseline）和 `rv_rel` 就會產生巨大的突變跳動。進而導致特徵點的立體三角測量（Triangulation）結果（深度值）也隨之劇烈跳動。
+
+### 2. 多標籤時「分開解算 PnP」導致 3D 結構扭曲 (De-coupled Multi-Marker PnP)
+*   **原因分析**：
+    即使場景中有多個 ArUco 標籤，程式仍然是對每個標籤分別執行 `cv2.solvePnP` 以獲取它們各自在左相機下的 3D 坐標：
+    ```python
+    for mid in shared:
+        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))
+        if ok:
+            objA.append((R @ canon.T).T + tv.T)
+```
+    如果其中一個標籤發生了二義性翻轉（歪斜了），而另一個標籤維持正常，那麼合併在一起的 `objA` 點雲在 3D 空間中就會變成一個「歪斜、折疊」的不合理非剛性結構。
+*   **影響**：
+    將這樣一個不合常理的扭曲 3D 點雲 `objA` 輸入到下一個 `solvePnP` 中時，會造成相對位姿優化難以收斂，或者收斂到非常奇怪的解，導致時序 Baseline 估計值出現數百毫米的巨大誤差。
+
+### 3. 全局共面約束 (`ENFORCE_COPLANAR`) 的循環依賴
+*   **原因分析**：
+    雖然程式內有 `ENFORCE_COPLANAR` 的約束選項，但它是基於 `compute_global_plane` 計算出來的 `global_plane_n` 與 `global_plane_c`。
+    然而，`compute_global_plane` 內部**依然是先呼叫單獨標籤的 `solvePnP` 來取得 `objA`，然後透過 SVD 擬合平面**。
+    這意味著，如果個別標籤的 PnP 發生了跳動，那麼擬合出來的全局平面（`n`, `c`）也同樣會跟著抖動與歪斜。共面投影公式 `t_vals = d_val / (rays @ normal)` 無法有效濾除這種系統性的二義性抖動，甚至可能因為平面的傾斜而放大特徵匹配點投影到右圖的誤差，進而干擾 `Grad-SIFT` 或 `Precise` 的匹配搜索區。
+
+### 4. 缺乏時序連續性約束 (Lack of Temporal Consistency Constraints)
+*   **原因分析**：
+    程式每一次計算都將當前幀視為完全獨立的狀態來解算 PnP，沒有使用上一幀的 `rv` 與 `tv` 作為初值（`useExtrinsicGuess`），也沒有使用如 Kalman 濾波器或滾動平均（Moving Average）等時序平滑機制。這使得單次噪聲或局部最優值跳躍能毫無阻礙地直接反映在最終的深度與 Baseline 上。

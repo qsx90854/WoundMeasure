@@ -1,0 +1,15 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T11-55-06
+
+[減少的部分]
+行 999-1000:
+-        ax_B.draw_artist(sift_rect)
+-        ax_B.draw_artist(sift_rect_center)
+
+[新增的部分]
+行 999-1002:
++        ax_B.draw_artist(sift_rect)
++        ax_B.draw_artist(sift_rect_center)
++        # 繪製深度資訊文字，避免被影像遮擋
++        ax_B.draw_artist(depth_text)

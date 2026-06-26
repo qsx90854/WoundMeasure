@@ -1,0 +1,10 @@
+時間點: 2026-05-27T22:35:38+08:00
+
+使用者問題:
+能否根據目前內參與Aruco尺寸 設計一個動態調整ARUCO_SUBPIX_WIN_SIZE 的方法
+
+Antigravity 回覆:
+完成動態自適應調整 subpix 搜尋範圍的開發：
+1. 於全域配置新增 DYNAMIC_SUBPIX_WIN = True 開關。
+2. 實作了 compute_adaptive_win_size 函數：基於標記在圖像中的四邊形平均像素邊長 S 計算搜尋半徑。物理模型中邊長正比於 f * W / Z，此處搜尋半徑取邊長的 5%（確保小於單個格子半寬 S/12 以防越界發散），並限制在 [2, 8] 像素安全區間。
+3. 同步修改了 get_joint_relative_pose 中的 cornerSubPix 呼叫以及 draw_aruco 中的矩形繪製，均採用動態計算出的 winSize。

@@ -1,0 +1,40 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T13:24:26
+
+[減少的部分]
+行 820 附近 (on_calc):
+-        if not has_set_L:
+-            print("⚠️ 請先設定左圖！")
+-            return
+-        imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+-        current_R_snap   = frame_buffer[-1].copy() if live_R and len(frame_buffer) > 0 else locked_R
+-        imgB_bgr_snap, _ = process_view(current_R_snap, mtxL_o, distL, newKL_o)
+
+行 965 附近 (主迴圈 auto_calc):
+-        if auto_calc_active and has_set_L and calc_request_q.empty() and not calc_busy.is_set():
+
+[新增的部分]
+行 760 附近 (建立按鈕):
++    ax_btn_hide_R = fig.add_axes([0.88, 0.92, 0.10, 0.04])
++    btn_hide_R = Button(ax_btn_hide_R, "隱藏右圖")
++    
++    def on_hide_R(event):
++        visible = ax_B.get_visible()
++        ax_B.set_visible(not visible)
++        btn_hide_R.label.set_text("顯示右圖" if visible else "隱藏右圖")
++        request_blit_refresh()
+
+行 820 附近 (on_calc):
++        if not has_set_R:
++            print("⚠️ 請先鎖定右圖！")
++            return
++        current_L_snap   = frame_buffer[-1].copy() if live_L and len(frame_buffer) > 0 else locked_L
++        imgA_bgr_snap, _ = process_view(current_L_snap, mtxL_o, distL, newKL_o)
++        imgB_bgr_snap, _ = process_view(locked_R, mtxL_o, distL, newKL_o)
+
+行 930 附近 (按鈕連接):
++    btn_hide_R.on_clicked(on_hide_R)
+
+行 965 附近 (主迴圈 auto_calc):
++        if auto_calc_active and has_set_R and calc_request_q.empty() and not calc_busy.is_set():

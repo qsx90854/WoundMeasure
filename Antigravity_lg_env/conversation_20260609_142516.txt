@@ -1,0 +1,13 @@
+時間點: 2026-06-09T14:25:16+08:00
+
+使用者提問:
+好 請幫我加這個變數
+
+助手回答:
+已在 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py` 中引進 Baseline 的上限約束控制。
+1. 於頂層全域變數區新增：
+   `MAX_BASELINE_MM = 400.0` (預設為 400.0 mm，使用者可自行修改)。
+2. 在影片載入的自標定配對尋找流程、次優配對篩選、以及點選測量的核心邏輯中，將原本僅過濾下限的條件（`bsl >= MIN_BASELINE_MM`）改為同時驗證上下限的雙重約束（`MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM`）。
+3. 當配對之基線超出上限時，系統會跳過該配對，或在測量時提示 `❌ [測量失敗] 基準線不合規範 (限制: 8.0 ~ 400.0 mm)`。
+
+相關變更對照與對話日誌已存至專案目錄的 `Antigravity_lg_env` 底下。

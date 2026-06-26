@@ -1,0 +1,14 @@
+修改時間: 2026-06-02T11:48:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L500):
+-                if 5.0 <= bsl <= 35.0:
+(約原 L527):
+-                if 5.0 <= bsl <= 35.0:
+
+新增的部份:
+(約新 L500):
++                if bsl >= MIN_BASELINE_MM:
+(約新 L527):
++                if bsl >= MIN_BASELINE_MM:

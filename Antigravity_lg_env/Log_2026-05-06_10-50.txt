@@ -1,0 +1,15 @@
+時間點: 2026-05-06 10:50
+
+對話摘要:
+修復梯度 SIFT 內插方法的幾何錯誤。原本的「加權平均位移向量」邏輯是數學上不正確的，改為使用局部幾何變換 (Homography / Affine) 來直接計算查詢點在右圖的對應位置。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 修改: `do_measure` 函式中的 Grad-SIFT 內插邏輯。
+- 移除: 原本的加權平均位移向量計算式：`m_pt = (u, v) + weighted_avg(ptsB_m - ptsA_m)`。
+- 新增: 優先嘗試 `cv2.findHomography` (需 ≥6 對) → RANSAC 篩選後直接將 (u, v) 投影。
+- 新增: 次優嘗試 `cv2.estimateAffinePartial2D` (需 ≥3 對) → RANSAC 篩選後直接將 (u, v) 投影。
+- 保留: Fallback 為加權平均位移 (當匹配點數太少無法建立幾何模型時)。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

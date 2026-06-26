@@ -1,0 +1,48 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T15:42:47+08:00
+
+--- 減少的部份 ---
+行號 1129-1172:
+    def do_measure(u, v, manual_match_pt=None):
+        """同步計算並立即更新 UI（用於手動點選的即時響應）。"""
+        nonlocal last_click; last_click = (u, v)
+        if len(plane_dist_history) > 0:
+            plane_dist_history.clear()
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        view_state['grad_data'] = None
+        redraw_grad_lines(None)  # 清除舊連線
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        snap_vs = dict(view_state)
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+            left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
+        else:
+            left_img_gray = imgA_gray
+            
+        res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
+        ...
+
+--- 新增的部份 ---
+行號 1129-1282:
+    flow_line_artists = []
+
+    def clear_flow_lines():
+        nonlocal flow_line_artists
+        for art in flow_line_artists:
+            try: art.remove()
+            except: pass
+        flow_line_artists.clear()
+
+    def draw_trajectory_on_ui(trajectory):
+        nonlocal flow_line_artists
+        if len(trajectory) < 2: return
+        pts = np.array([pt for f_idx, pt in trajectory])
+        l_A, = ax_A.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
+        l_B, = ax_B.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
+        flow_line_artists.extend([l_A, l_B])
+
+    def do_measure(u, v, manual_match_pt=None):
+        ... (完整三模式 do_measure 實作)

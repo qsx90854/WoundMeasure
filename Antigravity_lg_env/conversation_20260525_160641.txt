@@ -1,0 +1,16 @@
+時間點：2026-05-25T16:06:41+08:00
+
+使用者問題：
+我目前拍攝的影像, 有些部分高於aruco的平面, 有些低於, 但量測出來世界3D座標的z 不管我點高於aruco的地方還是低於aruco的地方, 量測出來的Z多半都是負的 這有可能是bug嗎
+
+Antigravity 的分析與回答：
+1. 分析問題原因：
+   - 程式在計算點選點的世界 3D 座標 `p3d_w` 時，會透過 `ok_origin, rv_o, tv_o = cv2.solvePnP(...)` 獨立解算世界座標原點（即 ID 最小的 ArUco 標籤 `min_id`）的相機位姿。
+   - 由於這是一次獨立的標準 PnP 求解，沒有任何時序或幾何二義性消解機制，在平面物體上極易收斂至共軛翻轉的錯誤姿態解。
+   - 當原點標籤姿態翻轉時，其世界座標系的 Z 軸（法向量方向）會直接反轉（改為指向桌面下方），導致原本高於平面的正值 Z 座標變成負值。
+   - 此外，立體三角測量計算的深度值若因畸變或標定殘差存在微小偏差（Bias），在非常靠近平面（e.g. 幾毫米差距）時，這兩個因素疊加會導致高於和低於平面的 Z 座標大多呈現負值。
+
+2. 採取的修正措施：
+   - 在 `calc_worker` 中，將相對位姿計算階段中已經過 IPPE 解算且完成二義性消解的標籤位姿字典 `curr_marker_poses` 保存到快照 `snap_cand` 中。
+   - 在 `compute_measure` 函數中，計算世界 3D 座標時優先尋找並使用 `cand['curr_marker_poses']` 內已消解二義性的穩定姿態；若無，則採用備用的 `cv2.solvePnPGeneric` (IPPE) 與正面面向相機的消解演算法進行計算。
+   - 已同步完成 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py` 的程式碼修正。

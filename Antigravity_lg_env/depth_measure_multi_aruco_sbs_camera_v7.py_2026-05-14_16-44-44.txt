@@ -1,0 +1,36 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_16-44-44
+
+減少的部份:
+行號 656-660:
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+        else:
+            left_img_gray = imgA_gray
+
+行號 1042-1044 附近:
+                    # 對齊影像
+                    snap_imgA_gray = cv2.remap(snap_imgA_gray, map1_L, map2_L, cv2.INTER_LINEAR)
+                    imgB_gray_ = cv2.remap(imgB_gray_, map1_R, map2_R, cv2.INTER_LINEAR)
+
+新增的部份:
+行號 659-666 附近 (新增 remap 邏輯):
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+        else:
+            left_img_gray = imgA_gray
+            
+        # 如果有對齊，手動點選時的左圖也必須對齊，否則會與右圖坐標系不一致
+        if current_cand.get('is_rectified', False):
+            left_img_gray = cv2.remap(left_img_gray, current_cand['map1_L'], current_cand['map2_L'], cv2.INTER_LINEAR)
+
+行號 1045 附近 (新增 BGR 更新):
+                    # 對齊影像
+                    snap_imgA_gray = cv2.remap(snap_imgA_gray, map1_L, map2_L, cv2.INTER_LINEAR)
+                    imgB_gray_ = cv2.remap(imgB_gray_, map1_R, map2_R, cv2.INTER_LINEAR)
+                    
+                    # 同步更新 BGR 影像，確保回傳與顯示的是對齊後的影像
+                    imgA_bgr_ = cv2.cvtColor(snap_imgA_gray, cv2.COLOR_GRAY2BGR)
+                    imgB_bgr_ = cv2.cvtColor(imgB_gray_, cv2.COLOR_GRAY2BGR)

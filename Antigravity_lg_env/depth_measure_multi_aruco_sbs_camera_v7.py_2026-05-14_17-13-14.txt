@@ -1,0 +1,14 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-13-14
+
+減少的部份:
+行號 660-666 附近:
+        # 如果有對齊，手動點選時的左圖也必須對齊，否則會與右圖坐標系不一致
+        if current_cand.get('is_rectified', False):
+            left_img_gray = cv2.remap(left_img_gray, current_cand['map1_L'], current_cand['map2_L'], cv2.INTER_LINEAR)
+
+新增的部份:
+行號 660-664 附近 (將 remap 移入 if not live_L 區塊):
+            # 只有在鎖定畫面（從 RAW 讀取）時才需要對齊！
+            if current_cand.get('is_rectified', False):
+                left_img_gray = cv2.remap(left_img_gray, current_cand['map1_L'], current_cand['map2_L'], cv2.INTER_LINEAR)

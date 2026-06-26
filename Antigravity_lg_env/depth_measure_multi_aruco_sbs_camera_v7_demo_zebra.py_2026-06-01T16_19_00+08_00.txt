@@ -1,0 +1,32 @@
+修改時間: 2026-06-01T16:19:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (無，僅為新增):
+
+新增的部份 (約新 L887 - L915):
++    # 建立測量模式單選框，置於中間空白處
++    ax_mode = fig.add_axes([0.42, 0.86, 0.13, 0.10], facecolor='#1E1E1E')
++    ax_mode.patch.set_edgecolor('white')
++    ax_mode.patch.set_linewidth(1.0)
++    radio_mode = RadioButtons(ax_mode, ('雙幀直接', '多幀去漂移', '多幀純光流'),
++                              active=0 if MEASURE_MODE=="dual_direct" else (1 if MEASURE_MODE=="multi_dedrift" else 2),
++                              activecolor='#00FFFF')
++    
++    # 調整單選框字型與色彩
++    for label in radio_mode.labels:
++        label.set_color('white')
++        label.set_fontsize(8)
++        
++    def on_mode_change(label_text):
++        global MEASURE_MODE
++        if label_text == '雙幀直接':
++            MEASURE_MODE = 'dual_direct'
++        elif label_text == '多幀去漂移':
++            MEASURE_MODE = 'multi_dedrift'
++        elif label_text == '多幀純光流':
++            MEASURE_MODE = 'multi_pure'
++        print(f"🔄 量測模式已切換為: {MEASURE_MODE}")
++        if last_click:
++            do_measure(last_click[0], last_click[1])
++            
++    radio_mode.on_clicked(on_mode_change)

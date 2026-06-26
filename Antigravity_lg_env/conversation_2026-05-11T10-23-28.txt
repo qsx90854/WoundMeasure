@@ -1,0 +1,14 @@
+時間: 2026-05-11T10:23:28
+使用者請求:
+目前顯示很卡頓, 請將算法的部分都移到另一個thread內執行, 跟顯示畫面用的thread分開
+
+回答訊息:
+已完成 threading 重構，架構設計如下：
+
+1. compute_measure() — 純計算版，不碰 Matplotlib，回傳 dict
+2. apply_measure_result() — 在主執行緒接收 dict，更新 UI
+3. on_calc() — 改為非阻塞，只打包 request 丟入 calc_request_q，不做任何計算
+4. calc_worker — daemon 背景執行緒，從 calc_request_q 取 request，執行 ArUco + compute_measure，將結果放入 calc_result_q
+5. 主迴圈 — 每幀輪詢 calc_result_q，有結果就呼叫 apply_measure_result 更新 UI
+
+這樣相機畫面的更新永遠不會被演算法卡住，UI 保持流暢。

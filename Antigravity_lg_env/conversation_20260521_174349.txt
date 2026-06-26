@@ -1,0 +1,14 @@
+時間：2026-05-21T17:43:49
+對話：
+User: 好 請照你說的修正
+Antigravity:
+分析與原因：
+在原先的即時相機串流版本（`depth_measure_multi_aruco_sbs_camera_v7.py`）中，因為缺乏時序位姿約束，當相機移動或剛開啟連續計算時，Planar PnP 求解極易收斂至共軛翻轉的錯誤姿態，進而導致計算出的相對位姿 (R, t) 的 baseline 異常放大（如 300+ mm）。另外，平面擬合使用雙目三角測量點雲，導致退化影格產生的錯誤平面會透過單側單點回授持續污染系統，且 SIFT 搜尋半徑 `rad` 固定為 20 也未能隨焦距動態調整。
+
+解決方案：
+我們已將 `depth_measure_multi_aruco_sbs_camera_v7.py` 還原後進行了以下修正，與離線運算版本 `v7_demo_nb.py` 達成完全對齊：
+1. 引入時序位姿約束（Temporal Extrinsic Constraints）：在 ArUco `get_joint_relative_pose` 與背景計算執行緒中，利用上一個影格的 marker/relative pose 作為 `useExtrinsicGuess=True` 的初值，解決 PnP 位姿估計的二義性收斂問題。
+2. 引入時序 EMA 平滑濾波：平滑 Rodrigues $R_r$ 與相對位移 $t_r$ 並實時重構為旋轉矩陣，徹底消除噪聲引起的抖動。
+3. 修正平面擬合污染：改為直接使用左圖單側估算出的 ArUco 3D 點點雲 `objA` 進行 SVD 平面擬合，避免受 $(R, t)$ 的二度污染。
+4. 動態 SIFT 匹配半徑：將 SIFT 半徑從硬編碼的 20 修改為隨相機焦距動態縮放：`rad = max(20, int(round(20 * (KL[0, 0] / 650.0))))`。
+5. 時序重置邏輯：在 UI 操作的連續計算開關、鎖定左/右圖動作中加入 `reset_pose_history = True`，清空歷史，確保狀態切換正常。

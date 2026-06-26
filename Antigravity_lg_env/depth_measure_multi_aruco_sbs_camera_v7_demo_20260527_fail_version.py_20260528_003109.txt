@@ -1,0 +1,65 @@
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py
+修改時間: 20260528_003109
+
+=== 變更 1 (於 draw_aruco 中動態顯示 win_size，並重用 win_size 變數) ===
+原始行號範圍: 420-449 (原始檔案)
+減少內容:
+----------------------------------------
+        for mid, pts in corners.items():
+            p = np.vstack((pts, pts[0])); l, = ax.plot(p[:,0], p[:,1], 'cyan', lw=1.5)
+            t_str = f"ID:{mid}"
+            if mid == min_id:
+                t_str += " (World Origin)"
+                center = np.mean(pts, axis=0)
+                c_pt, = ax.plot(center[0], center[1], 'r+', markersize=10, markeredgewidth=2, zorder=4)
+                ax.art.append(c_pt)
+            t = ax.text(pts[0,0], pts[0,1]-5, t_str, color='cyan', fontsize=8, fontweight='bold' if mid == min_id else 'normal', zorder=4)
+            ax.art.extend([l, t])
+            
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+                
+                # 繪製 cornerSubPix 搜尋範圍矩形框 (搜尋視窗寬高為 2 * win_size)
+                win_size = compute_adaptive_win_size(pts, ARUCO_SUBPIX_WIN_SIZE)
+                r_size = 2 * win_size
+                r_patch = Rectangle(
+                    (pts[i,0] - win_size, pts[i,1] - win_size),
+                    r_size, r_size,
+                    fill=False, edgecolor='red', lw=0.5, alpha=0.6, zorder=4
+                )
+                ax.add_patch(r_patch)
+                ax.art.append(r_patch)
+----------------------------------------
+新增內容:
+----------------------------------------
+        for mid, pts in corners.items():
+            win_size = compute_adaptive_win_size(pts, ARUCO_SUBPIX_WIN_SIZE)
+            p = np.vstack((pts, pts[0])); l, = ax.plot(p[:,0], p[:,1], 'cyan', lw=1.5)
+            t_str = f"ID:{mid} ({win_size}x{win_size})"
+            if mid == min_id:
+                t_str += " (World Origin)"
+                center = np.mean(pts, axis=0)
+                c_pt, = ax.plot(center[0], center[1], 'r+', markersize=10, markeredgewidth=2, zorder=4)
+                ax.art.append(c_pt)
+            t = ax.text(pts[0,0], pts[0,1]-5, t_str, color='cyan', fontsize=8, fontweight='bold' if mid == min_id else 'normal', zorder=4)
+            ax.art.extend([l, t])
+            
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+                
+                # 繪製 cornerSubPix 搜尋範圍矩形框 (搜尋視窗寬高為 2 * win_size)
+                r_size = 2 * win_size
+                r_patch = Rectangle(
+                    (pts[i,0] - win_size, pts[i,1] - win_size),
+                    r_size, r_size,
+                    fill=False, edgecolor='red', lw=0.5, alpha=0.6, zorder=4
+                )
+                ax.add_patch(r_patch)
+                ax.art.append(r_patch)
+----------------------------------------

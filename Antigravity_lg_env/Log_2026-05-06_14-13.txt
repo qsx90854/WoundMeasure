@@ -1,0 +1,13 @@
+時間點: 2026-05-06 14:13
+
+對話摘要:
+在梯度 SIFT 搜索框 (sift_rect) 的中心點新增一個十字標記，方便確認系統預測的右圖落點位置。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: `sift_rect_center` 元件，使用 `ax_B.plot('+', color='magenta')` 在搜索框中心畫出一個洋紅色十字標記。
+- 修改: 在 `do_measure` 和 `update_display` 的隱藏邏輯中同步隱藏 `sift_rect_center`。
+- 修改: 在 `update_display` 顯示 `sift_rect` 時，從 `g_rect = (rx, ry, rw, rh)` 計算出中心座標 `(rx + rw/2, ry + rh/2)`，更新並顯示 `sift_rect_center`。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

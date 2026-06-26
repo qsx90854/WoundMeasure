@@ -1,0 +1,11 @@
+時間點: 2026-06-04T09:24:42+08:00
+
+使用者提問:
+現在那個字串顯示一下就消失
+
+助手回答:
+已修復該問題。原因為 Matplotlib 的 Blit 機制在刷新畫布時，會利用雙快取恢復靜態背景，由於之前未將 `pose_status_text` 標記為 animated，且未在主循環中每次重繪它，因此在第一次量測或 UI 重新整理時便會被靜態背景覆蓋而消失。已進行了以下調整：
+1. 將 `pose_status_text` 標記為 `animated = True`。
+2. 在渲染刷新主循環中，於 `ax_A.draw_artist(fps_text)` 的下方加上了 `ax_A.draw_artist(pose_status_text)`，確保其在每次 Blit 時都會被重新繪製，常駐顯示於左圖左上角。
+3. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env` 中。
+請您手動重新執行以驗證。

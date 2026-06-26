@@ -1,0 +1,15 @@
+時間點: 2026-06-10T11:46:21+08:00
+
+使用者問題:
+目前在左圖點選一個候選點之後會在周圍取100個梯度最高的點, 右圖也會取梯度最高的200個點, 但要在多大範圍內取, 這個變數請幫我設成一個全域變數, 還有100和200這個數字也要
+
+Antigravity的回答與修改方案:
+1. 在全域設定區新增以下四個全域變數：
+   - LEFT_PATCH_SEARCH_RADIUS = 18       # 左圖點選點周圍的搜索半徑 (pixels)
+   - RIGHT_PATCH_SEARCH_RADIUS = 30      # 右圖預測點周圍的搜索半徑 (pixels)
+   - LEFT_GRADIENT_POINTS_COUNT = 100    # 左圖周圍取梯度最高的特徵點數量
+   - RIGHT_GRADIENT_POINTS_COUNT = 200   # 右圖周圍取梯度最高的特徵點數量
+
+2. 將程式中 run_improved_matching_flow 函數與 compute_measure 函數中寫死的 18, 30, 100, 400 分別替換為對應的全域變數。其中右圖的梯度點數限制原本是寫死 400，現在替換為對應的全域變數（其預設值為 200，符合使用者需求）。
+
+3. 已將檔案變更內容（包括行號、刪除與新增的行）記錄於 depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_2026-06-10T11_46_21+08_00.txt 中。

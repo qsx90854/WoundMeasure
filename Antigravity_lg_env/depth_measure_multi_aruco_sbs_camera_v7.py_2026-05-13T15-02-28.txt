@@ -1,0 +1,44 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:02:28
+
+[減少的部分]
+行 273 附近 (建立 Figure):
+-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+-    for ax in axes: ax.axis("off")
+
+行 301 附近 (HUD 文字):
+-    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', bbox=dict(facecolor='black', alpha=0.7))
+-    fps_text = ax_A.text(0.01, 0.97, "FPS: --", transform=ax_A.transAxes,
+-                         color='lime', fontsize=10, fontweight='bold', va='top',
+-                         bbox=dict(facecolor='black', alpha=0.6), zorder=10)
+
+行 317 附近 (勾選框):
+-    ax_opts = fig.add_axes([0.13, 0.78, 0.16, 0.20])
+-    for text in check_opt.labels: text.set_fontsize(8)
+
+行 752-767 附近 (按鈕樣式):
+-    ax_btn_lock_L = fig.add_axes([0.58, 0.92, 0.08, 0.04])
+-    btn_lock_L = Button(ax_btn_lock_L, "鎖定左圖")
+    ... (其餘按鈕)
+
+[新增的部分]
+行 273 附近 (建立 Figure 與深色模式):
++    fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
++    for ax in axes:
++        ax.axis("off")
++        ax.set_facecolor('#1E1E1E')
++    # 加入專業感的影像外框
++    from matplotlib.patches import Rectangle
++    border_A = Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor='#00FF00', lw=2, alpha=0.8)
++    border_B = Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor='#FFCC00', lw=2, alpha=0.8)
++    ax_A.add_patch(border_A)
++    ax_B.add_patch(border_B)
+
+行 301 附近 (HUD 文字專業化):
++    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=9, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
++    fps_text = ax_A.text(0.01, 0.97, "FPS: --", transform=ax_A.transAxes, color='#00FF00', fontsize=10, fontweight='bold', va='top', bbox=dict(facecolor='#121212', alpha=0.6, edgecolor='none'), zorder=10)
+
+行 752 附近 (扁平化按鈕):
++    btn_style = dict(color='#2C2C2C', hovercolor='#3D3D3D')
++    # 建立按鈕並套用 btn_style，且文字一律設為白色

@@ -1,0 +1,4 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py
+修改紀錄:
+- [新增] 142-187 行: 於 `get_joint_relative_pose` 上方新增了全域狀態變數 `_temporal_corners_A`、`_temporal_strikes_A` 等，以及 `smooth_aruco_corners` 函式。此函式利用指數移動平均 (EMA, alpha=0.3) 與離群值閾值 (outlier_thresh=5.0) 來平滑並穩定 ArUco 角點的像素座標，針對突波會先捨棄並累計 3 幀才認定為真實位移。
+- [修改] 199-202 行: 在 `get_joint_relative_pose` 內部呼叫 `cv2.cornerSubPix` 之後，立即將角點傳入 `smooth_aruco_corners` 進行平滑處理。此修改同時穩定了 UI 繪圖的藍色方框以及後續 PnP 的數學運算輸入。

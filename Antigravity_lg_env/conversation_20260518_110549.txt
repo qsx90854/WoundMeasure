@@ -1,0 +1,10 @@
+時間：2026-05-18T11:05:49
+對話：
+User: 目前再差不多位置算出來的ZNCC值有時候比較浮動 , 即便把門檻放鬆到0.65有時候還是會因為沒過門檻找不到匹配點, 有更穩定的附加機制可以一起導入嗎, 先提出複數建議, 先不修改code
+Antigravity:
+提出五種在不更動核心框架下，能大幅提升匹配穩定度與解決 ZNCC 分數浮動的機制建議：
+1. 動態自適應區塊大小 (Adaptive Patch Size)
+2. 左右一致性檢測 (Left-Right Cross Check) 搭配超低門檻
+3. 結合特徵匹配 (SIFT/ORB) 提供先驗視差範圍
+4. 導入 ECC (Enhanced Correlation Coefficient) 抵抗視角形變
+5. 混搭 Census Transform (非參數局部變換)

@@ -1,0 +1,56 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-03T16:42:03+08:00
+
+說明：
+在影片自標定次優右圖檢索邏輯中，新增評估統計與排除原因的日誌輸出。當沒有找到任何符合門檻 M 與 Baseline 限制的額外次佳配對時，會主動列印出說明日誌，讓使用者在執行時可以明確認知是否抓取到了多幀融合資訊。
+
+--------------------------------------------------
+[修改] 行 654 - 687 (加入統計變數與排除原因的日誌輸出)
+--------------------------------------------------
+     extra_candidates_info = []
+     if best_end is not None and best_start is not None:
+         candidates_scores = []
++        skip_baseline_cnt = 0
++        skip_err_cnt = 0
+         for item_s in valid_start:
+             if item_s['idx'] == best_start['idx']:
+                 continue
+@@ -665,6 +665,10 @@
+                 err = compute_pair_reprojection_error(item_s, best_end, mtx_L, dist_L)
+                 if err < MAX_REPROJ_ERR_THRES:
+                     candidates_scores.append((err, item_s, R_rel_cand, t_rel_cand, bsl))
++                else:
++                    skip_err_cnt += 1
++            else:
++                skip_baseline_cnt += 1
+                     
+         # 依據重投影誤差由小到大排序
+         candidates_scores.sort(key=lambda x: x[0])
+@@ -671,15 +671,20 @@
+         selected_extras = candidates_scores[:MAX_EXTRA_PAIRS]
+         
+-        for err, item_s, R_rel_c, t_rel_c, bsl in selected_extras:
+-            extra_candidates_info.append({
+-                'idx_A': item_s['idx'],
+-                'frame_A': frames[item_s['idx']],
+-                'R_rel': R_rel_c,
+-                't_rel': t_rel_c,
+-                'baseline': bsl,
+-                'cornersA': undistort_corners_dict(item_s['corners'])
+-            })
+-            log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
++        log_and_print(f"📊 [次佳配對評估] 總計候選幀數: {len(valid_start) - 1} | 基準線不足排除: {skip_baseline_cnt} 組 | 誤差超標排除 (> {MAX_REPROJ_ERR_THRES} px): {skip_err_cnt} 組")
++        
++        if len(selected_extras) > 0:
++            for err, item_s, R_rel_c, t_rel_c, bsl in selected_extras:
++                extra_candidates_info.append({
++                    'idx_A': item_s['idx'],
++                    'frame_A': frames[item_s['idx']],
++                    'R_rel': R_rel_c,
++                    't_rel': t_rel_c,
++                    'baseline': bsl,
++                    'cornersA': undistort_corners_dict(item_s['corners'])
++                })
++                log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
++        else:
++            log_and_print(f"ℹ️ [次佳配對] 未找到任何符合條件的額外次佳配對影格 (門檻 M = {MAX_REPROJ_ERR_THRES} px, Baseline >= {MIN_BASELINE_MM} mm)。")

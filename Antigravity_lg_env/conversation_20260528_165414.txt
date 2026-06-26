@@ -1,0 +1,72 @@
+時間：2026-05-28 16:54:14
+
+使用者提問：
+其中有用到的function的參數也請列出說明分別是幹嘛的, 包含opencv的
+
+Antigravity回答：
+以下為您列出 Baseline 計算流程中所使用到的 OpenCV 核心函式及自定義關鍵函式的參數說明與其幾何/數值計算上的意義：
+
+### 一、 OpenCV 核心函式說明
+
+#### 1. `cv2.remap(src, map1, map2, interpolation)`
+* **參數說明**：
+  * `src` (ndarray)：輸入的原始畸變影像。
+  * `map1`, `map2` (ndarray)：由相機內參與畸變參數產生的重映射座標對應表（在此系統中是藉由 `cv2.initUndistortRectifyMap` 預先生成，類型為 `cv2.CV_16SC2` 以提高效率）。
+  * `interpolation` (int)：影像插值算法。在此使用 `cv2.INTER_LINEAR`（雙線性插值），平衡了計算速度與重建品質。
+* **作用**：依據校正對應表，將畸變影像中的每個像素重新投影到正確的物理位置，產出去畸變後的對齊畫面。
+
+#### 2. `cv2.cornerSubPix(image, corners, winSize, zeroZone, criteria)`
+* **參數說明**：
+  * `image` (ndarray)：單通道灰階影像（8-bit）。
+  * `corners` (ndarray)：偵測到的 ArUco 角點 2D 座標陣列。此函式會直接在記憶體中更新這些座標（原地修改）。
+  * `winSize` (tuple)：搜尋窗口半徑（如 `(3, 3)` 表示使用 `7x7` 像素的窗口）。
+  * `zeroZone` (tuple)：窗口中心被忽略的死區半徑。傳入 `(-1, -1)` 表示無死區。
+  * `criteria` (tuple)：迭代終止條件，格式為 `(type, maxCount, epsilon)`：
+    * `cv2.TERM_CRITERIA_EPS`：當兩次迭代的點位差小於 `epsilon` (0.0001) 時終止。
+    * `cv2.TERM_CRITERIA_MAX_ITER`：最大迭代次數 (100 次)。
+* **作用**：在梯度變化的亞像素（Sub-pixel）級別精化角點座標，以大幅降低像素量化噪訊對相機位姿求解的干擾。
+
+#### 3. `cv2.solvePnPGeneric(objectPoints, imagePoints, cameraMatrix, distCoeffs, flags)`
+* **參數說明**：
+  * `objectPoints` (ndarray)：標籤平面在世界座標系下的 3D 頂點座標 (4x3)。由真實邊長 $8.25\text{mm}$ 所建立的四個對角點。
+  * `imagePoints` (ndarray)：對應的 2D 像素座標 (4x2)。
+  * `cameraMatrix` (ndarray)：相機內參矩陣 $K$ (3x3)。
+  * `distCoeffs` (ndarray)：相機畸變參數。因為影像已預先去畸變，此處傳入 `np.zeros(5)`。
+  * `flags` (int)：解算模式。在此傳入 `cv2.SOLVEPNP_IPPE`。IPPE 是針對共面特徵點（平面標籤）的最佳化極速求解器。
+* **作用**：求解單個平面標籤的相對於相機的姿態。相較於常規的 `solvePnP`，`solvePnPGeneric` 會傳回**兩個候選解**（包含平移向量 `tvecs` 與旋轉向量 `rvecs`），讓我們可以後續透過時序或傾斜角來消解平面投影的二義性。
+
+#### 4. `cv2.solvePnP(objectPoints, imagePoints, cameraMatrix, distCoeffs, rvec, tvec, useExtrinsicGuess)`
+* **參數說明**：
+  * `objectPoints` (ndarray)：左相機座標系下的 3D 點集 (N*4x3)。
+  * `imagePoints` (ndarray)：右圖對應的 2D 像素角點 (N*4x2)。
+  * `cameraMatrix` (ndarray)：右相機內參矩陣。
+  * `distCoeffs` (ndarray)：畸變參數，傳入 `np.zeros(5)`。
+  * `rvec`, `tvec` (ndarray)：外參優化的迭代初始值（旋轉向量與平移向量）。
+  * `useExtrinsicGuess` (bool)：是否啟用初始值猜測。若為 `True`，求解器會以傳入的 `rvec`/`tvec` 作為優化起點，在有時序連續性時能極大加速收斂並防止結果跳變。
+* **作用**：利用左右兩圖的所有共享特徵點對，解算左相機到右相機的相對旋轉與平移。
+
+#### 5. `cv2.Rodrigues(src)`
+* **參數說明**：
+  * `src` (ndarray)：若傳入 3x1 的旋轉向量（李代數形式），則輸出 3x3 的旋轉矩陣 $R$；反之若傳入 3x3 矩陣，則輸出 3x1 向量。
+* **作用**：在旋轉向量（軸角表示）與旋轉矩陣之間相互轉換，以便於計算空間變換。
+
+#### 6. `cv2.triangulatePoints(projMatrix1, projMatrix2, projPoints1, projPoints2)`
+* **參數說明**：
+  * `projMatrix1` (ndarray)：左相機的投影矩陣 $P_1 = K_L [I \mid 0]$ (3x4)。
+  * `projMatrix2` (ndarray)：右相機的投影矩陣 $P_2 = K_R [R_{rel} \mid t_{rel}]$ (3x4)。
+  * `projPoints1` (ndarray)：左圖 2D 像素點集合 (2xN)。
+  * `projPoints2` (ndarray)：右圖對應的 2D 像素點集合 (2xN)。
+* **作用**：使用直接線性變換（DLT）雙目三角化算法，藉由已知投影關係，計算點對在 3D 空間中的齊次座標 (4xN)。後續需除以齊次項歸一化。
+
+---
+
+### 二、 自定義核心函式說明
+
+#### 1. `get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, ...)`
+* **參數說明**：
+  * `imgA_gray`, `imgB_gray`：去畸變後的左右灰階影像。
+  * `K_L`, `K_R`：左右相機經由 `getOptimalNewCameraMatrix` 修正後的內參矩陣。
+  * `marker_size_mm`：ArUco 標籤的物理實際邊長（在此為 $8.25\text{mm}$），用來建立正確的尺度。
+  * `prev_marker_poses`：前一幀標籤相相對於相機的姿態字典，用於時序連續性二義性消解。
+  * `prev_rel_pose`：前一幀的相對外參初值，用於 PnP 優化時的初值約束。
+* **作用**：整個雙目外參及 Baseline 估計的控制中心。負責特徵提取、配對、視差檢驗、個別姿態解算、共面約束優化、以及最終的相對 PnP 解算。

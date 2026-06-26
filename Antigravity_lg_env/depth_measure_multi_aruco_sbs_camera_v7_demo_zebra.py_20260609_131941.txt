@@ -1,0 +1,56 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-09T13:19:41+08:00
+
+說明：
+在不動演算法架構的前提下，優化整個軟體的計算流程與重複計算開銷：
+1. 【快取 CLAHE 物件】：在 `preprocess_gray` 之前加入 `_clahe_cache` 字典，避免每一次影像處理都重複呼叫 `cv2.createCLAHE` 的 C++ 對象構造開銷。
+2. 【KLT 光流影格快取】：在 `track_feature_and_verify` 中加入局部 `gray_cache`，避免在逐影格追蹤的迴圈中，重複對相鄰影格進行 `cv2.cvtColor` 以及 `preprocess_gray` 預處理運算。
+
+--------------------------------------------------
+[修改] 行 390 - 410 ( track_feature_and_verify 內導入局部快取)
+--------------------------------------------------
+     lk_params = dict(winSize=(21, 21), maxLevel=3,
+                      criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+                      
++    # 局部快取，避免在多幀光流迴圈中重複將相同的彩色幀轉換成灰階並執行對比度增強
++    gray_cache = {}
++    def get_processed_gray(idx):
++        if idx not in gray_cache:
++            g = cv2.cvtColor(all_frames[idx], cv2.COLOR_BGR2GRAY)
++            g = preprocess_gray(g, True)
++            gray_cache[idx] = g
++        return gray_cache[idx]
++
+     while curr_f_idx != end_f_idx:
+         next_f_idx = curr_f_idx + step
+         
+-        img_prev = cv2.cvtColor(all_frames[curr_f_idx], cv2.COLOR_BGR2GRAY)
+-        img_next = cv2.cvtColor(all_frames[next_f_idx], cv2.COLOR_BGR2GRAY)
+-        
+-        img_prev = preprocess_gray(img_prev, True)
+-        img_next = preprocess_gray(img_next, True)
++        img_prev = get_processed_gray(curr_f_idx)
++        img_next = get_processed_gray(next_f_idx)
+
+--------------------------------------------------
+[修改] 行 907 - 920 (preprocess_gray 快取優化)
+--------------------------------------------------
+         'best_kpB': kb,
+         'best_desB': db
+     }
+ 
++_clahe_cache = {}
++
++def get_clahe(clip_limit, tile_size):
++    key = (clip_limit, tile_size)
++    if key not in _clahe_cache:
++        _clahe_cache[key] = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
++    return _clahe_cache[key]
++
+ def preprocess_gray(gray_img, enable_clahe=True):
+-
+     if enable_clahe:
+-        clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
++        clahe = get_clahe(CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID_SIZE)
+         return clahe.apply(gray_img)
+     return gray_img

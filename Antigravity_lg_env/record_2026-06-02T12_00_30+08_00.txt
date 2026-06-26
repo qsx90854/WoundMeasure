@@ -1,0 +1,10 @@
+對話時間: 2026-06-02T12:00:30+08:00
+
+本次對話與回答摘要：
+1. 定位到左圖紫色圈圈只出現一下就消失的 Bug 原因：
+   - 程式使用了 Matplotlib Blit 高速渲染機制。每 10 毫秒的 Blit 渲染循環中，只會對註冊在列表中的變動 Artist 呼叫 draw_artist()。
+   - 由於之前在迴圈中漏掉了新加入的 ax_A.draw_artist(scatter_A_reproj)，因此背景一旦被 restore_region，重投影圈圈就沒有被重新畫出來，造成閃現一次後便消失的現象。
+2. 進行修正：
+   - 在 Blit 繪圖迴圈中，於 ax_A.draw_artist(scatter_A) 之後，補上了 ax_A.draw_artist(scatter_A_reproj)。
+   - 這樣一來，左圖的重投影圈圈就能在畫面上持續穩定地顯示。
+3. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_59_00+08_00.txt。

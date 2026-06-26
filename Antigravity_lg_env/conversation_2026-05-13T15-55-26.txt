@@ -1,0 +1,14 @@
+時間: 2026-05-13T15:55:26
+使用者請求:
+能將UI上方標題的Figure1改成 MeasureTool嗎, 另外底下有一行原先預設的功能調能隱藏嗎
+
+回答訊息:
+已針對 `depth_measure_multi_aruco_sbs_camera_v7.py` 完成視窗標題與工具列的優化。
+
+### 修正內容：
+1. **視窗標題改為 `MeasureTool`**：
+   - 我在建立畫布後，調用了 `fig.canvas.manager.set_window_title("MeasureTool")`，將預設的 "Figure 1" 改為您指定的名稱。
+2. **隱藏底部的功能條（Toolbar）**：
+   - 由於程式碼頂部指定了使用 `TkAgg` 後端，我使用了最安全且不會報錯的 `fig.canvas.toolbar.pack_forget()` 方法，將底部帶有放大鏡、儲存等按鈕的功能條從介面中移除，讓畫面更純粹、更像獨立的專業軟體。
+
+依據規則 3，我並未嘗試自己執行 Python 檔案。我也已經在專案底下的 `Antigravity_lg_env` 資料夾中建立了本次對話紀錄與程式碼差異備份檔。請您重新開啟程式，看看標題與底部工具列是否已如預期變更！

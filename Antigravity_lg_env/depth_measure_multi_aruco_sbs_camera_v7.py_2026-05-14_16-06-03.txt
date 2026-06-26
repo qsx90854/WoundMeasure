@@ -1,0 +1,21 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_16-06-03
+
+減少的部份:
+行號 581:
+            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])
+
+新增的部份:
+行號 82-90 (新增函數):
+def triangulate_point_3d_rect(pt_A, pt_B, P1, P2):
+    ptsA_f32 = np.array([[pt_A[0]], [pt_A[1]]], dtype=np.float32)
+    ptsB_f32 = np.array([[pt_B[0]], [pt_B[1]]], dtype=np.float32)
+    pts4d = cv2.triangulatePoints(P1, P2, ptsA_f32, ptsB_f32)
+    pt3d = (pts4d[:3] / pts4d[3]).flatten()
+    return pt3d
+
+行號 581 附近 (修改為條件判斷):
+            if cand.get('is_rectified', False):
+                p3d = triangulate_point_3d_rect((u, v), m_pt, cand['P1_rect'], cand['P2_rect'])
+            else:
+                p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])

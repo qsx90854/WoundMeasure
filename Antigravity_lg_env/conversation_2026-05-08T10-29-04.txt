@@ -1,0 +1,15 @@
+時間: 2026-05-08T10-29-04
+使用者請求:
+目前執行會: (lg_env) D:\Lightglue\lg_env>python depth_measure_multi_aruco_sbs_camera.py
+Traceback (most recent call last):
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera.py", line 648, in <module>
+    main()
+  ...
+TypeError: unsupported format string passed to NoneType.__format__
+
+回答訊息:
+已修復 `depth_measure_multi_aruco_sbs_camera.py` 中因深度值為 `None` 導致的格式化錯誤。
+原因是在時序匹配（Live 模式）下，三角測距常因視差不足或幾何條件不佳而傳回 `None`，原本的程式碼未對此進行檢查便直接進行 `:.1f` 格式化，導致報錯。
+已加入判斷式，當深度為 `None` 時，文字會顯示為「無效(無法三角測距)」。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

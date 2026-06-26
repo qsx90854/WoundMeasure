@@ -1,0 +1,50 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T15:41:19+08:00
+
+--- 減少的部份 ---
+行號 28-45:
+CAMERA_INDEX          = 0                          # 相機索引
+FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+UPDATE_INTERVAL       = 0.3                     # 畫面更新與計算間隔 (秒)
+CAMERA_WIDTH          = 1920                       # 相機解析度寬
+CAMERA_HEIGHT         = 1080                        # 相機解析度高
+
+
+PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
+ACTUAL_MARKER_SIZE_MM = 8.25#16.5                       # ArUco 標籤真實邊長 (mm)
+TARGET_W              = 1024                       # 統一縮放寬度
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+MIN_BASELINE_MM       = 8.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
+AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
+ENFORCE_COPLANAR      = False                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+ENABLE_CLAHE_DEFAULT  = True                        # 預設是否啟用 CLAHE 直方圖均衡化前處理以改善匹配 (True/False)
+
+--- 新增的部份 ---
+行號 28-49:
+VIDEO_PATH            = "video_20260505_155449.mp4"        # 影片檔案路徑
+START_FRAME_COUNT     = 30                         # 前段評估幀數 (N)
+END_FRAME_COUNT       = 30                         # 後段評估幀數 (M)
+POSE_SELECT_MODE      = "average"                  # "average" (平均姿態去噪) 或 "best_pair"
+MEASURE_MODE          = "dual_direct"              # "dual_direct", "multi_dedrift", "multi_pure"
+FLOW_FB_THRESHOLD     = 0.8                        # 雙向光流一致性誤差閾值 (pixels)
+EPIPOLAR_DIST_THRESHOLD = 0.8                      # 極線幾何約束距離閾值 (pixels)
+LOOP_CLOSURE_DRIFT_THRESHOLD = 1.5                 # 閉環誤差校正門檻值 (pixels)
+LOOP_CLOSURE_FAIL_THRESHOLD = 5.0                  # 閉環失敗退回雙目門檻值 (pixels)
+
+CAMERA_WIDTH          = 1920                       # 相機解析度寬
+CAMERA_HEIGHT         = 1080                       # 相機解析度高
+
+PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
+ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
+TARGET_W              = 1024                       # 統一縮放寬度
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+MIN_BASELINE_MM       = 8.0                        # 最小基準線限制 (mm)
+AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
+ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+ENABLE_POSE_SMOOTHING  = True                      # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                       # 平滑係數
+ENABLE_CLAHE_DEFAULT  = True                       # 預設是否啟用 CLAHE

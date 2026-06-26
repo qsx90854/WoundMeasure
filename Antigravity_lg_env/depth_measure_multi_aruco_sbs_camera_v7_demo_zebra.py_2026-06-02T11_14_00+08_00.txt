@@ -1,0 +1,81 @@
+修改時間: 2026-06-02T11:14:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L819 - L835):
+-        for mid, pts in corners_src.items():
+-            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+-            if not ok: continue
+-            R_src, _ = cv2.Rodrigues(rvec)
+-            P_src = (R_src @ canon.T).T + tvec.T # (4, 3) 3D點在 source 坐標系下
+-            
+-            pts_reproj, _ = cv2.projectPoints(P_src, rvec_rel, t_vec_rel, KL, np.zeros(5))
+-            pts_reproj = pts_reproj.reshape(4, 2)
+-            
+-            p = np.vstack((pts_reproj, pts_reproj[0]))
+-            l, = ax_target.plot(p[:,0], p[:,1], color=color, linestyle='--', lw=1.5, alpha=0.8, zorder=3)
+-            ax_target.reproj_art.append(l)
+-            
+-            for i in range(4):
+-                pt, = ax_target.plot(pts_reproj[i,0], pts_reproj[i,1], color=color, marker='+', markersize=5, zorder=3)
+-                ax_target.reproj_art.append(pt)
+(約原 L1247 - L1269):
+-                    else:
+-                        half = ACTUAL_MARKER_SIZE_MM / 2.0
+-                        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+-                        ok_generic, rvecs_o, tvecs_o, _ = cv2.solvePnPGeneric(
+-                            canon, cand['cornersA'][min_id], KL, np.zeros(5),
+-                            flags=cv2.SOLVEPNP_IPPE
+-                        )
+-                        if ok_generic and len(rvecs_o) > 0:
+-                            best_idx = 0
+-                            if len(rvecs_o) == 2:
+-                                R0, _ = cv2.Rodrigues(rvecs_o[0])
+-                                R1, _ = cv2.Rodrigues(rvecs_o[1])
+-                                n0, n1 = R0[:, 2], R1[:, 2]
+-                                dir0 = tvecs_o[0].flatten() / np.linalg.norm(tvecs_o[0])
+-                                dir1 = tvecs_o[1].flatten() / np.linalg.norm(tvecs_o[1])
+-                                best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
+-                            rv_o = rvecs_o[best_idx]
+-                            tv_o = tvecs_o[best_idx]
+-                            ok_origin = True
+
+新增的部份:
+(約新 L819 - L848):
++        label_prefix = "Reproj_L2R" if is_left_to_right else "Reproj_R2L"
++        for mid, pts in corners_src.items():
++            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++            if not ok: continue
++            R_src, _ = cv2.Rodrigues(rvec)
++            P_src = (R_src @ canon.T).T + tvec.T # (4, 3) 3D點在 source 坐標系下
++            
++            pts_reproj, _ = cv2.projectPoints(P_src, rvec_rel, t_vec_rel, KL, np.zeros(5))
++            pts_reproj = pts_reproj.reshape(4, 2)
++            
++            # 計算與 target 視角真實偵測角點的誤差
++            err_str = "N/A"
++            if is_left_to_right:
++                if mid in current_cand['cornersB']:
++                    err = np.linalg.norm(pts_reproj - current_cand['cornersB'][mid], axis=1)
++                    err_str = f"{np.mean(err):.2f} px"
++            else:
++                if mid in current_cand['cornersA']:
++                    err = np.linalg.norm(pts_reproj - current_cand['cornersA'][mid], axis=1)
++                    err_str = f"{np.mean(err):.2f} px"
++            print(f"📊 [{label_prefix}] 標籤 ID: {mid} | 與真實檢測角點的平均重投影誤差: {err_str}")
++            
++            p = np.vstack((pts_reproj, pts_reproj[0]))
++            l, = ax_target.plot(p[:,0], p[:,1], color=color, linestyle='--', lw=1.5, alpha=0.8, zorder=3)
++            ax_target.reproj_art.append(l)
++            
++            for i in range(4):
++                pt, = ax_target.plot(pts_reproj[i,0], pts_reproj[i,1], color=color, marker='+', markersize=5, zorder=3)
++                ax_target.reproj_art.append(pt)
+(約新 L1259 - L1265):
++                    else:
++                        half = ACTUAL_MARKER_SIZE_MM / 2.0
++                        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
++                        ok_origin, rv_o, tv_o = cv2.solvePnP(
++                            canon, cand['cornersA'][min_id], KL, np.zeros(5),
++                            flags=cv2.SOLVEPNP_ITERATIVE
++                        )

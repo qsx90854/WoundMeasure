@@ -1,0 +1,80 @@
+修改時間：2026-05-25T16:06:41
+被修改檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+
+--- 減少的部份 (原第 670-679 行) ---
+670:                 # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
+671:                 if cand.get('cornersA'):
+672:                     min_id = min(cand['cornersA'].keys())
+673:                     half = ACTUAL_MARKER_SIZE_MM / 2.0
+674:                     canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+675:                     ok_origin, rv_o, tv_o = cv2.solvePnP(canon, cand['cornersA'][min_id], KL, np.zeros(5))
+676:                     if ok_origin:
+677:                         R_o, _ = cv2.Rodrigues(rv_o)
+678:                         p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
+679:                         p3d_w_val = p3d_w.flatten()
+
+--- 新增的部份 (現第 670-705 行) ---
+670:                 # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
+671:                 if cand.get('cornersA'):
+672:                     min_id = min(cand['cornersA'].keys())
+673:                     
+674:                     ok_origin = False
+675:                     # 1. 優先使用背景執行緒中已經過 IPPE 且消解二義性的穩定標籤位姿
+676:                     if 'curr_marker_poses' in cand and min_id in cand['curr_marker_poses']:
+677:                         rv_o, tv_o = cand['curr_marker_poses'][min_id]
+678:                         ok_origin = True
+679:                     else:
+680:                         # 2. 備用方案：使用 IPPE 獨立解算並消解二義性
+681:                         half = ACTUAL_MARKER_SIZE_MM / 2.0
+682:                         canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+683:                         ok_generic, rvecs_o, tvecs_o, _ = cv2.solvePnPGeneric(
+684:                             canon, cand['cornersA'][min_id], KL, np.zeros(5),
+685:                             flags=cv2.SOLVEPNP_IPPE
+686:                         )
+687:                         if ok_generic and len(rvecs_o) > 0:
+688:                             best_idx = 0
+689:                             if len(rvecs_o) == 2:
+690:                                 # 選擇最正面面向相機的解
+691:                                 R0, _ = cv2.Rodrigues(rvecs_o[0])
+692:                                 R1, _ = cv2.Rodrigues(rvecs_o[1])
+693:                                 n0, n1 = R0[:, 2], R1[:, 2]
+694:                                 dir0 = tvecs_o[0].flatten() / np.linalg.norm(tvecs_o[0])
+695:                                 dir1 = tvecs_o[1].flatten() / np.linalg.norm(tvecs_o[1])
+696:                                 best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
+697:                             rv_o = rvecs_o[best_idx]
+698:                             tv_o = tvecs_o[best_idx]
+699:                             ok_origin = True
+700:                             
+701:                     if ok_origin:
+702:                         R_o, _ = cv2.Rodrigues(rv_o)
+703:                         p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
+704:                         p3d_w_val = p3d_w.flatten()
+
+=========================================
+
+--- 減少的部份 (原第 1188-1198 行) ---
+1188:                 # 更新 snap_cand
+1189:                 snap_cand = dict(snap_cand)
+1190:                 snap_cand.update({
+1191:                     'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+1192:                     'gray': imgB_gray_,
+1193:                     'kpB': kb, 'desB': db,
+1194:                     'plane_n': n_local, 'plane_c': c_local,
+1195:                     'pose_info': pose_info, 'pose_valid': pose_valid,
+1196:                     'baseline': baseline_val,
+1197:                     'cornersA': cA_dict, 'cornersB': cB_dict
+1198:                 })
+
+--- 新增的部份 (現第 1214-1225 行) ---
+1214:                 # 更新 snap_cand
+1215:                 snap_cand = dict(snap_cand)
+1216:                 snap_cand.update({
+1217:                     'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+1218:                     'gray': imgB_gray_,
+1219:                     'kpB': kb, 'desB': db,
+1220:                     'plane_n': n_local, 'plane_c': c_local,
+1221:                     'pose_info': pose_info, 'pose_valid': pose_valid,
+1222:                     'baseline': baseline_val,
+1223:                     'cornersA': cA_dict, 'cornersB': cB_dict,
+1224:                     'curr_marker_poses': curr_marker_poses if pose_valid else {}
+1225:                 })

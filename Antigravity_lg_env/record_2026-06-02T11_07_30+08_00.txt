@@ -1,0 +1,9 @@
+對話時間: 2026-06-02T11:07:30+08:00
+
+本次對話與回答摘要：
+1. 修正了在執行時發生的 `IndentationError: expected an indented block after 'if' statement on line 634` 語法錯誤。
+2. 根本原因：
+   - 先前在將 `solvePnPGeneric` (IPPE) 移除了對稱選解並直接調用 `solvePnP` (Iterative) 時，誤留了多餘的 `if ok_rel:` 條件判斷，但該判斷底下沒有任何缩排內容，導致 Python 在解析此區塊時拋出 IndentationError。
+3. 修正措施：
+   - 刪除了該行多餘的 `if ok_rel:` 條件語句。由於該函數的結尾處已經統一使用了 `if not ok_rel:` 做是否成功的總檢查與退出，所以移除此行不會對控制流或幾何邏輯產生任何影響，且徹底排除了語法錯誤。
+4. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_07_00+08_00.txt。

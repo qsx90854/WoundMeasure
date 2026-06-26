@@ -1,0 +1,252 @@
+修改時間: 2026-06-11 11:37:30
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+此文件記錄所有修改行號的減少與新增部分，供日後恢復代碼使用。
+
+--------------------------------------------------
+變更 1:
+原行號: L1767 - L1768
+減少部分:
+    locked_L = imgA_bgr.copy()
+    locked_R = imgB_bgr.copy()
+
+新增部分:
+    locked_L = imgA_bgr.copy()
+    locked_R = imgB_bgr.copy()
+    locked_L_clean = locked_L.copy()
+    locked_R_clean = locked_R.copy()
+
+--------------------------------------------------
+變更 2:
+原行號: L2016 - L2042
+減少部分:
+    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    
+    # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
+    btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
+    c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+    c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+    c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+    c11 = Button(ax_c11, "[ ] Opponent-SIFT", **btn_opt_style)
+    
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+                  'use_color_hist': False,
+                  'use_rgb_sift': False,
+                  'use_opponent_sift': False,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+新增部分:
+    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c12 = fig.add_axes([0.29, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+    
+    # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
+    btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
+    c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+    c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+    c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+    c11 = Button(ax_c11, "[ ] Opponent-SIFT", **btn_opt_style)
+    c12 = Button(ax_c12, "[ ] 過濾高光反光", **btn_opt_style)
+    
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+                  'use_color_hist': False,
+                  'use_rgb_sift': False,
+                  'use_opponent_sift': False,
+                  'filter_specular': False,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+--------------------------------------------------
+變更 3:
+原行號: L2072
+減少部分:
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11]:
+
+新增部分:
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12]:
+
+--------------------------------------------------
+變更 4:
+原行號: L2117 - L2118
+減少部分:
+    c10.on_clicked(on_c10_clicked)
+    c11.on_clicked(on_c11_clicked)
+
+新增部分:
+    c10.on_clicked(on_c10_clicked)
+    c11.on_clicked(on_c11_clicked)
+    c12.on_clicked(make_on_opt(c12, 'filter_specular', "過濾高光反光"))
+
+--------------------------------------------------
+變更 5:
+原行號: L2163
+減少部分:
+    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
+
+新增部分:
+    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
+        nonlocal locked_L, locked_R, current_cand
+
+--------------------------------------------------
+變更 6 (左圖搜尋與高光排除):
+原行號: L2205 - L2214
+減少部分:
+                        ui, vi = int(round(u)), int(round(v))
+                        sobel_range = LEFT_PATCH_SEARCH_RADIUS
+                        patch_g = snap_imgA_gray[max(0,vi-sobel_range):min(snap_imgA_gray.shape[0],vi+sobel_range+1),
+                                                 max(0,ui-sobel_range):min(snap_imgA_gray.shape[1],ui+sobel_range+1)]
+                        if patch_g.size > 0:
+                            gx, gy = cv2.Sobel(patch_g, cv2.CV_32F, 1, 0), cv2.Sobel(patch_g, cv2.CV_32F, 0, 1)
+                            mag = cv2.sqrt(gx**2 + gy**2); flat = mag.flatten()
+                            idx_g = np.argsort(flat)[-min(len(flat), LEFT_GRADIENT_POINTS_COUNT):]
+                            kpts_inj = [cv2.KeyPoint(float(max(0,ui-sobel_range)+px), float(max(0,vi-sobel_range)+py), 31.0)
+                                        for py, px in [divmod(idx, patch_g.shape[1]) for idx in idx_g]]
+
+新增部分:
+                        ui, vi = int(round(u)), int(round(v))
+                        sobel_range = LEFT_PATCH_SEARCH_RADIUS
+                        v0_A = max(0, vi - sobel_range)
+                        v1_A = min(snap_imgA_gray.shape[0], vi + sobel_range + 1)
+                        u0_A = max(0, ui - sobel_range)
+                        u1_A = min(snap_imgA_gray.shape[1], ui + sobel_range + 1)
+                        patch_g = snap_imgA_gray[v0_A:v1_A, u0_A:u1_A]
+                        if patch_g.size > 0:
+                            gx, gy = cv2.Sobel(patch_g, cv2.CV_32F, 1, 0), cv2.Sobel(patch_g, cv2.CV_32F, 0, 1)
+                            mag = cv2.sqrt(gx**2 + gy**2)
+                            if snap_view_state.get('filter_specular', False):
+                                thresh = np.percentile(patch_g, 80)
+                                high_light_mask = (patch_g >= thresh)
+                                kernel = np.ones((3, 3), dtype=np.uint8)
+                                excluded_mask = cv2.dilate(high_light_mask.astype(np.uint8), kernel)
+                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
+                                mag[excluded_mask == 1] = -99999.0
+                            flat = mag.flatten()
+                            idx_g = np.argsort(flat)[-min(len(flat), LEFT_GRADIENT_POINTS_COUNT):]
+                            kpts_inj = [cv2.KeyPoint(float(u0_A + px), float(v0_A + py), 31.0)
+                                        for py, px in [divmod(idx, patch_g.shape[1]) for idx in idx_g]]
+
+--------------------------------------------------
+變更 7 (右圖搜尋與高光排除):
+原行號: L2228 - L2238
+減少部分:
+                            rad = RIGHT_PATCH_SEARCH_RADIUS; uei, vei = int(round(u_exp)), int(round(v_exp))
+                            u0, u1, v0, v1 = max(0, uei-rad), min(snap_imgA_gray.shape[1], uei+rad), max(0, vei-rad), min(snap_imgA_gray.shape[0], vei+rad)
+                            patch_r = cand['gray'][v0:v1, u0:u1]
+                            if patch_r.size > 0:
+                                gxr, gyr = cv2.Sobel(patch_r, cv2.CV_32F, 1, 0), cv2.Sobel(patch_r, cv2.CV_32F, 0, 1)
+                                magr = cv2.sqrt(gxr**2 + gyr**2); flatr = magr.flatten()
+                                idx_gr = np.argsort(flatr)[-min(len(flatr), RIGHT_GRADIENT_POINTS_COUNT):]
+                                kpts_r = [cv2.KeyPoint(float(u0+px), float(v0+py), 31.0)
+                                          for py, px in [divmod(idx, patch_r.shape[1]) for idx in idx_gr]]
+
+新增部分:
+                            rad = RIGHT_PATCH_SEARCH_RADIUS; uei, vei = int(round(u_exp)), int(round(v_exp))
+                            v0_B = max(0, vei - rad)
+                            v1_B = min(cand['gray'].shape[0], vei + rad)
+                            u0_B = max(0, uei - rad)
+                            u1_B = min(cand['gray'].shape[1], uei + rad)
+                            patch_r = cand['gray'][v0_B:v1_B, u0_B:u1_B]
+                            if patch_r.size > 0:
+                                gxr, gyr = cv2.Sobel(patch_r, cv2.CV_32F, 1, 0), cv2.Sobel(patch_r, cv2.CV_32F, 0, 1)
+                                magr = cv2.sqrt(gxr**2 + gyr**2)
+                                if snap_view_state.get('filter_specular', False):
+                                    thresh_r = np.percentile(patch_r, 80)
+                                    high_light_mask_r = (patch_r >= thresh_r)
+                                    kernel_r = np.ones((3, 3), dtype=np.uint8)
+                                    excluded_mask_r = cv2.dilate(high_light_mask_r.astype(np.uint8), kernel_r)
+                                    if cand['idx'] == current_cand['idx']:
+                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
+                                    magr[excluded_mask_r == 1] = -99999.0
+                                flatr = magr.flatten()
+                                idx_gr = np.argsort(flatr)[-min(len(flatr), RIGHT_GRADIENT_POINTS_COUNT):]
+                                kpts_r = [cv2.KeyPoint(float(u0_B + px), float(v0_B + py), 31.0)
+                                          for py, px in [divmod(idx, patch_r.shape[1]) for idx in idx_gr]]
+
+--------------------------------------------------
+變更 8:
+原行號: L2520 - L2522
+減少部分:
+    def do_measure(u, v, manual_match_pt=None):
+        """同步計算並立即更新 UI"""
+        nonlocal last_click; last_click = (u, v)
+
+新增部分:
+    def do_measure(u, v, manual_match_pt=None):
+        """同步計算並立即更新 UI"""
+        nonlocal last_click, locked_L, locked_R; last_click = (u, v)
+        locked_L = locked_L_clean.copy()
+        locked_R = locked_R_clean.copy()
+
+--------------------------------------------------
+變更 9:
+原行號: L3070 - L3072
+減少部分:
+    def on_lock_L(event):
+        nonlocal live_L, locked_L, has_set_L, reset_pose_history
+
+新增部分:
+    def on_lock_L(event):
+        nonlocal live_L, locked_L, locked_L_clean, has_set_L, reset_pose_history
+
+--------------------------------------------------
+變更 10:
+原行號: L3075 - L3078
+減少部分:
+                locked_L = frame_buffer[-1].copy()
+                has_set_L = True
+                btn_lock_L.label.set_text("解鎖左圖")
+
+新增部分:
+                locked_L = frame_buffer[-1].copy()
+                locked_L_clean = locked_L.copy()
+                has_set_L = True
+                btn_lock_L.label.set_text("解鎖左圖")
+
+--------------------------------------------------
+變更 11:
+原行號: L3087 - L3089
+減少部分:
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R, reset_pose_history
+
+新增部分:
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, locked_R_clean, has_set_R, reset_pose_history
+
+--------------------------------------------------
+變更 12:
+原行號: L3092 - L3095
+減少部分:
+                locked_R = frame_buffer[-1].copy()
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+
+新增部分:
+                locked_R = frame_buffer[-1].copy()
+                locked_R_clean = locked_R.copy()
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")

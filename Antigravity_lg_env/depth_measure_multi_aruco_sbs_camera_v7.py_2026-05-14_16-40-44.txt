@@ -1,0 +1,35 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_16-40-44
+
+減少的部份:
+行號 1095-1099 附近:
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+
+新增的部份:
+行號 1042 附近 (新增角點映射邏輯):
+                    # 映射 ArUco 角點到對齊後的空間
+                    cA_dict_rect = {}
+                    cB_dict_rect = {}
+                    for mid in shared:
+                        ptsA = cA_dict[mid].astype(np.float32)
+                        ptsB = cB_dict[mid].astype(np.float32)
+                        
+                        ptsA_rect = cv2.undistortPoints(ptsA.reshape(-1, 1, 2), KL, np.zeros(5), R=R1, P=P1)
+                        ptsB_rect = cv2.undistortPoints(ptsB.reshape(-1, 1, 2), KL, np.zeros(5), R=R2, P=P2)
+                        
+                        cA_dict_rect[mid] = ptsA_rect.reshape(4, 2)
+                        cB_dict_rect[mid] = ptsB_rect.reshape(4, 2)
+
+行號 1094 附近 (修改返回的字典內容):
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict_rect if pose_valid else cA_dict,
+                    'cB_dict': cB_dict_rect if pose_valid else cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,

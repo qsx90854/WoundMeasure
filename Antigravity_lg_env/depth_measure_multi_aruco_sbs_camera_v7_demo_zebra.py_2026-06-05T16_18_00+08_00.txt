@@ -1,0 +1,65 @@
+修改時間：2026-06-05T16:18:00+08:00
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+本輪變更主要為「修復 HUD 深度數值顯示因 KeyError: 'depth' 導致鎖死在『自訂平面模式：請在左圖點選至少 3 個點』的 Bug」。
+
+【減少/刪除的部分】
+1. 刪除第 2055-2057 行：
+-        return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+-                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+-                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res}
+
+2. 刪除第 2112-2128 行：
+-        else:
+-            best_res = next((r for r in res_list if r['cand_idx'] == current_cand['idx']), res_list[0])
+-            all_p3d = np.array([r['p3d'] for r in res_list])
+-            all_d = np.array([r['d'] for r in res_list])
+-            
+-            avg_p3d = np.mean(all_p3d, axis=0)
+-            avg_d = np.mean(all_d)
+-            
+-            all_p3d_w = [r['p3d_w'] for r in res_list if r.get('p3d_w') is not None]
+-            avg_p3d_w = np.mean(all_p3d_w, axis=0) if all_p3d_w else None
+-            
+-            res = dict(best_res)
+-            res['p3d'] = avg_p3d
+-            res['d'] = avg_d
+-            res['p3d_w'] = avg_p3d_w
+-            res['multi_res'] = res_list
+
+【新增/保留的部分】
+1. 在第 2055-2065 行新增：
++        depth_z = p3d_val[2] if p3d_val is not None else None
++        reproj_err = None
++        if p3d_val is not None and m_pt is not None:
++            rvec_rel, _ = cv2.Rodrigues(cand['R_rel'])
++            pt_reproj_B, _ = cv2.projectPoints(p3d_val.reshape(1, 1, 3), rvec_rel, cand['t_rel'], KL, np.zeros(5))
++            pt_reproj_B = pt_reproj_B.reshape(2)
++            reproj_err = float(np.linalg.norm(m_pt - pt_reproj_B))
++
++        return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'depth': depth_z, 'error': reproj_err, 'method': method, 'neighbors': neighbors,
++                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
++                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res}
+
+2. 在第 2120-2141 行新增：
++        else:
++            best_res = next((r for r in res_list if r['cand_idx'] == current_cand['idx']), res_list[0])
++            all_p3d = np.array([r['p3d'] for r in res_list])
++            all_d = np.array([r['d'] for r in res_list])
++            
++            avg_p3d = np.mean(all_p3d, axis=0)
++            avg_d = np.mean(all_d)
++            
++            avg_depth = avg_p3d[2]
++            avg_error = np.mean([r['error'] for r in res_list if r.get('error') is not None]) if any(r.get('error') is not None for r in res_list) else 0.0
++            
++            all_p3d_w = [r['p3d_w'] for r in res_list if r.get('p3d_w') is not None]
++            avg_p3d_w = np.mean(all_p3d_w, axis=0) if all_p3d_w else None
++            
++            res = dict(best_res)
++            res['p3d'] = avg_p3d
++            res['d'] = avg_d
++            res['depth'] = avg_depth
++            res['error'] = avg_error
++            res['p3d_w'] = avg_p3d_w
++            res['multi_res'] = res_list

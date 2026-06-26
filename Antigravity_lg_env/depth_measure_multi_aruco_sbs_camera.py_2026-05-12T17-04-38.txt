@@ -1,0 +1,27 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T17:04:38
+
+[減少的部分]
+行 415 附近:
+-            if m_pt is None and (snap_view_state.get('grad_sift') or ...):
+
+行 641 附近 (return dict):
+-        return {'pt': m_pt, 'p3d': p3d_val, 'd': d_val...}
+
+[新增的部分]
+行 415 附近:
++            u_exp, v_exp = None, None
++            if m_pt is None and (snap_view_state.get('grad_sift') or ...):
+
+行 641 附近 (return dict):
++                'pred_pt': (u_exp, v_exp) if u_exp is not None else None
+
+行 705 附近 (update_display):
++        if res.get('pred_pt') is not None:
++            px, py = res['pred_pt']
++            sift_rect_center.set_data([px], [py])
++            sift_rect_center.set_visible(True)
++            # 畫出預估範圍 (固定大小 120x120 作為示意)
++            sift_rect.set_bounds(px - 60, py - 60, 120, 120)
++            sift_rect.set_visible(True)

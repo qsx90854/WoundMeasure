@@ -1,0 +1,33 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_14-57-28
+
+減少的部份:
+行號 498-502:
+                        pts_info = []
+                        for m in good:
+                            pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
+                            if np.linalg.norm(pL - np.array([u, v])) < 50:
+                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+
+新增的部份:
+行號 498-517 (約略範圍):
+                        pts_info = []
+                        deleted_count = 0
+                        F = cand['F']
+                        for m in good:
+                            pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
+                            
+                            # 極線約束檢查 (方案 A)
+                            l_B = F @ np.array([pL[0], pL[1], 1.0])
+                            denom = l_B[0]**2 + l_B[1]**2
+                            if denom > 1e-9:
+                                dist_e = abs(l_B[0]*pR[0] + l_B[1]*pR[1] + l_B[2]) / np.sqrt(denom)
+                                if dist_e > 5.0: # 閾值設為 5 像素
+                                    deleted_count += 1
+                                    continue
+                                    
+                            if np.linalg.norm(pL - np.array([u, v])) < 50:
+                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+                                
+                        if deleted_count > 0:
+                            print(f"   [極線約束] 已刪除 {deleted_count} 個不符合極線約束的匹配點 (閾值: 5.0 像素)")

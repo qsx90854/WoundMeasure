@@ -1,0 +1,140 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T14:40:28+08:00
+
+--- 減少的部份 ---
+行號 43-45:
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+
+# ===================================================
+
+行號 117-118:
+def compute_global_plane(imgA_gray, K_L, marker_size_mm):
+
+行號 403-404:
+    imgA_bgr, scale = process_view(first_frame[:, :w_alg], mtxL_o, distL, newKL_o)
+    imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY); h, w = imgA_gray.shape
+
+行號 506-533:
+    # 勾選框面板 (改成兩行排列，每顆獨立以利排版)
+    # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
+    ax_c1 = fig.add_axes([0.05, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c2 = fig.add_axes([0.17, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c3 = fig.add_axes([0.29, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c4 = fig.add_axes([0.05, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c5 = fig.add_axes([0.17, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    
+    # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
+    btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
+    
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5]:
+
+行號 552:
+    c5.on_clicked(make_on_opt(c5, 'manual', "手動匹配模式"))
+
+行號 806-810:
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+        else:
+            left_img_gray = imgA_gray
+
+行號 1391-1395:
+                imgA_bgr_, _ = process_view(req['raw_imgA'], mtxL_o, distL, newKL_o)
+                snap_imgA_gray = cv2.cvtColor(imgA_bgr_, cv2.COLOR_BGR2GRAY)
+                
+                imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
+                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+
+行號 1583-1584:
+            # 更新 imgA_gray 以便手動點選使用（nonlocal 更新）
+            imgA_gray = cv2.cvtColor(result['imgA_bgr'], cv2.COLOR_BGR2GRAY)
+
+--- 新增的部份 ---
+行號 43-46:
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+ENABLE_CLAHE_DEFAULT  = True                        # 預設是否啟用 CLAHE 直方圖均衡化前處理以改善匹配 (True/False)
+
+# ===================================================
+
+行號 117-124:
+def preprocess_gray(gray_img, enable_clahe=True):
+    if enable_clahe:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return clahe.apply(gray_img)
+    return gray_img
+
+def compute_global_plane(imgA_gray, K_L, marker_size_mm):
+
+行號 409-411:
+    imgA_bgr, scale = process_view(first_frame[:, :w_alg], mtxL_o, distL, newKL_o)
+    imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
+    imgA_gray = preprocess_gray(imgA_gray, ENABLE_CLAHE_DEFAULT)
+    h, w = imgA_gray.shape
+
+行號 513-542:
+    # 勾選框面板 (改成兩行排列，每顆獨立以利排版)
+    # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
+    ax_c1 = fig.add_axes([0.05, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c2 = fig.add_axes([0.17, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c3 = fig.add_axes([0.29, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c4 = fig.add_axes([0.05, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c5 = fig.add_axes([0.17, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c6 = fig.add_axes([0.29, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    
+    # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
+    btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
+    c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
+    
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5, c6]:
+
+行號 561-562:
+    c5.on_clicked(make_on_opt(c5, 'manual', "手動匹配模式"))
+    c6.on_clicked(make_on_opt(c6, 'enable_clahe', "啟用 CLAHE 增強"))
+
+行號 816-821:
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+            left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
+        else:
+            left_img_gray = imgA_gray
+
+行號 1403-1409:
+                imgA_bgr_, _ = process_view(req['raw_imgA'], mtxL_o, distL, newKL_o)
+                snap_imgA_gray = cv2.cvtColor(imgA_bgr_, cv2.COLOR_BGR2GRAY)
+                snap_imgA_gray = preprocess_gray(snap_imgA_gray, snap_vs['enable_clahe'])
+                
+                imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
+                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+                imgB_gray_ = preprocess_gray(imgB_gray_, snap_vs['enable_clahe'])
+
+行號 1599-1601:
+            # 更新 imgA_gray 以便手動點選使用（nonlocal 更新）
+            imgA_gray = cv2.cvtColor(result['imgA_bgr'], cv2.COLOR_BGR2GRAY)
+            imgA_gray = preprocess_gray(imgA_gray, view_state['enable_clahe'])

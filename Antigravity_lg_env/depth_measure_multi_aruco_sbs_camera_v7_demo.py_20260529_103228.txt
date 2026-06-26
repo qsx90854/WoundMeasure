@@ -1,0 +1,58 @@
+檔案修改時間：2026-05-29 10:32:28
+被修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py
+
+--------------------------------------------------
+變更 1: 匯入 TextBox
+--------------------------------------------------
+減少部份 (原第 24 行)：
+- from matplotlib.widgets import RadioButtons, Button, CheckButtons
+
+新增部份 (新第 24 行)：
++ from matplotlib.widgets import RadioButtons, Button, CheckButtons, TextBox
+
+--------------------------------------------------
+變更 2: 調整 subplots_adjust 底部邊界
+--------------------------------------------------
+減少部份 (原第 433 行)：
+-     fig.subplots_adjust(top=0.82, right=0.98, left=0.05)
+
+新增部份 (新第 433 行)：
++     fig.subplots_adjust(top=0.82, right=0.98, left=0.05, bottom=0.15)
+
+--------------------------------------------------
+變更 3: 高度顯示加上 wound_z_offset 偏移量
+--------------------------------------------------
+減少部份 (原第 916 行)：
+-                 w_coords_str = f"({p3d_w[0]:.1f}, {p3d_w[1]:.1f}, {p3d_w[2]:.1f})" if p3d_w is not None else "N/A"
+
+新增部份 (新第 916 行)：
++                 w_coords_str = f"({p3d_w[0]:.1f}, {p3d_w[1]:.1f}, {p3d_w[2] + wound_z_offset:.1f})" if p3d_w is not None else "N/A"
+
+--------------------------------------------------
+變更 4: 宣告 wound_z_offset 與建立 TextBox UI
+--------------------------------------------------
+減少部份：無
+
+新增部份 (新第 1109 行至第 1131 行)：
++     # 建立 TextBox 用於傷口高度補償
++     wound_z_offset = 0.0
++     ax_box = fig.add_axes([0.18, 0.04, 0.08, 0.04])
++     text_box = TextBox(ax_box, "傷口高度補償(mm): ", initial="0.0", color='#1A1A1A', hovercolor='#333333')
++     text_box.label.set_color('#E0E0E0')
++     text_box.label.set_fontsize(8)
++     text_box.text_disp.set_color('#E0E0E0')
++     text_box.text_disp.set_fontsize(8)
++     ax_box.patch.set_linewidth(1.2)
++     ax_box.patch.set_edgecolor('#007ACC')
++     
++     def submit_z_offset(text):
++         nonlocal wound_z_offset
++         try:
++             wound_z_offset = float(text)
++             print(f"✏️ 已設定傷口 Z 軸高度補償量: {wound_z_offset} mm")
++             if last_click:
++                 do_measure(last_click[0], last_click[1])
++         except ValueError:
++             print("⚠️ 請輸入有效的數字")
++             
++     text_box.on_submit(submit_z_offset)

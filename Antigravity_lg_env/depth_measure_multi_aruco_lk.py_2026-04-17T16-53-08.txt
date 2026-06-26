@@ -1,0 +1,7 @@
+時間點: 2026-04-17T16:53:08+08:00
+
+【減少的部份】
+無實際邏輯減少，僅移動 `from matplotlib.widgets import CheckButtons` 之位置。
+
+【新增的部份】
+將 `from matplotlib.widgets import CheckButtons` 提前宣告至 `opt_labels = ["啟用 LK 優化", "手動匹配模式"]` 等 UI 元件建立之前，解決 UnboundLocalError 的報錯問題。

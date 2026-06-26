@@ -1,0 +1,8 @@
+時間點: 2026-06-03T17:02:58+08:00
+
+使用者提問:
+這張png內有兩張左圖
+
+助手回答:
+已重新設計生成提示詞，避免了 AI 生成重複的左圖影像。新生成的示意圖僅包含一個左相機（固定參考 Frame B）以及多個對應的右相機配對（Frame A1, A2, A3），正確地體現了「一左多右」的融合概念。已在 [multi_view_depth_fusion_concept.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/multi_view_depth_fusion_concept.md) 說明文中替換為此最新概念圖。
+檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\conversation_20260603_170258.txt` 中。

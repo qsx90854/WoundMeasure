@@ -1,0 +1,49 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-02T17:37:33+08:00
+
+--------------------------------------------------
+[新增] 行 40
+--------------------------------------------------
++FRAME_RANGE_MODE      = "half_half"                # "fixed" (使用 START/END_FRAME_COUNT) 或 "half_half" (影片前半段與後半段)
+
+--------------------------------------------------
+[修改] 行 263
+--------------------------------------------------
+-def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average"):
++def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed"):
+
+--------------------------------------------------
+[修改] 行 269
+--------------------------------------------------
+-    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames}")
++    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
+
+--------------------------------------------------
+[修改] 行 281 - 288 (原行 283 - 284)
+--------------------------------------------------
+-    N = min(start_n, len(frames))
+-    M = min(end_n, len(frames))
++    mid_idx = len(frames) // 2
++    if range_mode == "half_half":
++        start_range = range(0, mid_idx)
++        end_range = range(mid_idx, len(frames))
++    else:
++        N = min(start_n, len(frames))
++        M = min(end_n, len(frames))
++        start_range = range(N)
++        end_range = range(len(frames) - M, len(frames))
+
+--------------------------------------------------
+[修改] 行 308 (原行 305) 與 行 312 (原行 309)
+--------------------------------------------------
+-    for i in range(N):
++    for i in start_range:
+...
+-    for j in range(len(frames) - M, len(frames)):
++    for j in end_range:
+
+--------------------------------------------------
+[修改] 行 1100
+--------------------------------------------------
+-    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE)
++    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE, FRAME_RANGE_MODE)

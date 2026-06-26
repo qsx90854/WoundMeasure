@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T16-22-40
+
+[減少的部分]
+無
+
+[新增的部分]
+行 474 附近:
++                R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
++                t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
++                print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
++                
+行 481 附近:
++                    p_dist_str = "N/A"
++                    if cand['plane_n'] is not None:
++                        p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
++                        p_dist_str = f"{p_dist:.2f} mm"
++                    print(f"   [計算結果] 深度(Z): {d_val:.2f} mm | 距平面深度: {p_dist_str}")

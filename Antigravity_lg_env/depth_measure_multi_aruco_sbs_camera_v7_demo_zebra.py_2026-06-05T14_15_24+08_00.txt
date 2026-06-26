@@ -1,0 +1,69 @@
+時間點: 2026-06-05T14:15:24+08:00
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+【減少部分】
+1. 原本約第 321 至 486 行（包含舊的單階段全影格偵測、全影格 Joint Pose 計算、舊版 reproj_min 挑選邏輯與額外右圖組評估）：
+```python
+    start_info = []
+    for i in start_range:
+        cd = detect_frame_markers(frames[i])
+        if cd: start_info.append({'idx': i, 'corners': cd})
+        
+    end_info = []
+    for j in end_range:
+        cd = detect_frame_markers(frames[j])
+        if cd: end_info.append({'idx': j, 'corners': cd})
+...
+    # 尋找次優額外右圖組
+    extra_candidates_info = []
+    if best_end is not None and best_start is not None:
+        candidates_scores = []
+...
+    best_reproj_err = None
+    if best_start is not None and best_end is not None:
+        best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
+```
+
+【新增部分】
+1. 約第 318 至 641 行（新增 undistort_corners_dict, detected_cache 快取, get_frame_info, sample_range, save_debug_pair_images, compute_pair_reprojection_error 以及兩階段 [10, 50] 抽樣搜尋配對邏輯，成功提速並降低開銷）：
+```python
+    # 定義輔助工具
+    def undistort_corners_dict(corners_dict):
+        undist = {}
+        for mid, pts in corners_dict.items():
+            pts_reshaped = pts.reshape(-1, 1, 2).astype(np.float32)
+            pts_undist = cv2.undistortPoints(pts_reshaped, mtx_L, dist_L, P=K_L)
+            undist[mid] = pts_undist.reshape(4, 2)
+        return undist
+
+    detected_cache = {}
+    
+    def get_frame_info(idxs):
+        info = []
+        for idx in idxs:
+            if idx not in detected_cache:
+                detected_cache[idx] = detect_frame_markers(frames[idx])
+            cd = detected_cache[idx]
+            if cd:
+                info.append({'idx': idx, 'corners': cd})
+        return info
+
+    def sample_range(r, n):
+        lst = list(r)
+        if len(lst) <= n:
+            return lst
+        idxs = np.linspace(0, len(lst) - 1, n, dtype=int)
+        return [lst[idx] for idx in idxs]
+
+    def save_debug_pair_images(item_s, item_e, suffix):
+...
+    def compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L):
+...
+    # 二階段漸進式匹配評估
+    best_start = None
+    best_end = None
+...
+    for stage_idx, num_samples in enumerate(stages):
+        log_and_print(f"🔄 開始第 {stage_idx + 1} 階段抽樣評估 (抽樣張數: 各段最多 {num_samples} 張)...")
+...
+```

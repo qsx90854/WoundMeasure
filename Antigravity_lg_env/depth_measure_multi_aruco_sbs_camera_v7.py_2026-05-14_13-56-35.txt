@@ -1,0 +1,22 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_13-56-35
+
+減少的部份:
+行號 321:
+    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=9, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+行號 683:
+                    p_dist_str = f" | 距平面: {np.mean(plane_dist_history):.1f}mm"
+行號 687:
+                    p_dist_str = f" | 距平面: {p_dist:.1f}mm"
+行號 693:
+        depth_text.set_text(main_text + "\n" + " | ".join(summary) + (f"\n平均深度: {avg:.1f}mm" if avg else "\n平均深度: N/A"))
+
+新增的部份:
+行號 321:
+    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=18, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+行號 683:
+                    p_dist_str = f"\n距平面: {np.mean(plane_dist_history):.1f}mm"
+行號 687:
+                    p_dist_str = f"\n距平面: {p_dist:.1f}mm"
+行號 693:
+        depth_text.set_text(main_text)

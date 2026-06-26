@@ -1,0 +1,19 @@
+時間: 2026-05-12T15:10:05
+使用者請求:
+請修正這個bug : Traceback (most recent call last):
+...
+IndexError: too many indices for array: array is 1-dimensional, but 2 were indexed
+
+回答訊息:
+這個錯誤發生在 Matplotlib 更新右圖特徵點（黃色點）的顯示時。
+
+原因有兩個：
+1. **空陣列維度問題**：當右圖沒有提取到任何特徵點，或者匹配點為空時，`g_kptsB` 會是一個空列表 `[]`。Matplotlib 的 `set_offsets` 在某些版本中將其轉換為 1D 的空 numpy 陣列，隨後在內部進行 `[:, 0]` 索引時就拋出了 `IndexError`。
+2. **`g_rect` 為 None**：在新的 Stereo Rectification 模式下，因為搜尋範圍在原圖上不再是規則的矩形，我將 `g_rect` 設為了 `None`。這導致後續解構傳參 `*res['g_rect']` 時也會引發錯誤。
+
+我已經在程式碼中加入了嚴格的檢查：
+* 只有在 `g_kptsB` 確實有資料（長度 > 0）時才進行繪製。
+* 加入了 `try...except` 區塊，預防 Matplotlib 內部轉換空陣列時拋出異常。
+* 只有在 `g_rect` 不為 `None` 時，才去繪製與更新紫色的搜尋區域框。
+
+請您重新執行程式試試看。

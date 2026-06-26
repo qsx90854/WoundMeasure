@@ -1,0 +1,54 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-04T08:51:23+08:00
+
+說明：
+新增自標定姿態重投影誤差狀態的視覺化 HUD 面板。分析完影片後，計算最佳配對的重投影誤差，並在 UI 左上角 (Frame A) 新增一個 text 標籤顯示狀態，依據誤差大小動態調整文字描述與顏色（小於0.3: 理想/綠色、0.3~0.5: 正常/黃色、0.5~1.0: 不佳/橘色、大於1.0: 異常/紅色）。
+
+--------------------------------------------------
+[修改] 行 717 - 733 (計算並回傳最佳重投影誤差 min_reproj_err)
+--------------------------------------------------
+     cornersA_undist = undistort_corners_dict(best_start['corners'])
+     cornersB_undist = undistort_corners_dict(best_end['corners'])
++    
++    best_reproj_err = None
++    if best_start is not None and best_end is not None:
++        best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
+         
+     return {
+         ...
+         'valid_poses': valid_poses,
+         'marker_map': marker_map,
+         'extra_candidates': extra_candidates_info,
++        'min_reproj_err': best_reproj_err
+     }
+
+--------------------------------------------------
+[新增] 行 1460 - 1485 (在 Matplotlib UI 建立 pose_status_text 元件)
+--------------------------------------------------
+     fps_text = ax_A.text(0.01, 0.97, "FPS: --", transform=ax_A.transAxes,
+                          color='#00FF00', fontsize=10, fontweight='bold', va='top',
+                          bbox=dict(facecolor='#121212', alpha=0.6, edgecolor='none'), zorder=10)
++                         
++    pose_err = video_data.get('min_reproj_err')
++    if pose_err is None:
++        pose_status_str = "姿態估計狀態: 未知"
++        pose_status_color = "#FFFFFF"
++    elif pose_err < 0.3:
++        pose_status_str = "姿態估計效果理想"
++        pose_status_color = "#00FF00"
++    elif pose_err < 0.5:
++        pose_status_str = "姿態估計效果正常"
++        pose_status_color = "#FFFF00"
++    elif pose_err < 1.0:
++        pose_status_str = "姿態預測效果不佳"
++        pose_status_color = "#FF9900"
++    else:
++        pose_status_str = "姿態預測效果異常"
++        pose_status_color = "#FF0000"
++        
++    if pose_err is not None:
++        pose_status_str += f" ({pose_err:.2f} px)"
++        
++    pose_status_text = ax_A.text(0.01, 0.91, pose_status_str, transform=ax_A.transAxes,
++                                 color=pose_status_color, fontsize=10, fontweight='bold', va='top',
++                                 bbox=dict(facecolor='#121212', alpha=0.7, edgecolor=pose_status_color, lw=1), zorder=10)

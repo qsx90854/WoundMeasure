@@ -1,0 +1,15 @@
+時間: 2026-05-08T15:35:30
+使用者請求:
+(lg_env) D:\Lightglue\lg_env>python depth_measure_multi_aruco_sbs_camera.py
+Traceback (most recent call last):
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera.py", line 790, in <module>
+    main()
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera.py", line 756, in main
+    frame_buffer.pop(0)
+TypeError: deque.pop() takes no arguments (1 given)
+
+回答訊息:
+這個錯誤是因為 `frame_buffer` 是一個 `collections.deque`（雙向佇列），而 Python 的 `deque` 在刪除最左側元素時必須使用 `popleft()`，不支援像 List 那樣傳入索引 `pop(0)`。
+已將 `frame_buffer.pop(0)` 修改為 `frame_buffer.popleft()`。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

@@ -1,0 +1,13 @@
+時間點: 2026-05-05 09:19
+
+對話摘要:
+補回「共面約束優化 (Coplanar Refinement)」邏輯，以提升 RT 估計的精確度。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 修改: get_joint_relative_pose 函式。
+- 新增: 當偵測到 2 個以上的標籤且開啟 ENFORCE_COPLANAR 時，會進行平面擬合並重新投影 3D 參考點。
+- 修改: 最終位姿估計 (solvePnP) 現在會基於精煉後的共面 3D 座標，這能顯著提升 Baseline 與旋轉角的穩定性。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

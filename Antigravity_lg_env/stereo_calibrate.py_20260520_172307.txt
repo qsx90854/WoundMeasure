@@ -1,0 +1,40 @@
+檔案: stereo_calibrate.py
+修改時間: 2026-05-20T17:23:07
+
+--- 減少的部份 ---
+第 82-95 行:
+```python
+    # 2. 計算每張影像的重投影誤差，找出誤差最小的 5 張
+    errors = []
+    for i in range(len(obj_points)):
+        # 左相機誤差
+        imgpts2, _ = cv2.projectPoints(obj_points[i], rvecs_L[i], tvecs_L[i], mtx_L, dist_L)
+        err_L = cv2.norm(img_points_L[i], imgpts2, cv2.NORM_L2) / len(imgpts2)
+        
+        # 右相機誤差
+        imgpts2, _ = cv2.projectPoints(obj_points[i], rvecs_R[i], tvecs_R[i], mtx_R, dist_R)
+        err_R = cv2.norm(img_points_R[i], imgpts2, cv2.NORM_L2) / len(imgpts2)
+        
+        total_err = err_L + err_R
+        errors.append((total_err, i))
+```
+
+--- 新增的部份 ---
+第 82-97 行:
+```python
+    # 2. 計算每張影像的重投影誤差，找出誤差最小的 5 張
+    errors = []
+    for i in range(len(obj_points)):
+        # 左相機誤差 (每個角點的平均歐式距離)
+        imgpts2_L, _ = cv2.projectPoints(obj_points[i], rvecs_L[i], tvecs_L[i], mtx_L, dist_L)
+        pts_diff_L = img_points_L[i].reshape(-1, 2) - imgpts2_L.reshape(-1, 2)
+        err_L = np.mean(np.linalg.norm(pts_diff_L, axis=1))
+        
+        # 右相機誤差 (每個角點的平均歐式距離)
+        imgpts2_R, _ = cv2.projectPoints(obj_points[i], rvecs_R[i], tvecs_R[i], mtx_R, dist_R)
+        pts_diff_R = img_points_R[i].reshape(-1, 2) - imgpts2_R.reshape(-1, 2)
+        err_R = np.mean(np.linalg.norm(pts_diff_R, axis=1))
+        
+        total_err = err_L + err_R
+        errors.append((total_err, i))
+```

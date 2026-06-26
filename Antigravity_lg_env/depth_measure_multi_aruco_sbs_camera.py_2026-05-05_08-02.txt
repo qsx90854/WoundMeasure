@@ -1,0 +1,13 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-05 08:02
+
+[修正的部分]
+- 修正 f-string 語法錯誤 (SyntaxError: unmatched '[')。
+- 原代碼在 f-string 中使用了巢狀的 f-string 且引號重複，導致解析失敗。
+- 將原本的：
+  `summary = [f"F{c['idx']}: {f'{measure_results[c['idx']]['d']:.1f}' if measure_results[c['idx']]['d'] else 'N/A'}" for c in candidates]`
+  改為：
+  `summary = [f"F{c['idx']}: {measure_results[c['idx']]['d']:.1f}" if measure_results[c['idx']]['d'] is not None else f"F{c['idx']}: N/A" for c in candidates]`
+
+[備註]
+同步修正了 do_measure 函式中類似的潛在問題，確保跨版本相容性。

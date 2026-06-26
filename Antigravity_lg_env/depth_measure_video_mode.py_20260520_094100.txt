@@ -1,0 +1,8 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [新增] 205-207 行: 在 `app_state` 加入 `manual_mode` (布林值), `manual_click_idx` (整數 0 或 1), `current_P` 狀態。
+- [修改] 272-277 行: 新增 `b_manual` UI 按鈕，放置於 Auto Calc 旁邊，顏色為洋紅色 (`#FF00FF`)。
+- [新增] 301 行: 於 `update_frame` 內，將每幀計算出的相機矩陣暫存至 `app_state['current_P']`，供手動模式點擊時提取當下幀的姿態。
+- [新增] 385-397 行: 實作 `on_manual_mode` 切換邏輯，當開啟手動模式時強制停用光流 (`is_tracking = False`)，並開啟選點模式。
+- [修改] 454-455 行: 於 `on_click` 開頭加入 Toolbar 防呆機制 `if fig.canvas.manager.toolbar.mode != '': return`。當 matplotlib 的 Zoom 或 Pan 工具啟動時，阻擋所有的特徵點選取，避免操作衝突。
+- [新增] 459-487 行: 重構 `on_click` 的手動模式分支。手動模式下不再限制只能選 2 個點，而是會根據 `manual_click_idx` 不斷交互寫入 `track_history[0]` 或 `track_history[1]`，並儲存當下幀的 `current_P`。同時在左上角 `info_text` 給予使用者提示。

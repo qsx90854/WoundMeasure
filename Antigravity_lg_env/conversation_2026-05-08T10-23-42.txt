@@ -1,0 +1,10 @@
+時間: 2026-05-08T10-23-42
+使用者請求:
+請加上指定相機解析度
+
+回答訊息:
+已在 `depth_measure_multi_aruco_sbs_camera.py` 中加入指定相機解析度的功能。
+1. 在全局設定區新增了 `CAMERA_WIDTH`（預設 2560）與 `CAMERA_HEIGHT`（預設 720）兩個變數。
+2. 在 `main` 函數開啟相機後，使用 `cap.set` 設定上述解析度。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

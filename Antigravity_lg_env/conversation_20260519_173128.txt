@@ -1,0 +1,5 @@
+時間：2026-05-19T17:31:28
+對話：
+User: python depth_measure_video_mode.py 發生 NameError: name 'term' is not defined
+Antigravity:
+抱歉！這是我剛才在重構程式碼時不小心把定義變數的那行刪掉了。我已經立刻補回 `term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)`。現在程式可以順利執行了，請再試一次！

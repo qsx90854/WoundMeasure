@@ -1,0 +1,15 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T16-29-39
+
+[減少的部分]
+無
+
+[新增的部分]
+行 481 附近:
++                    print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+行 484 附近:
++                    print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+行 492 附近:
++                print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
++                print(f"   [計算失敗] 原因: {fail_reason}")

@@ -1,0 +1,6 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-23 11:12:30
+
+【緊急修復】修復 UnboundLocalError: ptsA_lg
+內容：在先前實作 Grad-SIFT 的過程中，不慎刪除了原本 LightGlue 的條件判斷區塊（if FEATURE_MATCHING_MODE == 'LightGlue'），導致變量 `ptsA_lg` 未能正確初始化。現已將該區塊恢復，確保所有特徵匹配模式皆能正常運作。
+原因：程式邏輯整合錯誤導致的執行期異常。

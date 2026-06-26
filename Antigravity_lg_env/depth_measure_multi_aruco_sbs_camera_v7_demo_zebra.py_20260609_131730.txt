@@ -1,0 +1,27 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-09T13:17:30+08:00
+
+說明：
+將次要影格是否停用 ECC 和 Precise 計算的邏輯，重構為可由全域參數 `DISABLE_EXTRA_CANDS_ECC_PRECISE` 控制，方便使用者切換。
+
+--------------------------------------------------
+[新增] 行 69 (全域設定)
+--------------------------------------------------
++DISABLE_EXTRA_CANDS_ECC_PRECISE = True            # 預設是否在多影格融合的次要影格中停用 ECC 與 Precise 精修 (設為 True 可大幅提升點選反應速度)
+
+--------------------------------------------------
+[修改] 行 2338 - 2344 (改以變數判斷)
+--------------------------------------------------
+-            # 性能優化：只有主影格 (current_cand) 需要進行耗時的 ECC 亞像素精修與精細匹配
+-            # 其他次要右圖只進行高速特徵匹配以估計 3D 點用於均攤深度，避免點選時卡頓數秒
+-            cand_vs = dict(snap_vs)
+-            if cand['idx'] != current_cand['idx']:
+-                cand_vs['ecc'] = False
+-                cand_vs['precise'] = False
+-            res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt)
++            # 性能優化：依據變數控制是否在次要影格中停用耗時的 ECC 亞像素精修與精細匹配
++            cand_vs = dict(snap_vs)
++            if DISABLE_EXTRA_CANDS_ECC_PRECISE and cand['idx'] != current_cand['idx']:
++                cand_vs['ecc'] = False
++                cand_vs['precise'] = False
++            res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt)

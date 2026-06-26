@@ -1,0 +1,45 @@
+修改時間: 2026-06-02T11:56:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L1005 - L1007):
+-    scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
+-    scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
+-    scatter_B_reproj = ax_B.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
+(約原 L1568 - L1574):
+-                rvec_rel, _ = cv2.Rodrigues(current_cand['R_rel'])
+-                pt_reproj, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), rvec_rel, current_cand['t_rel'], KL, np.zeros(5))
+-                pt_reproj = pt_reproj.reshape(2)
+-                scatter_B_reproj.set_offsets([[pt_reproj[0], pt_reproj[1]]])
+-            else:
+-                scatter_B_reproj.set_offsets(np.empty((0, 2)))
+(約原 L1602 - L1605):
+-        else:
+-            scatter_B.set_offsets(np.empty((0,2)))
+-            scatter_B_reproj.set_offsets(np.empty((0,2)))
+-            epi_line.set_data([], [])
+
+新增的部份:
+(約新 L1005 - L1007):
++    scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
++    scatter_A_reproj = ax_A.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
++    scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
++    scatter_B_reproj = ax_B.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
+(約新 L1568 - L1578):
++                pt_reproj_B, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), rvec_rel, current_cand['t_rel'], KL, np.zeros(5))
++                pt_reproj_B = pt_reproj_B.reshape(2)
++                scatter_B_reproj.set_offsets([[pt_reproj_B[0], pt_reproj_B[1]]])
++                
++                # 投影回左圖 A (左相機坐標系下 R=I, t=0)
++                pt_reproj_A, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), np.zeros(3), np.zeros(3), KL, np.zeros(5))
++                pt_reproj_A = pt_reproj_A.reshape(2)
++                scatter_A_reproj.set_offsets([[pt_reproj_A[0], pt_reproj_A[1]]])
++            else:
++                scatter_B_reproj.set_offsets(np.empty((0, 2)))
++                scatter_A_reproj.set_offsets(np.empty((0, 2)))
+(約新 L1602 - L1606):
++        else:
++            scatter_B.set_offsets(np.empty((0,2)))
++            scatter_B_reproj.set_offsets(np.empty((0,2)))
++            scatter_A_reproj.set_offsets(np.empty((0,2)))
++            epi_line.set_data([], [])

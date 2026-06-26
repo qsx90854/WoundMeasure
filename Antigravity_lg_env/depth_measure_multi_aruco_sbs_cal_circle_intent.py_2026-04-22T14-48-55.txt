@@ -1,0 +1,11 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_cal_circle_intent.py
+時間：2026-04-22 14:48:55
+
+【功能恢復與合併】恢復縮放、平移、ArUco 選擇等 UI 功能
+內容：
+1. 恢復滑鼠滾輪縮放 (Zoom) 與平移 (Pan) 功能。
+2. 恢復「看特徵連線圖」按鈕。
+3. 恢復 ArUco 標籤選擇 CheckButtons，支援動態擬合平面。
+4. 恢復「手動模式」、「嚴格精細匹配」等選項。
+5. 將上述 UI 功能與新的「橢圓批次量測」與「優先級匹配 (LightGlue > LK)」邏輯完美整合。
+原因：修正前次代碼整理時意外遺失的 UI 互動功能。

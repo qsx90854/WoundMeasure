@@ -1,0 +1,17 @@
+時間點: 2026-05-06 11:48
+
+對話摘要:
+徹底重構梯度 SIFT 連線的管理架構，解決青線殘留和紅色高亮無效兩個問題。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: `redraw_grad_lines(highlight_idx=None)` 函式，集中管理所有梯度SIFT連線的清除與重繪。每次呼叫時，先清除 grad_lines 和 highlighted_grad_line_artist 中的所有 Artist，再從 view_state['grad_data'] 重新建立。
+- 新增: `view_state['grad_data']` 欄位，單純儲存原始座標資料 (ptsA, ptsB)，而不是 Artist 物件。
+- 修改: `on_grad_toggle`：改為呼叫 `redraw_grad_lines()` 而非逐一 set_visible。
+- 修改: `do_measure`：清除邏輯改為先清 grad_data，再呼叫 `redraw_grad_lines(None)`。
+- 修改: `update_display`：儲存 grad_data 後呼叫 `redraw_grad_lines(None)`。
+- 修改: `on_release` 手動模式右圖點擊高亮邏輯：改為呼叫 `redraw_grad_lines(nearest_idx)`。
+- 修復: 補回遺漏的 `on_opt` callback（在先前的重構中被意外刪除）。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

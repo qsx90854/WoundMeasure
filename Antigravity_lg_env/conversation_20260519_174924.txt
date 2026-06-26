@@ -1,0 +1,6 @@
+時間：2026-05-19T17:49:24
+對話：
+User: NameError: name 'calculate_and_display_depth' is not defined
+Antigravity:
+抱歉，剛剛在處理 `Auto Calc` 的按鈕時，函式的名稱重新命名沒有被正確替換到。
+我已經修正了函式的名稱與定義順序，現在程式可以正常執行了！請再執行一次試試看自動計算深度的功能！

@@ -1,0 +1,11 @@
+時間: 2026-05-11T11:36:17
+使用者請求:
+還是沒有跳出畫面, 且log速度沒改善
+
+回答訊息:
+根本原因分析：
+1. 視窗不顯示：plt.pause() 內部有呼叫 show(block=False)，移除後視窗未出現。
+   修正：在 loop 前加 plt.show(block=False) + fig.canvas.draw() 做初始全繪並存 background。
+
+2. 速度未提升：im_A.set_data() → stale 傳遞 → 呼叫已 monkey-patch 的 draw_idle = request_blit_refresh → 每幀 needs_refresh=True → 每幀走完整 draw()。
+   修正：im_A._stale_callback = None / im_B._stale_callback = None，切斷 stale 的向上傳播，set_data 不再觸發 refresh flag。

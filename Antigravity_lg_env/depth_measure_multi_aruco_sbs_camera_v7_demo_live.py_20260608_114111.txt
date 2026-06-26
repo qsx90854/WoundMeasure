@@ -1,0 +1,25 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-08T11:41:11+08:00
+
+說明：
+將 `preprocess_gray` 函數中硬編碼的 CLAHE 參數抽出，宣告為全域設定參數以方便調校：
+- `CLAHE_CLIP_LIMIT` 預設為 `2.0` (對比度限制閾值)
+- `CLAHE_TILE_GRID_SIZE` 預設為 `(8, 8)` (分塊網格大小)
+如此使用者可於程式頂端直接進行對比增強效果的細節微調。
+
+--------------------------------------------------
+[新增] 行 61 - 65 (全域變數定義)
+--------------------------------------------------
+ ENABLE_CLAHE_DEFAULT  = True                       # 預設是否啟用 CLAHE
++CLAHE_CLIP_LIMIT      = 2.0                        # CLAHE 對比度限制閾值 (數值愈大對比愈強，雜訊也愈大)
++CLAHE_TILE_GRID_SIZE  = (8, 8)                     # CLAHE 分塊大小 (8, 8) 代表 8x8 的網格
+
+--------------------------------------------------
+[修改] 行 695 - 700 (在 preprocess_gray 中調用全域變數)
+--------------------------------------------------
+ def preprocess_gray(gray_img, enable_clahe=True):
+ 
+     if enable_clahe:
+-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
++        clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
+         return clahe.apply(gray_img)

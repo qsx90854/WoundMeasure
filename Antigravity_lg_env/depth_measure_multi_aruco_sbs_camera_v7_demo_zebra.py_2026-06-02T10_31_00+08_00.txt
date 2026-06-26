@@ -1,0 +1,105 @@
+修改時間: 2026-06-02T10:31:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L798 - L805):
+-    draw_aruco(ax_A, current_cand['cornersA'])
+-    draw_aruco(ax_B, current_cand['cornersB'])
+-
+-    scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
+-    scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
+-    scatter_grad_inject = ax_A.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+-    scatter_grad_match = ax_B.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+-    scatter_all_sift_B = ax_B.scatter([], [], s=2, c='yellow', alpha=0.3, zorder=3)
+(約原 L1410 - L1445):
+-        if res['pt'] is not None:
+-            scatter_B.set_offsets([[res['pt'][0], res['pt'][1]]])
+-            p0, p1 = epipolar_line(current_cand['F'], (u, v), w); epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+-            p_dist_str = ""
+...
+-                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
+-                             f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n" #w_coords_str
+-                             #相機3D座標: {c_coords_str}\n"
+-                             #f"世界3D座標: {w_coords_str}{p_dist_str}\n"
+-                             #f"外參來源: {pose_info_str}"
+-                             )
+-            else:
+-                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+-        else: scatter_B.set_offsets(np.empty((0,2))); epi_line.set_data([], []); main_text = f"無效點({res.get('fail_reason', '無匹配點')})\n外參來源: {pose_info_str}"
+
+新增的部份:
+(約新 L798 - L845):
++    draw_aruco(ax_A, current_cand['cornersA'])
++    draw_aruco(ax_B, current_cand['cornersB'])
++
++    def draw_reprojected_aruco(ax_target, corners_src, R_rel, t_rel, is_left_to_right=True):
++        if not hasattr(ax_target, 'reproj_art'): ax_target.reproj_art = []
++        for a in ax_target.reproj_art: a.remove()
++        ax_target.reproj_art = []
++        if not corners_src: return
++        
++        half = ACTUAL_MARKER_SIZE_MM / 2.0
++        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
++        
++        if is_left_to_right:
++            rvec_rel, _ = cv2.Rodrigues(R_rel)
++            t_vec_rel = t_rel.reshape(3, 1)
++            color = '#FF00FF' # 洋紅色虛線代表左圖投影至右圖
++        else:
++            R_rel_back = R_rel.T
++            t_vec_rel = -R_rel.T @ t_rel.reshape(3, 1)
++            rvec_rel, _ = cv2.Rodrigues(R_rel_back)
++            color = '#FF8800' # 橘色虛線代表右圖投影至左圖
++            
++        for mid, pts in corners_src.items():
++            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++            if not ok: continue
++            R_src, _ = cv2.Rodrigues(rvec)
++            P_src = (R_src @ canon.T).T + tvec.T
++            
++            pts_reproj, _ = cv2.projectPoints(P_src, rvec_rel, t_vec_rel, KL, np.zeros(5))
++            pts_reproj = pts_reproj.reshape(4, 2)
++            
++            p = np.vstack((pts_reproj, pts_reproj[0]))
++            l, = ax_target.plot(p[:,0], p[:,1], color=color, linestyle='--', lw=1.5, alpha=0.8, zorder=3)
++            ax_target.reproj_art.append(l)
++            
++            for i in range(4):
++                pt, = ax_target.plot(pts_reproj[i,0], pts_reproj[i,1], color=color, marker='+', markersize=5, zorder=3)
++                ax_target.reproj_art.append(pt)
++
++    draw_reprojected_aruco(ax_B, current_cand['cornersA'], R_r, t_r, is_left_to_right=True)
++    draw_reprojected_aruco(ax_A, current_cand['cornersB'], R_r, t_r, is_left_to_right=False)
++
++    scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
++    scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
++    scatter_B_reproj = ax_B.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
++    scatter_grad_inject = ax_A.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
++    scatter_grad_match = ax_B.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
++    scatter_all_sift_B = ax_B.scatter([], [], s=2, c='yellow', alpha=0.3, zorder=3)
+(約新 L1450 - L1495):
++        pose_info_str = current_cand.get('pose_info', '')
++        if res['pt'] is not None:
++            scatter_B.set_offsets([[res['pt'][0], res['pt'][1]]])
++            p0, p1 = epipolar_line(current_cand['F'], (u, v), w); epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
++            
++            if res['p3d'] is not None:
++                rvec_rel, _ = cv2.Rodrigues(current_cand['R_rel'])
++                pt_reproj, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), rvec_rel, current_cand['t_rel'], KL, np.zeros(5))
++                pt_reproj = pt_reproj.reshape(2)
++                scatter_B_reproj.set_offsets([[pt_reproj[0], pt_reproj[1]]])
++            else:
++                scatter_B_reproj.set_offsets(np.empty((0, 2)))
++                
++            p_dist_str = ""
+...
++                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
++                             f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
++                             )
++            else:
++                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
++        else:
++            scatter_B.set_offsets(np.empty((0,2)))
++            scatter_B_reproj.set_offsets(np.empty((0,2)))
++            epi_line.set_data([], [])
++            main_text = f"無效點({res.get('fail_reason', '無匹配點')})\n外參來源: {pose_info_str}"

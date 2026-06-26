@@ -1,0 +1,40 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T10:41:07
+
+[減少的部分]
+行 1122 附近 (calc_worker):
+-                snap_cand = dict(snap_cand)
+-                snap_cand.update({
+-                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+-                    'gray': imgB_gray_,
+-                    'kpB': kb, 'desB': db,
+-                    'plane_n': n_local, 'plane_c': c_local,
+-                    'pose_info': pose_info, 'pose_valid': pose_valid,
+-                    'baseline': baseline_val,
+-                    'cornersA': cA_dict, 'cornersB': cB_dict
+-                })
+-                if pose_valid:
+-                    snap_cand.update({
+-                        'R_rel': R_r, 't_rel': t_r,
+-                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+-                    })
+
+[新增的部分]
+行 1122 附近 (calc_worker):
++                snap_cand = dict(snap_cand)
++                snap_cand.update({
++                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
++                    'gray': imgB_gray_,
++                    'kpB': kb, 'desB': db,
++                    'plane_n': n_local, 'plane_c': c_local,
++                    'pose_info': pose_info, 'pose_valid': pose_valid,
++                    'baseline': baseline_val,
++                    'cornersA': cA_dict, 'cornersB': cB_dict,
++                    'K_R': KR_to_use
++                })
++                if pose_valid:
++                    snap_cand.update({
++                        'R_rel': R_r, 't_rel': t_r,
++                        'F': compute_fundamental_matrix(KL, KR_to_use, R_r, t_r)
++                    })

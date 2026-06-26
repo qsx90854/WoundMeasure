@@ -1,0 +1,57 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-04T11:31:57+08:00
+
+說明：
+1. 將對比增強功能 (CLAHE) 預設設為不啟用，使 UI 啟動時預設呈現原始彩色影像。
+2. 調整測量文字輸出。當自訂擬合平面 (custom_plane_fitted) 啟用時，將不再格式化輸出「傷口高度(相對於標記)」的文字行，避免資訊冗餘。
+3. 預設隱藏右圖。初始化時將 ax_B 設定為 invisible，並將 "隱藏/顯示右圖" 按鈕的預設文字初始化為 "顯示右圖"。同時，將測量結果數值框 (depth_text) 的座標變換系由 ax_B 改為常駐顯示的 ax_A，並將高度 Y 位置由原本底部 0.05 抬高至畫布中間的 0.45 處，並於主渲染迴圈中改由 ax_A 負責重繪。
+
+--------------------------------------------------
+[修改] 行 64 (CLAHE 預設不啟用)
+--------------------------------------------------
+-ENABLE_CLAHE_DEFAULT  = True                       # 預設是否啟用 CLAHE
++ENABLE_CLAHE_DEFAULT  = False                      # 預設是否啟用 CLAHE
+
+--------------------------------------------------
+[修改] 行 1332 - 1336 (右圖預設隱藏)
+--------------------------------------------------
+     for ax in axes:
+         ax.axis("off")
+         ax.set_facecolor('#1E1E1E')
++    ax_B.set_visible(False)
+
+--------------------------------------------------
+[修改] 行 1455 (數值框抬高並改由 ax_A 負責)
+--------------------------------------------------
+-    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
++    depth_text = ax_A.text(0.02, 0.45, "", transform=ax_A.transAxes, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+
+--------------------------------------------------
+[修改] 行 2145 - 2151 (啟用自訂平面時隱藏高度行)
+--------------------------------------------------
+                 if custom_plane_fitted and p3d_c is not None and custom_plane_n is not None and custom_plane_c is not None:
+                     proj_dist_signed = np.dot(custom_plane_n, p3d_c - custom_plane_c)
+                     status = "高於" if proj_dist_signed > 0 else "低於"
+                     custom_plane_str = f"\n距自訂平面: {status} {abs(proj_dist_signed):.1f}mm"
+                 
+-                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
+-                             f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
+-                             )
++                if custom_plane_fitted:
++                    main_text = f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
++                else:
++                    main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm\n"
++                                 f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
++                                 )
+
+--------------------------------------------------
+[修改] 行 2313 (隱藏右圖按鈕初始文字設定)
+--------------------------------------------------
+-    btn_hide_R = Button(ax_btn_hide_R, "隱藏右圖", **btn_style)
++    btn_hide_R = Button(ax_btn_hide_R, "顯示右圖", **btn_style)
+
+--------------------------------------------------
+[修改] 行 2642 - 2646 (在主刷新迴圈重繪 depth_text 的 axes 對象)
+--------------------------------------------------
+-        ax_B.draw_artist(depth_text)
++        ax_A.draw_artist(depth_text)

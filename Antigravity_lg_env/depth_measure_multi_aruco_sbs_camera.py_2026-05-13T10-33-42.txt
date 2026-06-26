@@ -1,0 +1,143 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T10:33:42
+
+[減少的部分]
+行 234 附近 (初始化):
+-    newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtxL_o, distL, (w_alg, h_raw), 1, (w_alg, h_raw))
+-    
+-    # 假設右圖參照左圖參數 (同一相機)
+-    newKR_o = newKL_o.copy()
+-    
+-    # 預先建立去畸變查找表（只算一次，之後每幀用 remap 即可）
+
+行 955 附近 (建立按鈕):
+-    auto_calc_active = False
+
+行 983 附近 (on_show_disp):
+-            print("⚠️ 尚未產生視差圖！")
+-    
+-    def on_lock_L(event):
+
+行 1031 附近 (on_calc):
+-        imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+-        imgA_gray_snap   = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+-        current_R_snap   = frame_buffer[-1].copy() if live_R and len(frame_buffer) > 0 else locked_R
+-        imgB_bgr_snap, _ = process_view(current_R_snap, mtxL_o, distL, newKL_o)
+-        img_R_undist = None
+-        if live_frame_right_box[0] is not None:
+-            img_R_undist_bgr, _ = process_view(live_frame_right_box[0], mtxL_o, distL, newKL_o)
+-            img_R_undist = cv2.cvtColor(img_R_undist_bgr, cv2.COLOR_BGR2GRAY)
+-
+-        req = {
+-            'imgA_bgr':   imgA_bgr_snap,
+-            'imgA_gray':  imgA_gray_snap,
+-            'imgB_bgr':   imgB_bgr_snap,
+-            'cand':       dict(current_cand),
+-            'view_state': dict(view_state),
+-            'u': active_u, 'v': active_v,
+-            'is_single_calc': not auto_calc_active,
+-            'img_right_inst': img_R_undist
+-        }
+
+行 1095 附近 (calc_worker):
+-                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+-
+-                res_pose = get_joint_relative_pose(snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM)
+
+行 1140 附近 (繫結事件):
+-    btn_auto_calc.on_clicked(on_auto_calc)
+-    btn_show_disp.on_clicked(on_show_disp)
+
+[新增的部分]
+行 234 附近 (初始化):
++    newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtxL_o, distL, (w_alg, h_raw), 1, (w_alg, h_raw))
++    
++    # 假設右圖參照左圖參數 (同一相機)
++    newKR_o = newKL_o.copy()
++    
++    # 讀取獨立的右相機內參 (供空間 SIFT 模式使用)
++    import json
++    with open(PARAMS_JSON_PATH, 'r') as f:
++        _json_data = json.load(f)
++    mtxR_orig = np.array(_json_data['intrinsic_R']['matrix'], dtype=np.float32)
++    distR_orig = np.array(_json_data['intrinsic_R']['distortion'], dtype=np.float32)
++    newKR_orig, _ = cv2.getOptimalNewCameraMatrix(mtxR_orig, distR_orig, (w_alg, h_raw), 1, (w_alg, h_raw))
++    _map1_R, _map2_R = cv2.initUndistortRectifyMap(mtxR_orig, distR_orig, None, newKR_orig, (w_alg, h_raw), cv2.CV_16SC2)
++    
++    # 預先建立去畸變查找表（只算一次，之後每幀用 remap 即可）
+
+行 955 附近 (建立按鈕):
++    auto_calc_active = False
++    spatial_mode_active = False
++    
++    ax_btn_spatial_mode = fig.add_axes([0.35, 0.86, 0.15, 0.04])
++    btn_spatial_mode = Button(ax_btn_spatial_mode, "模式: 時序 SIFT")
+
+行 983 附近 (on_show_disp):
++            print("⚠️ 尚未產生視差圖！")
++    
++    def on_spatial_mode(event):
++        nonlocal spatial_mode_active
++        spatial_mode_active = not spatial_mode_active
++        if spatial_mode_active:
++            btn_spatial_mode.label.set_text("模式: 空間 SIFT")
++            print("🌐 切換至「空間 SIFT」模式 (使用當前左右圖)")
++        else:
++            btn_spatial_mode.label.set_text("模式: 時序 SIFT")
++            print("⏱️ 切換至「時序 SIFT」模式 (使用鎖定左圖+當前左圖)")
++        request_blit_refresh()
++    
++    def on_lock_L(event):
+
+行 1031 附近 (on_calc):
++        if spatial_mode_active:
++            # 空間 SIFT 模式：使用當前影格的左半邊與右半邊
++            current_L = frame_buffer[-1].copy() if len(frame_buffer) > 0 else locked_L
++            current_R = live_frame_right_box[0].copy() if live_frame_right_box[0] is not None else current_L
++            
++            # 左圖去畸變 (使用左相機內參)
++            imgA_bgr_snap, _ = process_view(current_L, mtxL_o, distL, newKL_o)
++            imgA_gray_snap = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
++            
++            # 右圖去畸變 (使用獨立右相機內參)
++            img_R_undist_bgr = cv2.remap(current_R, _map1_R, _map2_R, cv2.INTER_LINEAR)
++            img_R_undist = cv2.cvtColor(img_R_undist_bgr, cv2.COLOR_BGR2GRAY)
++            
++            # 將右圖作為 imgB_bgr_snap 供 SIFT 流程使用
++            imgB_bgr_snap = img_R_undist_bgr
++        else:
++            # 預設時序 SIFT 模式
++            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
++            imgA_gray_snap   = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
++            current_R_snap   = frame_buffer[-1].copy() if live_R and len(frame_buffer) > 0 else locked_R
++            imgB_bgr_snap, _ = process_view(current_R_snap, mtxL_o, distL, newKL_o)
++            
++            img_R_undist = None
++            if live_frame_right_box[0] is not None:
++                img_R_undist_bgr, _ = process_view(live_frame_right_box[0], mtxL_o, distL, newKL_o)
++                img_R_undist = cv2.cvtColor(img_R_undist_bgr, cv2.COLOR_BGR2GRAY)
++
++        req = {
++            'imgA_bgr':   imgA_bgr_snap,
++            'imgA_gray':  imgA_gray_snap,
++            'imgB_bgr':   imgB_bgr_snap,
++            'cand':       dict(current_cand),
++            'view_state': dict(view_state),
++            'u': active_u, 'v': active_v,
++            'is_single_calc': not auto_calc_active,
++            'img_right_inst': img_R_undist,
++            'use_spatial_intrinsics': spatial_mode_active
++        }
+
+行 1095 附近 (calc_worker):
++                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
++                
++                use_spatial = req.get('use_spatial_intrinsics', False)
++                KR_to_use = newKR_orig if use_spatial else KL
++                res_pose = get_joint_relative_pose(snap_imgA_gray, imgB_gray_, KL, KR_to_use, ACTUAL_MARKER_SIZE_MM)
+
+行 1140 附近 (繫結事件):
++    btn_auto_calc.on_clicked(on_auto_calc)
++    btn_show_disp.on_clicked(on_show_disp)
++    btn_spatial_mode.on_clicked(on_spatial_mode)

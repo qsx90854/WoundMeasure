@@ -1,0 +1,7 @@
+時間點: 2026-05-27T22:15:35+08:00
+
+使用者問題:
+目前depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py是不是有在 呼叫cornerSubPix時動態範圍的功能?
+
+Antigravity 回覆:
+經查閱代碼第 157 至 161 行，目前呼叫 cv2.cornerSubPix 時，其搜尋視窗大小 (winSize) 固守為 (3, 3)，並無根據 ArUco 標籤大小或其他影像特徵動態調整該範圍的功能。

@@ -1,0 +1,8 @@
+時間點: 2026-06-03T16:53:01+08:00
+
+使用者提問:
+請就這個功能畫一張png說明, 用圖片說明概念, 非流程圖
+
+助手回答:
+已利用圖像生成工具為您生成了「多右圖多視角融合三角測量（Multi-view Stereo Depth Fusion）」的幾何原理示意圖，並建立了 [multi_view_depth_fusion_concept.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/multi_view_depth_fusion_concept.md) 說明文檔，在文中嵌入此概念圖。
+概念圖生動地展示了：固定左圖（Frame B）點擊點，與多個不同 Baseline 的右圖（Frame A1, A2, A3）各自進行極線檢索相交，投影出多個候選 3D 空間點，最終透過算術平均融合出極具幾何穩健性的單一平均 3D 點與深度的過程。

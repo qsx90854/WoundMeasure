@@ -1,0 +1,13 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T16-54-59
+
+[減少的部分]
+行 75:     pts4d = cv2.triangulatePoints(P0, P1, np.array([[pt_A[0]], [pt_A[1]]]), np.array([[pt_B[0]], [pt_B[1]]]))
+
+[新增的部分]
+行 75 附近:
++    # 強制使用 float32，避免 OpenCV 在處理整數點陣列時發生隱性記憶體錯亂 (計算出極端錯誤的負深度)
++    ptsA_f32 = np.array([[pt_A[0]], [pt_A[1]]], dtype=np.float32)
++    ptsB_f32 = np.array([[pt_B[0]], [pt_B[1]]], dtype=np.float32)
++    pts4d = cv2.triangulatePoints(P0, P1, ptsA_f32, ptsB_f32)

@@ -1,0 +1,7 @@
+對話時間: 2026-06-02T11:49:30+08:00
+
+本次對話與回答摘要：
+1. 拿掉了雙目相機虛擬基準線的上限限制 (原先限制在 35 mm 以內)。
+2. 將 reproj_min 模式與 best_pair 模式中的 Baseline 範圍檢查均修改為僅有下限約束：if bsl >= MIN_BASELINE_MM。
+3. 這樣一來，只要基準線滿足全局變數 MIN_BASELINE_MM (預設 8.0 mm) 的最低噪聲抵抗要求，將不再限制基準線的上限，有利於取得更大的三角化角度以提升精度。
+4. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_48_00+08_00.txt。

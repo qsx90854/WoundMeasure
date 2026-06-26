@@ -1,0 +1,17 @@
+時間點: 2026-05-27T22:06:45+08:00
+
+使用者問題:
+請開始修改
+
+Antigravity 回覆:
+程式碼修改已全部完成。
+修改項目包含：
+- 初始化 locked_R_display_index 與 btn_switch_R 按鈕
+- 實作切換回調 on_switch_R 與綁定，並處理解鎖/重置時的狀態還原
+- 優化 calc_worker 與主執行緒，收集並保存多幀獨立 RT、baseline 位姿及 cand 字典
+- 重構 update_display 讓影像、極線、角點、HUD 外參來源文字 (R、T、Bsl) 在切換時完全同步
+
+本次修改並無自己嘗試執行 (遵循規則 3)。
+在 d:\Lightglue\lg_env\Antigravity_lg_env 底下建立了 depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py_20260527_220519.txt 還原紀錄檔案。
+已完成 task.md 與 walkthrough.md 檔案的更新。
+已提示使用者此為 Python 專案，修改已完成，請使用者自行嘗試執行。

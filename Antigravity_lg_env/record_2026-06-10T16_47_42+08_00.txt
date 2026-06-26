@@ -1,0 +1,13 @@
+時間點: 2026-06-10T16:47:42+08:00
+
+使用者問題:
+3. 多通道與色彩直方圖約束 (Color Histograms & Color Descriptors) =>請新增這個功能, 用一個按鈕控制是否啟用這個功能, 如果關閉時就照舊
+
+Antigravity的回答與修改方案:
+1. 新增 check_color_histogram_similarity 輔助函數，用以計算左圖（從全域 locked_L 變數取得）與右圖候選影格（從 cand['rgb'] 取得）之間的 HSV 顏色直方圖巴氏距離。若距離大於 0.45 門檻值，則視為顏色不匹配而予以濾除。
+
+2. 在 UI 介面上新增 [ ] 色彩直方圖約束 的按鈕元件（按鈕 c9，位置對齊 [X] 強制極線對齊 及 [X] 啟用 CLAHE 增強 下方的行），預設為關閉狀態（照舊）。並統一為所有按鈕（c1~c9）套用白色邊框與 8pt 字型樣式。
+
+3. 於 run_improved_matching_flow 改良匹配流程與 compute_measure 預設 Grad-SIFT 特徵點對過濾邏輯中，新增 use_color_hist 的控制開關。若按鈕啟用，則會調用 check_color_histogram_similarity 函數過濾顏色相異的特徵點對。
+
+4. 已將檔案變更內容（包括行號、刪除與新增的行）記錄於 depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_2026-06-10T16_47_42+08_00.txt 中。

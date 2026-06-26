@@ -1,0 +1,7 @@
+時間點: 2026-04-20T11:00:20+08:00
+
+【減少的部份】
+1. `pt2d_B_homo = K @ pt3d_B` (無 .flatten() 保護)
+
+【新增的部份】
+1. 修改為 `pt2d_B_homo = (K @ pt3d_B).flatten()`，確保後續擷取 `pt2d_B_homo[0]` 時取得的是標準的 0D scalar，以避免 Python `float()` 轉換拋出 `TypeError: only 0-dimensional arrays can be converted to Python scalars` 錯誤。

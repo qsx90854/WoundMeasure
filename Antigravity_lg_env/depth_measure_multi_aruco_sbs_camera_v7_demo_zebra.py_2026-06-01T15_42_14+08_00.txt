@@ -1,0 +1,67 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T15:42:14+08:00
+
+--- 減少的部份 ---
+行號 125:
+[空行]
+
+--- 新增的部份 ---
+行號 126-441:
+def average_rotations_svd(R_list):
+    """
+    對多個 3x3 旋轉矩陣進行 SVD 平均，獲得在 SO(3) 群上的正交最小二乘平均矩陣
+    """
+    if len(R_list) == 0:
+        return np.eye(3, dtype=np.float32)
+    M = np.zeros((3, 3), dtype=np.float64)
+    for R in R_list:
+        M += R.astype(np.float64)
+    U, _, Vt = np.linalg.svd(M)
+    R_avg = U @ Vt
+    if np.linalg.det(R_avg) < 0:
+        U[:, -1] *= -1
+        R_avg = U @ Vt
+    return R_avg.astype(np.float32)
+
+def multi_view_triangulation(P_matrices, points_2d):
+    """
+    N-View 三角化 (DLT 算法)
+    P_matrices: list of 3x4 projection matrices [R | t] (單位：米)
+    points_2d: list of (x, y) normalized coordinates
+    """
+    if len(P_matrices) < 2:
+        return None
+    A = []
+    for P, (x, y) in zip(P_matrices, points_2d):
+        A.append(x * P[2, :] - P[0, :])
+        A.append(y * P[2, :] - P[1, :])
+    A = np.array(A)
+    _, _, Vt = np.linalg.svd(A)
+    X = Vt[-1]
+    if abs(X[3]) < 1e-6:
+        return None
+    return (X[:3] / X[3])
+
+def apply_dedrift_correction(trajectory, p_end_match):
+    """
+    對光流軌跡進行閉環去漂移修正
+    trajectory: list of (f_idx, [u, v])
+    p_end_match: [u, v] 終點影格的最優匹配點真值
+    """
+    if len(trajectory) < 2:
+        return trajectory
+    p_end_flow = np.array(trajectory[-1][1])
+    total_drift = np.array(p_end_match) - p_end_flow
+    corrected_trajectory = []
+    n = len(trajectory) - 1
+    for i, (f_idx, pt) in enumerate(trajectory):
+        factor = i / n
+        corr_pt = np.array(pt) + factor * total_drift
+        corrected_trajectory.append((f_idx, corr_pt.tolist()))
+    return corrected_trajectory
+
+def track_feature_and_verify(all_frames, start_f_idx, end_f_idx, p_start, valid_poses, K_L, dist_L):
+    ... (完整 track_feature_and_verify 程式碼)
+
+def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, marker_size_mm, select_mode="average"):
+    ... (完整 analyze_video_frames 程式碼)

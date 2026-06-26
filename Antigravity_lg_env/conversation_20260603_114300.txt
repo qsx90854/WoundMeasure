@@ -1,0 +1,12 @@
+時間點: 2026-06-03T11:43:00+08:00
+
+使用者提問:
+5~35這個變數有設在程式一開始讓我控制嗎
+
+助手回答:
+原本此區間是直接寫死在計算背景執行緒中。已為您將其抽離，並於 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 開頭的「全局設定區」新增了以下兩個參數：
+1. `MIN_POSE_BASELINE_MM = 5.0` (原始位姿估計 Baseline 下限，預設 5.0 mm)
+2. `MAX_POSE_BASELINE_MM = 35.0` (原始位姿估計 Baseline 上限，預設 35.0 mm)
+現在您可以在程式頂部自由控制這兩個極限值。背景執行緒的檢測代碼和日誌輸出也已同步更新為調用這兩個全局變數。
+3. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py_20260603_114300.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

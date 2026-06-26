@@ -1,0 +1,6 @@
+NewMeasure_v2.py 修改紀錄：
+[新增] 行數: 約 20
+新增常數 `CAMERA_FPS = 60`。
+
+[新增] 行數: 約 254
+在 `cap = cv2.VideoCapture(CAMERA_INDEX)` 設定區塊中，加入 `cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)` 強制要求相機以 60 FPS 輸出影像。

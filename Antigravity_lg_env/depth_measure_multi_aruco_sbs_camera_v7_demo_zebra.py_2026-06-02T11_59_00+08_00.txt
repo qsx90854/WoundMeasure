@@ -1,0 +1,23 @@
+修改時間: 2026-06-02T11:59:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L2076 - L2083):
+-        ax_A.draw_artist(im_A)
+-        if custom_plane_poly_artist is not None:
+-            ax_A.draw_artist(custom_plane_poly_artist)
+-        ax_A.draw_artist(scatter_A)
+-        ax_A.draw_artist(scatter_grad_inject)
+-        for a in custom_plane_artists:
+-            ax_A.draw_artist(a)
+
+新增的部份:
+(約新 L2076 - L2084):
++        ax_A.draw_artist(im_A)
++        if custom_plane_poly_artist is not None:
++            ax_A.draw_artist(custom_plane_poly_artist)
++        ax_A.draw_artist(scatter_A)
++        ax_A.draw_artist(scatter_A_reproj)
++        ax_A.draw_artist(scatter_grad_inject)
++        for a in custom_plane_artists:
++            ax_A.draw_artist(a)

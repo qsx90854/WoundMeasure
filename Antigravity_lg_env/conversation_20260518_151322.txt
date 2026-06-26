@@ -1,0 +1,8 @@
+時間：2026-05-18T15:13:22
+對話：
+User: depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py現在拍到的Aruco pattern不會是共平面的了 這樣還能算嗎
+Antigravity:
+回答了非共面標籤的可行性：
+1. 理論上完全可以，甚至非共面 (例如貼在階梯、箱子不同面上) 的 3D 結構對於 `cv2.solvePnP` 來說，能夠提供更強的深度約束，算出來的 RT 會比全都在同一個平面上還要精準與穩定。
+2. 點出程式碼目前的盲點：第 40 行的 `ENFORCE_COPLANAR = True` 會強制把所有角點投影到同一個虛擬平面上來降噪。如果現在標籤已經非共面，這個功能會產生嚴重的幾何扭曲。
+3. 建議使用者將 `ENFORCE_COPLANAR` 設為 `False` 即可完美支援非共面場景。

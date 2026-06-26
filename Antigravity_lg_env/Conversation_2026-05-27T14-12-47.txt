@@ -1,0 +1,22 @@
+對話記錄與回答訊息
+時間點: 2026-05-27 14:12:47 (Local Time)
+
+=========================================
+對話背景與問題分析：
+=========================================
+使用者要求比對 `depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_backup.py` 和 `depth_measure_multi_aruco_sbs_camera_v7_demo_20260521_backup.py` 兩者之間的代碼差異，且強調不要修改任何程式碼。
+
+比對與分析：
+1. 全局配置：20260527_backup 新增了 `ENABLE_POSE_SMOOTHING` (EMA 濾波開關) 與 `POSE_SMOOTHING_ALPHA` (平滑係數) 參數。
+2. get_joint_relative_pose 函數簽名與內部解算：
+   - 20260527_backup 加入了 `prev_marker_poses` 與 `prev_rel_pose` 歷史資訊參數。
+   - 使用 IPPE (solvePnPGeneric) 取代常規 solvePnP 來解算左相機標籤姿態，並引入歷史姿態點積（時序連續性約束）與視線夾角消解二義性。
+   - 針對單標籤與多標籤分開處理：單標籤用 IPPE 求解並選擇旋轉 Trace 最大者；多標籤支援 useExtrinsicGuess 歷史初值估計。
+3. UI 繪製：20260527_backup 在 `draw_aruco` 中，將標籤的 4 個角點以紅色、綠色、藍色、黃色圓點標示，用以除錯角點排序。
+4. 深度計算中的世界座標計算：
+   - 20260527_backup 優先使用背景已計算且經過 IPPE 消解二義性的穩定標籤姿態，而非像舊版僅使用獨立的 solvePnP 進行重新解算。
+5. UI HUD 數值顯示文字：
+   - 文字調整：「深度值(距離)」改為「相機與傷口距離(點選處)」；「世界3D座標」改為「傷口高度(相對於標記)」。
+6. 背景執行緒 (calc_worker)：
+   - 20260527_backup 實作了 `reset_pose_history` 機制（在連續計算切換、左/右圖解鎖時觸發），用以清空 EMA 與 PnP 歷史初值。
+   - 實作了對平移 t_rel 與旋轉 rv_rel 的時序 EMA 平滑濾波，覆蓋原始計算值後再行三角測量。

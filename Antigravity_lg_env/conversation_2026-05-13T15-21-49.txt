@@ -1,0 +1,16 @@
+時間: 2026-05-13T15:21:49
+使用者請求:
+(lg_env) D:\Lightglue\lg_env>python depth_measure_multi_aruco_sbs_camera_v7.py
+Traceback (most recent call last):
+  ...
+AttributeError: 'CheckButtons' object has no attribute 'rectangles'
+
+回答訊息:
+這個錯誤是由於您電腦上的 Matplotlib 版本與我預設的版本不同所致。在較舊或某些特定版本的 Matplotlib 中，`CheckButtons` 並沒有將內部的方框直接暴露為 `rectangles` 屬性。
+
+### 修正內容：
+為了解決這個版本相容性問題，我改用了更底層、更強健的寫法：
+- 不再透過 `c.rectangles` 訪問，而是直接對這 5 個獨立的座標軸（`ax_c1` 到 `ax_c5`）調用 `ax.patches` 與 `ax.lines`。
+- 這樣一來，不論 Matplotlib 版本為何，只要是在該區域內畫出的方形（框線）與線條（打勾），都會被強制改為白色，完全繞開了屬性不存在的錯誤。
+
+依據規則 3，我並未嘗試自己執行 Python 檔案。我也已經在專案底下的 `Antigravity_{專案資料夾名稱}`（`Antigravity_lg_env`）資料夾中建立了本次對話紀錄與程式碼差異備份檔。請您再次執行測試看看！

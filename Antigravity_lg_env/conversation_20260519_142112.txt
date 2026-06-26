@@ -1,0 +1,8 @@
+時間：2026-05-19T14:21:12
+對話：
+User: 目前我的參數放在calibration_result_c2.json內  目前讀取不了, 請幫忙確認文件內容
+Antigravity:
+我看過您的檔案內容了！原因出在 `calibration_result_c2.json` 這個檔案是「立體相機 (Stereo Camera)」的標定結果格式，裡面有 `"intrinsic_L"` 和 `"intrinsic_R"` 的巢狀結構，這跟原本單相機標定檔直接寫 `"K"` 和 `"dist"` 的格式不同。
+
+我已經幫您修改了 `depth_measure_video_mode.py` 裡的讀取邏輯：
+現在程式會自動判斷，如果檔案裡面有 `"intrinsic_L"`，就會自動往下抓取它的 `"matrix"` 與 `"distortion"` 來做為內參矩陣與畸變係數！這樣就可以正常讀取您的 `calibration_result_c2.json` 了，請重新執行看看！

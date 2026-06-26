@@ -1,0 +1,7 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-06 10:26
+
+[新增的部分]
+- 在 UI 介面 (`ax_B`) 中新增了 `sift_rect` (一個洋紅色虛線框 `Rectangle`)。
+- 在 `do_measure` 每次點擊測量時預設隱藏該方框。
+- 若程式進入 `grad_sift` 流程（即透過 `cand['R_rel']` 與 `cand['t_rel']` 加上平面約束，推算出右圖預期中心點 `u_exp, v_exp`），並在其周圍擴展 `rad=20` (共 40x40 像素) 時，同步將該方框的位置及大小更新為這 40x40 範圍，並將其設定為可見。

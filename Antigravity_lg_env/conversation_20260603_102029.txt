@@ -1,0 +1,15 @@
+時間點: 2026-06-03T10:20:29+08:00
+
+使用者提問:
+好 請開始修改
+
+助手回答:
+已為您完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py` 的程式修改：
+1. 複製並覆蓋 `zebra.py` 的全套自標定、錄影、最優對挑選、雙向 Baseline 遍歷以及日誌寫入流程至 `live.py`。
+2. 修改 `live.py` 的參數配置：
+   - 影片與錄影儲存資料夾：`test_video_Live`
+   - 相機解析度：`2560` x `1024`
+   - 標定參數檔：`calibration_result.json`
+3. 將特徵點匹配搜索範圍與 ECC 精修補償偏置公式改回原 Live 版的適配大小（`sobel_range=12`, `rad=20`, RANSAC=3.0, ECC=31/61, 修正公式偏置為 `30.5`/`15.5`）。
+4. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_live.py_20260603_102029.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

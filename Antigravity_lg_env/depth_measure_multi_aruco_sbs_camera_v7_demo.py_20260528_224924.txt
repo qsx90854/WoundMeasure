@@ -1,0 +1,81 @@
+檔案修改時間：2026-05-28 22:49:24
+被修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py
+
+--------------------------------------------------
+變更 1: get_joint_relative_pose 函數定義與邏輯
+--------------------------------------------------
+減少部份 (原第 146 行至第 282 行)：
+- def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None):
+-     # 內部單獨求解各標籤 IPPE 姿態並使用 DLT 三角化重建 3D 點進行相對外參求解的舊邏輯
+-     # 傳回：R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel
+
+新增部份 (新第 127 行至第 330 行)：
++ def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None, marker_map=None, map_calibrated=False):
++     # 1. 左右圖平均像素位移 (視差) 低於 2.0px 時退化保護判定
++     # 2. 當 len(shared) >= 2 且 map_calibrated 為 False 時觸發在線自標定，以最小 ID 標籤為世界原點
++     #    計算其餘標籤的剛體變換 (R_m2ref, T_m2ref) 存入 marker_map
++     # 3. 標定完成後，使用全域地圖點與當前角點進行多點聯合 PnP (solvePnP)，求解世界系到左右相機的位姿
++     # 4. 藉此解算高精度的相對外參 R_rel, t_rel 與 baseline_val
++     # 5. 若地圖未標定或失敗，降級至原單標籤/多標籤獨立 IPPE 姿態解算路徑
++     # 傳回：(R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel), map_calibrated
+
+--------------------------------------------------
+變更 2: calc_worker 中全域標籤地圖的變數維護與呼叫
+--------------------------------------------------
+減少部份 (原第 1360 行至第 1400 行)：
+-         # 時序狀態變數，用來進行 Extrinsic Guess 初值約束與 EMA 平滑濾波
+-         history_marker_poses = {}   # marker_id -> (rv, tv)
+-         history_rel_pose = None     # (rv_rel, tv_rel)
+-         ...
+-                 res_pose = get_joint_relative_pose(
+-                     snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
+-                     prev_marker_poses=history_marker_poses,
+-                     prev_rel_pose=history_rel_pose
+-                 )
+
+新增部份 (新第 1364 行至第 1408 行)：
++         # 全域標籤地圖自標定狀態 (用作聯合剛體優化)
++         global_marker_map = {}      # marker_id -> (R_to_origin, T_to_origin)
++         marker_map_calibrated = False
++         ...
++                 # 檢查是否需要重置時序歷史
++                 if reset_pose_history:
++                     ...
++                     global_marker_map.clear()
++                     marker_map_calibrated = False
++                     reset_pose_history = False
++                     print("🧹 時序位姿、平滑濾波歷史與標籤地圖已重置")
++         ...
++                 res_pose, marker_map_calibrated = get_joint_relative_pose(
++                     snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
++                     prev_marker_poses=history_marker_poses,
++                     prev_rel_pose=history_rel_pose,
++                     marker_map=global_marker_map,
++                     map_calibrated=marker_map_calibrated
++                 )
+
+--------------------------------------------------
+變更 3: calc_worker 內平面擬合數據源優化
+--------------------------------------------------
+減少部份 (原第 1455 行至第 1464 行)：
+-                     # 🌟 透過立體三角測量計算所有共享角點的 3D 座標，用來擬合平面
+-                     all_pts3d = []
+-                     for mid in shared:
+-                         ptsA = cA_dict[mid] # 4x2
+-                         ptsB = cB_dict[mid] # 4x2
+-                         for i in range(4):
+-                             p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
+-                             all_pts3d.append(p3d)
+
+新增部份 (新第 1455 行至第 1470 行)：
++                     # 🌟 透過立體三角測量或聯合剛體 3D 點計算共享角點的 3D 座標，用來擬合平面
++                     if marker_map_calibrated and objA is not None and len(objA) >= 3:
++                         all_pts3d = objA
++                     else:
++                         all_pts3d = []
++                         for mid in shared:
++                             ptsA = cA_dict[mid] # 4x2
++                             ptsB = cB_dict[mid] # 4x2
++                             for i in range(4):
++                                 p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
++                                 all_pts3d.append(p3d)

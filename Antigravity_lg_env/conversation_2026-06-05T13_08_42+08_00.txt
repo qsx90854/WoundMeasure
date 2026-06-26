@@ -1,0 +1,9 @@
+時間點: 2026-06-05T13:08:42+08:00
+使用者需求: 好 請實作 (指實作上一輪討論的重投影誤差改良方案)
+
+回答與處理步驟:
+1. 建立對話紀錄。
+2. 修改 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py`：
+   - 將重投影誤差評估 `compute_pair_reprojection_error` 與偵錯繪圖 `save_debug_pair_images` 從「單標籤 PnP 傳播法」改為「Map-based 世界地圖 3D 點投影法」。
+   - 將 `detect_frame_markers` 內的亞像素角點定位搜尋半徑 `winSize` 從 `(3, 3)` 提升為 `(5, 5)`。
+3. 建立修改紀錄 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-05T13_08_42+08_00.txt`，詳細紀錄修改的前後差異與行數。

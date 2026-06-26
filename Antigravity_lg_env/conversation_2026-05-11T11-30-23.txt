@@ -1,0 +1,12 @@
+時間: 2026-05-11T11:30:23
+使用者請求:
+現在怎麼程式執行之後畫面沒有顯示, 而且根據log只快一點點
+
+回答訊息:
+根因分析：
+1. 畫面空白：animated=True 的 artists 在 fig.canvas.draw() 時被跳過，refresh 路徑沒有補上 draw_artist+blit，導致畫面只有靜態背景沒有影像。
+2. 速度未明顯提升：im_A.set_data() 內部會設 stale flag → 排進 draw_idle → flush_events() 還是觸發完整重繪。
+
+修正：
+1. Monkey-patch fig.canvas.draw_idle = request_blit_refresh，阻止 stale 傳播觸發 Tk 完整重繪。
+2. 把 draw_artist(im_A/im_B/fps_text) + blit 移到 if/else 外面，兩路徑都執行，確保每幀影像必定出現。

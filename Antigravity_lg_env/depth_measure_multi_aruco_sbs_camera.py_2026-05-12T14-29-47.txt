@@ -1,0 +1,15 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T14:29:47
+
+[減少的部分]
+行 421:
+-                    corners = cv2.goodFeaturesToTrack(patch_g, maxCorners=100, qualityLevel=0.01, minDistance=3, useHarrisDetector=True)
+行 438:
+-                        corners_r = cv2.goodFeaturesToTrack(patch_r, maxCorners=400, qualityLevel=0.01, minDistance=2, useHarrisDetector=True)
+
+[新增的部分]
+行 421:
++                    corners = cv2.goodFeaturesToTrack(patch_g, maxCorners=100, qualityLevel=0.001, minDistance=2, useHarrisDetector=False)
+行 438:
++                        corners_r = cv2.goodFeaturesToTrack(patch_r, maxCorners=400, qualityLevel=0.001, minDistance=2, useHarrisDetector=False)

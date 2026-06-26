@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:59:17
+
+[減少的部分]
+行 447 附近 (原 ArUco 匹配只更新右圖點):
+-                    m_pt, method = cand['cornersB'][mid][np.argmin(d)], "ArUco"
+
+行 531 與 552 附近 (原強制極線對齊):
+-        if m_pt is not None and snap_view_state['enforce_epi']:
+
+[新增的部分]
+行 447 附近 (同步校正左圖座標為精確角點):
++                    best_idx = np.argmin(d)
++                    u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
++                    m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
+
+行 531 與 552 附近 (若為 ArUco 匹配則跳過極線對齊):
++        if m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco":

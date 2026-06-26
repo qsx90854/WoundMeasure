@@ -1,0 +1,13 @@
+時間: 2026-05-08T09-36-21
+使用者請求:
+目前depth_measure_multi_aruco_sbs_camera.py主要流程是用lightlgue找特徵點, 然後左鍵點擊下去的時候會參考周圍的lightglue特徵匹配點來做內插, 請把這個主流程移除, 全面採用"梯度sift匹配"勾選時的流程
+
+回答訊息:
+已按照您的需求，將 `depth_measure_multi_aruco_sbs_camera.py` 中的 LightGlue 相關流程移除。具體修改如下：
+1. 移除了 LightGlue 的初始化、模型載入與執行程式碼（`run_lightglue`）。
+2. 移除了 OpenCV SIFT 全局匹配作為備案的程式碼（`run_opencv_matching`）。
+3. 移除了點擊時參考 LightGlue 匹配點進行內插的邏輯。
+4. 移除了在右圖繪製 LightGlue 鄰近點連線的視覺化程式碼。
+5. 保留並全面採用「梯度 SIFT 匹配」流程作為主要的特徵匹配手段。
+
+所有修改已記錄在 `Antigravity_lg_env` 資料夾中。

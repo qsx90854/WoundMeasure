@@ -1,0 +1,24 @@
+時間：2026-05-20T10:36:27
+對話：
+User: 目前 depth_measure_multi_aruco_sbs_camera_v7_demo.py有限制視差太小的話不給算, 如果我想把限制放寬一點該改哪邊
+Antigravity:
+如果您想要放寬視差（或基準線）太小的限制，您可以在 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中修改以下地方：
+
+定位到 **第 441 行** 的 `compute_measure` 函式中：
+```python
+        if cand.get('baseline', 0.0) < 15.0:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': '視差不足(<15mm)', 'u': u, 'v': v}
+```
+
+### 修改建議
+您可以將 `15.0` 改小。例如如果您想放寬到只要有 `5.0 mm` 以上的基準線就允許計算，可以改寫成：
+```python
+        if cand.get('baseline', 0.0) < 5.0:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': '視差不足(<5mm)', 'u': u, 'v': v}
+```
+
+如果您希望由我來替您進行這項修改，請告訴我，我會立刻幫您修改該檔案！

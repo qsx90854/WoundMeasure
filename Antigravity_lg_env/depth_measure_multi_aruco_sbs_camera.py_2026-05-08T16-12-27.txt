@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T16-12-27
+
+[減少的部分]
+無
+
+[新增的部分]
+行 459 附近:
++            
++            # 確保 ECC 之後仍然完美貼合極線，否則 triangulation 會因為 Y 軸誤差導致射線嚴重歪斜算錯深度
++            if m_pt is not None and view_state['enforce_epi']:
++                l_B = cand['F'] @ np.array([u, v, 1.0])
++                denom = l_B[0]**2 + l_B[1]**2
++                if denom > 1e-9:
++                    dist_to_epi = (l_B[0]*m_pt[0] + l_B[1]*m_pt[1] + l_B[2]) / np.sqrt(denom)
++                    m_pt = np.array([m_pt[0] - l_B[0]/np.sqrt(denom)*dist_to_epi, m_pt[1] - l_B[1]/np.sqrt(denom)*dist_to_epi])

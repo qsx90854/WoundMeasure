@@ -1,0 +1,5 @@
+時間：2026-05-18T14:43:46
+對話：
+User: 請把fps設成60
+Antigravity:
+已經幫您在 `NewMeasure_v2.py` 的相機設定區塊加入了 `cap.set(cv2.CAP_PROP_FPS, 60)`，並在檔案頂部的參數區塊新增了 `CAMERA_FPS = 60` 方便未來修改。

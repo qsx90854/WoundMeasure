@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T14-50-54
+
+[減少的部分]
+行 417-497:
+-                ui, vi = int(round(u)), int(round(v))
+-                patch_g = snap_imgA_gray[max(0,vi-11):min(snap_imgA_gray.shape[0],vi+12),
+-                                         max(0,ui-11):min(snap_imgA_gray.shape[1],ui+12)]
+... 移除舊有基於未校正平面的 2D 提取、匹配與 Homography / Affine 極線對齊邏輯
+
+[新增的部分]
+行 417-495:
++                h_raw, w_alg = snap_imgA_gray.shape
++                # 1. 執行 Stereo Rectify
++                R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(KL, np.zeros(5), cand['K_R'], np.zeros(5), (w_alg, h_raw), cand['R_rel'], cand['t_rel'], flags=cv2.CALIB_ZERO_DISPARITY, alpha=-1)
+... 實作完整的立體校正 (remap)、1D 水平提取 (patch_r 的 y 軸約束)、Ratio Test，
+... 直接使用 cv2.triangulatePoints(P1, P2) 解算 3D，
+... 並實作 unrectify_pts 將校正平面點位投射回原始未校正影像供 UI 使用。

@@ -1,0 +1,7 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [新增] 36-120 行: 新增 `get_multi_aruco_pose` 函式。這實作了微型 SLAM 的動態地圖建構功能。當虛擬板為空時，程式會以畫面上找到的最小 ID 標籤為原點，將其他所有可見的標籤全部以 3D 空間相對位置 (World Coordinate) 註冊進 `virtual_board` 中。當虛擬板有資料時，程式會將所有已註冊標籤的 2D 角點與 3D 座標收集起來，一次性丟給 `cv2.solvePnP` 解算。這等同於把追蹤面積從單一標籤放大了數十倍，完全解決了單一標籤的 Lever-arm Effect (力臂效應) 與 Baseline 破萬問題。
+- [修改] 135 行: 在 `app_state` 中加入 `virtual_board: {}`，並移除無用的 `last_rvec` 與 `last_tvec`。
+- [修改] 211, 380 行: 在主迴圈與點擊事件中改為呼叫 `get_multi_aruco_pose`。
+- [修改] 297 行: 在 `on_clear` (Clear Tracks 按鈕) 被點擊時，一併清空 `virtual_board`，讓下次追蹤可以重新建圖。
+- [新增] 405-412 行: 在 UI 繪圖 `redraw_ui` 增加 Virtual Board 視覺化功能。如果該標籤已經被成功註冊進 Virtual Board 參與穩固追蹤，外框與 ID 會畫成綠色 (`(0, 255, 0)`)；若是未註冊或剛出現的標籤，則畫成黃色 (`(0, 255, 255)`)。同時在畫面左上角顯示目前被收錄進 Virtual Board 的總標籤數量。

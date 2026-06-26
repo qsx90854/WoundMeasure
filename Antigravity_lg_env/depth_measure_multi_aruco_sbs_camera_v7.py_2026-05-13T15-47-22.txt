@@ -1,0 +1,29 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:47:22
+
+[減少的部分]
+行 951 附近 (呼叫單邊 PnP 平面擬合):
+-                n_local, c_local = compute_global_plane(snap_imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+-                if n_local is None:
+-                    n_local, c_local = global_plane_n, global_plane_c
+
+[新增的部分]
+行 947 附近 (改用立體三角測量擬合平面):
++                    # 🌟 透過立體三角測量計算所有共享角點的 3D 座標，用來擬合平面
++                    all_pts3d = []
++                    for mid in shared:
++                        ptsA = cA_dict[mid] # 4x2
++                        ptsB = cB_dict[mid] # 4x2
++                        for i in range(4):
++                            p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
++                            all_pts3d.append(p3d)
++                            
++                    if len(all_pts3d) >= 3:
++                        all_pts3d = np.array(all_pts3d)
++                        c_local = np.mean(all_pts3d, axis=0)
++                        _, _, Vt = np.linalg.svd(all_pts3d - c_local)
++                        n_local = Vt[-1]
++                        if np.dot(n_local, c_local) > 0: n_local = -n_local
++                    else:
++                        n_local, c_local = global_plane_n, global_plane_c

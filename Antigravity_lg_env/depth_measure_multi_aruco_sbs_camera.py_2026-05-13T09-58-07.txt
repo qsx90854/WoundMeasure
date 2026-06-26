@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T09:58:07
+
+[減少的部分]
+行 970 附近 (on_calc):
+-            'img_right_inst': live_frame_right_box[0]
+
+[新增的部分]
+行 970 附近 (on_calc):
++        img_R_undist = None
++        if live_frame_right_box[0] is not None:
++            img_R_undist_bgr, _ = process_view(live_frame_right_box[0], mtxL_o, distL, newKL_o)
++            img_R_undist = cv2.cvtColor(img_R_undist_bgr, cv2.COLOR_BGR2GRAY)
++
++        req = {
++            ...
++            'img_right_inst': img_R_undist
++        }

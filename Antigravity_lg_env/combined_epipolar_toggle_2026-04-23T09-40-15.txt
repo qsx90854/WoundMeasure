@@ -1,0 +1,18 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-23 09:40:15
+
+【功能新增】強制極線對齊 (Mandatory Epipolar Alignment) 開關
+內容：
+1. 在 UI 選項中新增「強制極線對齊」勾選框（取代了原先較少使用的 ECC 選項）。
+2. 在 `do_measure` 邏輯中加入判斷：
+    - 若勾選：會將匹配點投影回極線上以消除垂直垂直誤差，這對於標定精準的系統能提高穩定性。
+    - 若取消勾選：直接使用 LightGlue 內插或 LK 搜尋得到的原始座標計算深度。
+原因：回應使用者需求，提供更大的彈性來決定是否信任極線約束。
+
+---
+
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_cal_circle_intent.py
+時間：2026-04-23 09:40:15
+
+【功能同步】新增極線對齊開關
+內容：同步上述功能的 UI 與邏輯至橢圓量測版本，確保雙版本功能一致。

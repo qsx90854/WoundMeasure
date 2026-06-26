@@ -1,0 +1,26 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:08:07
+
+[減少的部分]
+行 755-783 附近 (舊按鈕樣式):
+-    btn_style = dict(color='#2C2C2C', hovercolor='#3D3D3D')
+-    for b in [...]:
+-        b.label.set_color('white')
+-        b.label.set_fontsize(8)
+
+[新增的部分]
+行 755 附近 (新質感知按鈕設計):
++    # 使用更深邃的背景色 (#1A1A1A)，與主背景形成對比
++    btn_style = dict(color='#1A1A1A', hovercolor='#333333')
++    
++    # 統一設定字型、文字顏色與邊框寬度
++    for b in [...]:
++        b.label.set_color('#E0E0E0') # 質感白
++        b.label.set_fontsize(8)
++        b.ax.patch.set_linewidth(1.2) # 細緻邊框
++        
++    # 依功能進行邊框分色（專業軟體常見的語意化色彩）
++    # 1. 影像鎖定/控制類：使用專業藍 (#007ACC)
++    # 2. 深度計算類：使用警告橘/強調橘 (#D83B01)
++    # 3. 功能切換類：使用中性的深灰 (#555555)

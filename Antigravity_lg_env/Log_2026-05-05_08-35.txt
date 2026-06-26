@@ -1,0 +1,13 @@
+時間點: 2026-05-05 08:35
+
+對話摘要:
+修正 LightGlue/OpenCV 匹配的插值觸發邏輯。新增了動態半徑擴展功能，確保當點擊處附近沒有特徵點時，能自動擴大搜尋範圍進行插值。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 修改: 在 do_measure 函式中，針對 LightGlue/OpenCV 匹配結果加入 while 迴圈。
+- 新增: 若初始半徑 (7px) 找不到點，會以 5px 為步進擴大至 30px。
+- 新增: 終端機 Log 輸出，顯示最終在哪個半徑內找到了多少個參考點。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

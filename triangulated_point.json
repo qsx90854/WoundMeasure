@@ -1,0 +1,340 @@
+{
+  "coordinate_system": "Auto-built ArUco board coordinates, meters. The reference marker plane is z=0.",
+  "marker_size_m": 0.00825,
+  "reference_marker_id": 5,
+  "used_marker_ids_first_frame": [
+    2,
+    5
+  ],
+  "used_marker_ids_last_frame": [
+    2,
+    5
+  ],
+  "point_3d_marker_m": [
+    0.02473409201640114,
+    0.03949291127902355,
+    -0.004029106097515506
+  ],
+  "signed_distance_to_marker_plane_m": -0.004029106097515506,
+  "absolute_distance_to_marker_plane_m": 0.004029106097515506,
+  "projection_on_marker_plane_m": [
+    0.02473409201640114,
+    0.03949291127902355,
+    0.0
+  ],
+  "inlier_frame_count": 12,
+  "inlier_frames": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    11,
+    12,
+    13,
+    42
+  ],
+  "marker_mean_reprojection_error_px": 1.2820534795973042,
+  "marker_max_reprojection_error_px": 2.5719365244214294,
+  "mean_reprojection_error_px": 0.4148107311431026,
+  "max_reprojection_error_px": 0.9957908635664792,
+  "front_to_back_rt": {
+    "from_frame": 1,
+    "to_frame": 42,
+    "rvec_rad": [
+      0.12691324756269726,
+      0.005146509119463455,
+      -0.04598816468874908
+    ],
+    "tvec_m": [
+      -0.0014055634143578521,
+      0.03902766140911803,
+      0.0007253314319567439
+    ],
+    "baseline_m": 0.03905969878612386
+  },
+  "selected_measurement_point": {
+    "selection_frame_idx": 42,
+    "clicked_uv_px": [
+      1108.0,
+      587.0
+    ],
+    "tracked_start_uv_px": [
+      1105.0,
+      586.0
+    ],
+    "point_3d_marker_m": [
+      0.02473409201640114,
+      0.03949291127902355,
+      -0.004029106097515506
+    ]
+  },
+  "observations": [
+    {
+      "frame_idx": 1,
+      "uv_px": [
+        1124.6195068359375,
+        328.9481201171875
+      ],
+      "reprojection_error_px": 0.4130631982464115,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.4484246418746407
+    },
+    {
+      "frame_idx": 2,
+      "uv_px": [
+        1124.6185302734375,
+        328.94940185546875
+      ],
+      "reprojection_error_px": 0.413383801595463,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.4484246418746407
+    },
+    {
+      "frame_idx": 3,
+      "uv_px": [
+        1125.0653076171875,
+        326.7738952636719
+      ],
+      "reprojection_error_px": 0.2856828969061409,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 0.9679809582113038
+    },
+    {
+      "frame_idx": 4,
+      "uv_px": [
+        1122.7205810546875,
+        324.8599853515625
+      ],
+      "reprojection_error_px": 0.37725926365892126,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.263376264519123
+    },
+    {
+      "frame_idx": 5,
+      "uv_px": [
+        1121.92919921875,
+        319.5647277832031
+      ],
+      "reprojection_error_px": 0.4485462939985532,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.1191368312803034
+    },
+    {
+      "frame_idx": 7,
+      "uv_px": [
+        1120.414794921875,
+        316.951171875
+      ],
+      "reprojection_error_px": 0.3804949080095434,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.311058770239534
+    },
+    {
+      "frame_idx": 8,
+      "uv_px": [
+        1121.5030517578125,
+        315.77325439453125
+      ],
+      "reprojection_error_px": 0.23254413148996486,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.302078152023599
+    },
+    {
+      "frame_idx": 9,
+      "uv_px": [
+        1121.5133056640625,
+        315.7913818359375
+      ],
+      "reprojection_error_px": 0.2119390866511133,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.302078152023599
+    },
+    {
+      "frame_idx": 11,
+      "uv_px": [
+        1120.80517578125,
+        314.575439453125
+      ],
+      "reprojection_error_px": 0.207373992074152,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.457015704544092
+    },
+    {
+      "frame_idx": 12,
+      "uv_px": [
+        1122.214599609375,
+        314.8950500488281
+      ],
+      "reprojection_error_px": 0.5058245161869503,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.4111169408106523
+    },
+    {
+      "frame_idx": 13,
+      "uv_px": [
+        1122.214599609375,
+        314.89501953125
+      ],
+      "reprojection_error_px": 0.5058258213335378,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 1.4111169408106523
+    },
+    {
+      "frame_idx": 42,
+      "uv_px": [
+        1105.0,
+        586.0
+      ],
+      "reprojection_error_px": 0.9957908635664792,
+      "marker_ids": [
+        2,
+        5
+      ],
+      "marker_mean_reprojection_error_px": 0.9428337569555112
+    }
+  ],
+  "skin_plane": {
+    "definition": "Plane fitted from 3 user-selected skin reference points.",
+    "normal_oriented_toward_reference_marker_positive_z": [
+      0.09832239633821704,
+      0.061938213900582795,
+      0.9932252332865473
+    ],
+    "d": -0.0003004434990686077,
+    "selected_reference_points": [
+      {
+        "index": 1,
+        "selection_frame_idx": 42,
+        "clicked_uv_px": [
+          1050.0,
+          359.0
+        ],
+        "tracked_start_uv_px": [
+          1049.0,
+          362.0
+        ],
+        "point_3d_marker_m": [
+          0.042740449943140094,
+          0.04441881624026421,
+          -0.006698502895863568
+        ]
+      },
+      {
+        "index": 2,
+        "selection_frame_idx": 42,
+        "clicked_uv_px": [
+          689.0,
+          734.0
+        ],
+        "tracked_start_uv_px": [
+          686.0,
+          737.0
+        ],
+        "point_3d_marker_m": [
+          0.010674640384827336,
+          0.07338646999020781,
+          -0.005330653533397526
+        ]
+      },
+      {
+        "index": 3,
+        "selection_frame_idx": 42,
+        "clicked_uv_px": [
+          1526.0,
+          852.0
+        ],
+        "tracked_start_uv_px": [
+          1529.0,
+          855.0
+        ],
+        "point_3d_marker_m": [
+          0.004667739904939125,
+          0.005736302763094032,
+          -0.0005173008137413285
+        ]
+      }
+    ],
+    "reference_points_3d_marker_m": [
+      [
+        0.042740449943140094,
+        0.04441881624026421,
+        -0.006698502895863568
+      ],
+      [
+        0.010674640384827336,
+        0.07338646999020781,
+        -0.005330653533397526
+      ],
+      [
+        0.004667739904939125,
+        0.005736302763094032,
+        -0.0005173008137413285
+      ]
+    ],
+    "reference_point_mean_reprojection_errors_px": [
+      0.5088555360653271,
+      0.4869721295283527,
+      0.2999103436349148
+    ],
+    "reference_point_max_reprojection_errors_px": [
+      0.8205888653888007,
+      1.178575382834652,
+      0.5366838095340287
+    ],
+    "plane_z_at_measurement_xy_m": -0.004608815737034513,
+    "plane_z_at_measurement_xy_mm": -4.608815737034513,
+    "measurement_z_minus_plane_z_at_xy_mm": 0.5797096395190067,
+    "measurement_xy_distance_to_reference_points_mm": [
+      18.667979683752876,
+      36.693889168212436,
+      39.27043551526901
+    ],
+    "measurement_barycentric_xy_weights": [
+      0.4927826681934944,
+      0.21721359923452357,
+      0.290003732571982
+    ],
+    "measurement_inside_reference_triangle_xy": true
+  },
+  "signed_distance_to_skin_plane_m": 0.0005757822419497259,
+  "signed_distance_to_skin_plane_mm": 0.5757822419497259,
+  "absolute_distance_to_skin_plane_m": 0.0005757822419497259,
+  "absolute_distance_to_skin_plane_mm": 0.5757822419497259
+}

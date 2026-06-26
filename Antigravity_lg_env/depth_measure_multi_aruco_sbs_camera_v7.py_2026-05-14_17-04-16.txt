@@ -1,0 +1,23 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-04-16
+
+減少的部份:
+行號 1039-1044 附近:
+                    map1_L, map2_L = cv2.initUndistortRectifyMap(KL, np.zeros(5), R1, P1, (w, h), cv2.CV_16SC2)
+                    map1_R, map2_R = cv2.initUndistortRectifyMap(KL, np.zeros(5), R2, P2, (w, h), cv2.CV_16SC2)
+                    
+                    # 對齊影像
+                    snap_imgA_gray = cv2.remap(snap_imgA_gray, map1_L, map2_L, cv2.INTER_LINEAR)
+                    imgB_gray_ = cv2.remap(imgB_gray_, map1_R, map2_R, cv2.INTER_LINEAR)
+
+新增的部份:
+行號 1040-1051 附近 (修正 Map 參數與 Remap 對象):
+                    # 修正：傳入真實的畸變參數 distL，讓 Map 同時包含去畸變與對齊
+                    map1_L, map2_L = cv2.initUndistortRectifyMap(KL, distL, R1, P1, (w, h), cv2.CV_16SC2)
+                    map1_R, map2_R = cv2.initUndistortRectifyMap(KL, distL, R2, P2, (w, h), cv2.CV_16SC2)
+                    
+                    # 對齊影像 (改為對原始 RAW 影像進行 Remap，因為 Map 已包含去畸變)
+                    imgA_gray_raw = cv2.cvtColor(req['raw_imgA'], cv2.COLOR_BGR2GRAY)
+                    imgB_gray_raw = cv2.cvtColor(req['raw_imgB'], cv2.COLOR_BGR2GRAY)
+                    snap_imgA_gray = cv2.remap(imgA_gray_raw, map1_L, map2_L, cv2.INTER_LINEAR)
+                    imgB_gray_ = cv2.remap(imgB_gray_raw, map1_R, map2_R, cv2.INTER_LINEAR)

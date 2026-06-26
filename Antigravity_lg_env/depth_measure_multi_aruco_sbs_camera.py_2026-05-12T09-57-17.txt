@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T09-57-17
+
+[減少的部分]
+行 559:
+-        res = compute_measure(u, v, current_cand, imgA_gray, snap_vs, manual_match_pt)
+
+[新增的部分]
+行 557-563:
++        if not live_L and locked_L is not None:
++            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
++            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
++        else:
++            left_img_gray = imgA_gray
++            
++        res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)

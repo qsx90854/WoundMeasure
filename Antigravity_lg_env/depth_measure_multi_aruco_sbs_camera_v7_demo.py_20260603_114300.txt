@@ -1,0 +1,19 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-06-03T11:43:00+08:00
+
+說明：
+將原本寫死在 `calc_worker` 中用來做位姿估計合理性判斷的 `5.0` 與 `35.0` mm 的 Baseline 上下限，抽離至程式一開始的「全局設定區」，以便使用者能夠靈活控制與調整。
+
+--------------------------------------------------
+[新增] 行 40 - 41 (全局設定區)
+--------------------------------------------------
++MIN_POSE_BASELINE_MM  = 5.0                        # 原始位姿估計 Baseline 下限 (mm)
++MAX_POSE_BASELINE_MM  = 35.0                       # 原始位姿估計 Baseline 上限 (mm)
+
+--------------------------------------------------
+[修改] 行 1469 - 1471 (位姿 Baseline 檢查邏輯與輸出字串)
+--------------------------------------------------
+-                    if not (5.0 <= raw_baseline <= 35.0):
+-                        print(f"❌ 算出的原始 Baseline 異常 ({raw_baseline:.2f} mm)，判定為無視差退化或定位異常，忽略此幀")
++                    if not (MIN_POSE_BASELINE_MM <= raw_baseline <= MAX_POSE_BASELINE_MM):
++                        print(f"❌ 算出的原始 Baseline 異常 ({raw_baseline:.2f} mm，合理區間: {MIN_POSE_BASELINE_MM}~{MAX_POSE_BASELINE_MM} mm)，判定為無視差退化或定位異常，忽略此幀")

@@ -1,0 +1,21 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T13-53-56
+
+[減少的部分]
+行 643-649:
+            # 1. 改成用當前 frame 作為左圖 (imgA)，frame B 作為右圖 (imgB)
+            imgA_bgr, _ = process_view(raw_A, mtxL_o, distL, newKL_o)
+            imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
+            
+            imgB_bgr, _ = process_view(stored_raw_B, mtxL_o, distL, newKL_o)
+            imgB_gray = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY)
+
+[新增的部分]
+行 643-649:
+            # 將 Frame A 與 Frame B 角色對調進行測試
+            imgA_bgr, _ = process_view(stored_raw_B, mtxL_o, distL, newKL_o)
+            imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
+            
+            imgB_bgr, _ = process_view(raw_A, mtxL_o, distL, newKL_o)
+            imgB_gray = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY)

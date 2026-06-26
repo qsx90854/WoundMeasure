@@ -1,0 +1,301 @@
+檔案修改紀錄: depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py
+修改時間: 20260527_112800
+
+=========================================
+1. 修改 get_joint_relative_pose 函數以支持右相機 ArUco 姿態解算 (Scheme 1)
+-----------------------------------------
+減少的部份 (原第 169-171 行):
+-     objA, imgB = [], []
+-     cA_dict, cB_dict = {}, {}
+-     curr_marker_poses = {}
+
+新增的部份 (約第 169-172 行):
++     objA, imgB = [], []
++     cA_dict, cB_dict = {}, {}
++     curr_marker_poses = {}
++     curr_marker_poses_R = {}
+
+新增的部份 (約第 193-197 行):
++         # 針對右圖 (imgB) 解算標籤在右相機空間下的姿態
++         ok_R, rv_R, tv_R = cv2.solvePnP(canon, cB[idxB][0], K_R, np.zeros(5))
++         if ok_R:
++             curr_marker_poses_R[mid] = (rv_R, tv_R)
+
+減少的部份 (原第 226 行):
+-     return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel
+
+新增的部份 (約第 231 行):
++     return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, curr_marker_poses_R, rv_rel
+
+=========================================
+2. 修改 compute_measure 函數中的世界座標轉換公式，優先套用右相機靜態轉換公式 (Scheme 1)
+-----------------------------------------
+減少的部份 (原第 634-668 行):
+-                 # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
+-                 if cand.get('cornersA'):
+-                     min_id = min(cand['cornersA'].keys())
+-                     
+-                     ok_origin = False
+-                     # 1. 優先使用背景執行緒中已經過 IPPE 且消解二義性的穩定標籤位姿
+-                     if 'curr_marker_poses' in cand and min_id in cand['curr_marker_poses']:
+-                         rv_o, tv_o = cand['curr_marker_poses'][min_id]
+-                         ok_origin = True
+-                     else:
+-                         # 2. 備用方案：使用 IPPE 獨立解算並消解二義性
+-                         half = ACTUAL_MARKER_SIZE_MM / 2.0
+-                         canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+-                         ok_generic, rvecs_o, tvecs_o, _ = cv2.solvePnPGeneric(
+-                             canon, cand['cornersA'][min_id], KL, np.zeros(5),
+-                             flags=cv2.SOLVEPNP_IPPE
+-                         )
+-                         if ok_generic and len(rvecs_o) > 0:
+-                             best_idx = 0
+-                             if len(rvecs_o) == 2:
+-                                 # 選擇最正面面向相機的解
+-                                 R0, _ = cv2.Rodrigues(rvecs_o[0])
+-                                 R1, _ = cv2.Rodrigues(rvecs_o[1])
+-                                 n0, n1 = R0[:, 2], R1[:, 2]
+-                                 dir0 = tvecs_o[0].flatten() / np.linalg.norm(tvecs_o[0])
+-                                 dir1 = tvecs_o[1].flatten() / np.linalg.norm(tvecs_o[1])
+-                                 best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
+-                             rv_o = rvecs_o[best_idx]
+-                             tv_o = tvecs_o[best_idx]
+-                             ok_origin = True
+-                             
+-                     if ok_origin:
+-                         R_o, _ = cv2.Rodrigues(rv_o)
+-                         p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
+-                         p3d_w_val = p3d_w.flatten()
+
+新增的部份 (約第 639-683 行):
++                 # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
++                 if cand.get('cornersA'):
++                     min_id = min(cand['cornersA'].keys())
++                     
++                     ok_origin = False
++                     # 1. 優先使用 Scheme 1：右相機/右圖下的穩定標籤位姿做基準
++                     if 'curr_marker_poses_R' in cand and min_id in cand['curr_marker_poses_R']:
++                         rv_o_R, tv_o_R = cand['curr_marker_poses_R'][min_id]
++                         R_o_R, _ = cv2.Rodrigues(rv_o_R)
++                         # 將 p3d (左相機系) 轉到右相機座標系下
++                         p3d_R = cand['R_rel'] @ p3d_val.reshape(3, 1) + cand['t_rel'].reshape(3, 1)
++                         # 再轉換至右相機下的 ArUco 世界座標系
++                         p3d_w = R_o_R.T @ (p3d_R - tv_o_R.reshape(3, 1))
++                         p3d_w_val = p3d_w.flatten()
++                         ok_origin = True
++                     # 2. 備用方案：使用左相機下的標籤位姿
++                     elif 'curr_marker_poses' in cand and min_id in cand['curr_marker_poses']:
++                         rv_o, tv_o = cand['curr_marker_poses'][min_id]
++                         R_o, _ = cv2.Rodrigues(rv_o)
++                         p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
++                         p3d_w_val = p3d_w.flatten()
++                         ok_origin = True
++                     else:
++                         # 3. 備用方案 2：獨立解算左相機下的 PnP
++                         half = ACTUAL_MARKER_SIZE_MM / 2.0
++                         canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
++                         ok_generic, rvecs_o, tvecs_o, _ = cv2.solvePnPGeneric(
++                             canon, cand['cornersA'][min_id], KL, np.zeros(5),
++                             flags=cv2.SOLVEPNP_IPPE
++                         )
++                         if ok_generic and len(rvecs_o) > 0:
++                             best_idx = 0
++                             if len(rvecs_o) == 2:
++                                 # 選擇最正面面向相機的解
++                                 R0, _ = cv2.Rodrigues(rvecs_o[0])
++                                 R1, _ = cv2.Rodrigues(rvecs_o[1])
++                                 n0, n1 = R0[:, 2], R1[:, 2]
++                                 dir0 = tvecs_o[0].flatten() / np.linalg.norm(tvecs_o[0])
++                                 dir1 = tvecs_o[1].flatten() / np.linalg.norm(tvecs_o[1])
++                                 best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
++                             rv_o = rvecs_o[best_idx]
++                             tv_o = tvecs_o[best_idx]
++                             R_o, _ = cv2.Rodrigues(rv_o)
++                             p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
++                             p3d_w_val = p3d_w.flatten()
++                             ok_origin = True
+
+=========================================
+3. 修改 calc_worker 背景執行緒中標籤位姿時序 EMA 平滑濾波 (Scheme 2)
+-----------------------------------------
+減少的部份 (原第 1099-1101 行):
+-         # 時序狀態變數，用來進行 Extrinsic Guess 初值約束與 EMA 平滑濾波
+-         history_marker_poses = {}   # marker_id -> (rv, tv)
+-         history_rel_pose = None     # (rv_rel, tv_rel)
+
+新增的部份 (約第 1104-1108 行):
++         # 時序狀態變數，用來進行 Extrinsic Guess 初值約束與 EMA 平滑濾波
++         history_marker_poses = {}   # marker_id -> (rv, tv)
++         history_marker_poses_R = {} # marker_id -> (rv_R, tv_R)
++         history_rel_pose = None     # (rv_rel, tv_rel)
+
+減少的部份 (原第 1114-1116 行):
+-                 # 檢查是否需要重置時序歷史
+-                 if reset_pose_history:
+-                     history_marker_poses.clear()
+-                     history_rel_pose = None
+
+新增的部份 (約第 1122-1126 行):
++                 # 檢查是否需要重置時序歷史
++                 if reset_pose_history:
++                     history_marker_poses.clear()
++                     history_marker_poses_R.clear()
++                     history_rel_pose = None
+
+減少的部份 (原第 1156 行):
+-                 all_curr_marker_poses = []
+
+新增的部份 (約第 1167-1169 行):
++                 all_curr_marker_poses = []
++                 all_curr_marker_poses_R = []
+
+減少的部份 (原第 1169 行):
+-                         R_r_i, t_r_i, baseline_i, objA_i, shared_i, cA_dict_i, cB_dict_i, curr_marker_poses_i, rv_r_i = res_pose
+
+新增的部份 (約第 1182 行):
++                         R_r_i, t_r_i, baseline_i, objA_i, shared_i, cA_dict_i, cB_dict_i, curr_marker_poses_i, curr_marker_poses_R_i, rv_r_i = res_pose
+
+減少的部份 (原第 1177-1178 行):
+-                         all_curr_marker_poses.append(curr_marker_poses_i)
+-                         all_shared.append(shared_i)
+
+新增的部份 (約第 1191-1193 行):
++                         all_curr_marker_poses.append(curr_marker_poses_i)
++                         all_curr_marker_poses_R.append(curr_marker_poses_R_i)
++                         all_shared.append(shared_i)
+
+減少的部份 (原第 1186 行):
+-                 curr_marker_poses = {}
+
+新增的部份 (約第 1201-1203 行):
++                 curr_marker_poses = {}
++                 curr_marker_poses_R = {}
+
+減少的部份 (原第 1202-1215 行):
+-                     # 對每個共享標籤姿態進行平均
+-                     merged_marker_poses = {}
+-                     for mid in cA_dict.keys():
+-                         m_rvs, m_tvs = [], []
+-                         for cmp in all_curr_marker_poses:
+-                             if mid in cmp:
+-                                 m_rvs.append(cmp[mid][0])
+-                                 m_tvs.append(cmp[mid][1])
+-                         if m_rvs:
+-                             merged_marker_poses[mid] = (np.mean(m_rvs, axis=0), np.mean(m_tvs, axis=0))
+-                     curr_marker_poses = merged_marker_poses
+-                     
+-                     # 更新歷史標籤位姿
+-                     history_marker_poses = curr_marker_poses
+
+新增的部份 (約第 1219-1244 行):
++                     # 對每個共享標籤姿態進行平均 (左相機空間)
++                     merged_marker_poses = {}
++                     for mid in cA_dict.keys():
++                         m_rvs, m_tvs = [], []
++                         for cmp in all_curr_marker_poses:
++                             if mid in cmp:
++                                 m_rvs.append(cmp[mid][0])
++                                 m_tvs.append(cmp[mid][1])
++                         if m_rvs:
++                             merged_marker_poses[mid] = (np.mean(m_rvs, axis=0), np.mean(m_tvs, axis=0))
++                     curr_marker_poses = merged_marker_poses
++ 
++                     # 對每個共享標籤姿態進行平均 (右相機空間)
++                     merged_marker_poses_R = {}
++                     for mid in cB_dict.keys():
++                         m_rvs_R, m_tvs_R = [], []
++                         for cmp_R in all_curr_marker_poses_R:
++                             if mid in cmp_R:
++                                 m_rvs_R.append(cmp_R[mid][0])
++                                 m_tvs_R.append(cmp_R[mid][1])
++                         if m_rvs_R:
++                             merged_marker_poses_R[mid] = (np.mean(m_rvs_R, axis=0), np.mean(m_tvs_R, axis=0))
++                     curr_marker_poses_R = merged_marker_poses_R
+
+減少的部份 (原第 1217-1230 行):
+-                     # 進行時序 EMA 平滑濾波
+-                     if ENABLE_POSE_SMOOTHING:
+-                         if filtered_rv_rel is None or filtered_tv_rel is None:
+-                             filtered_rv_rel = rv_r.copy()
+-                             filtered_tv_rel = t_r.copy()
+-                         else:
+-                             alpha = POSE_SMOOTHING_ALPHA
+-                             filtered_tv_rel = alpha * t_r + (1.0 - alpha) * filtered_tv_rel
+-                             filtered_rv_rel = alpha * rv_r + (1.0 - alpha) * filtered_rv_rel
+-                         
+-                         t_r = filtered_tv_rel.copy()
+-                         rv_r_smooth = filtered_rv_rel.copy()
+-                         R_r, _ = cv2.Rodrigues(rv_r_smooth)
+-                         baseline_val = float(np.linalg.norm(t_r))
+
+新增的部份 (約第 1246-1292 行):
++                     # 進行時序 EMA 平滑濾波
++                     if ENABLE_POSE_SMOOTHING:
++                         # 1. 雙目相對位姿 EMA
++                         if filtered_rv_rel is None or filtered_tv_rel is None:
++                             filtered_rv_rel = rv_r.copy()
++                             filtered_tv_rel = t_r.copy()
++                         else:
++                             alpha = POSE_SMOOTHING_ALPHA
++                             filtered_tv_rel = alpha * t_r + (1.0 - alpha) * filtered_tv_rel
++                             filtered_rv_rel = alpha * rv_r + (1.0 - alpha) * filtered_rv_rel
++                         
++                         t_r = filtered_tv_rel.copy()
++                         rv_r_smooth = filtered_rv_rel.copy()
++                         R_r, _ = cv2.Rodrigues(rv_r_smooth)
++                         baseline_val = float(np.linalg.norm(t_r))
++ 
++                         # 2. 左相機下 ArUco 姿態 EMA
++                         smoothed_marker_poses = {}
++                         for mid, (rv_curr, tv_curr) in curr_marker_poses.items():
++                             if mid in history_marker_poses:
++                                 rv_hist, tv_hist = history_marker_poses[mid]
++                                 rv_smooth = alpha * rv_curr + (1.0 - alpha) * rv_hist
++                                 tv_smooth = alpha * tv_curr + (1.0 - alpha) * tv_hist
++                                 smoothed_marker_poses[mid] = (rv_smooth, tv_smooth)
++                             else:
++                                 smoothed_marker_poses[mid] = (rv_curr.copy(), tv_curr.copy())
++                         curr_marker_poses = smoothed_marker_poses
++ 
++                         # 3. 右相機下 ArUco 姿態 EMA
++                         smoothed_marker_poses_R = {}
++                         for mid, (rv_curr_R, tv_curr_R) in curr_marker_poses_R.items():
++                             if mid in history_marker_poses_R:
++                                 rv_hist_R, tv_hist_R = history_marker_poses_R[mid]
++                                 rv_smooth_R = alpha * rv_curr_R + (1.0 - alpha) * rv_hist_R
++                                 tv_smooth_R = alpha * tv_curr_R + (1.0 - alpha) * tv_hist_R
++                                 smoothed_marker_poses_R[mid] = (rv_smooth_R, tv_smooth_R)
++                             else:
++                                 smoothed_marker_poses_R[mid] = (rv_curr_R.copy(), tv_curr_R.copy())
++                         curr_marker_poses_R = smoothed_marker_poses_R
++                         
++                     # 更新歷史標籤位姿
++                     history_marker_poses = curr_marker_poses
++                     history_marker_poses_R = curr_marker_poses_R
+
+減少的部份 (原第 1322 行):
+-                         'curr_marker_poses': curr_marker_poses if pose_valid else {}
+
+新增的部份 (約第 1374-1375 行):
++                         'curr_marker_poses': curr_marker_poses if pose_valid else {},
++                         'curr_marker_poses_R': curr_marker_poses_R if pose_valid else {}
+
+減少的部份 (原第 1379-1383 行):
+-                                 if 'curr_marker_poses' in snap_cand and min_id in snap_cand['curr_marker_poses']:
+-                                     rv_o, tv_o = snap_cand['curr_marker_poses'][min_id]
+-                                     R_o, _ = cv2.Rodrigues(rv_o)
+-                                     p3d_w = R_o.T @ (p3d.reshape(3, 1) - tv_o.reshape(3, 1))
+-                                     measure_res['p3d_w'] = p3d_w.flatten()
+
+新增的部份 (約第 1431-1443 行):
++                                 if 'curr_marker_poses_R' in snap_cand and min_id in snap_cand['curr_marker_poses_R']:
++                                     rv_o_R, tv_o_R = snap_cand['curr_marker_poses_R'][min_id]
++                                     R_o_R, _ = cv2.Rodrigues(rv_o_R)
++                                     p3d_R = R_r @ p3d.reshape(3, 1) + t_r.reshape(3, 1)
++                                     p3d_w = R_o_R.T @ (p3d_R - tv_o_R.reshape(3, 1))
++                                     measure_res['p3d_w'] = p3d_w.flatten()
++                                 elif 'curr_marker_poses' in snap_cand and min_id in snap_cand['curr_marker_poses']:
++                                     rv_o, tv_o = snap_cand['curr_marker_poses'][min_id]
++                                     R_o, _ = cv2.Rodrigues(rv_o)
++                                     p3d_w = R_o.T @ (p3d.reshape(3, 1) - tv_o.reshape(3, 1))
++                                     measure_res['p3d_w'] = p3d_w.flatten()

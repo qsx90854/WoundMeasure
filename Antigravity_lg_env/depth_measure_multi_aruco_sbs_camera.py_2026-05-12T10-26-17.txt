@@ -1,0 +1,12 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T10-26-17
+
+[減少的部分]
+行 247-248:
+-        s = TARGET_W / undist.shape[1]
+-        return cv2.resize(undist, (TARGET_W, int(undist.shape[0]*s))), s
+
+[新增的部分]
+行 247:
++        return undist, 1.0

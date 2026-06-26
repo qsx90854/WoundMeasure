@@ -1,0 +1,26 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-06-03T11:25:27+08:00
+
+說明：
+修復重投影的虛線紅框（proj_art）在 Blit 渲染中，因為非計算影格重繪影像而被遮蔽消失的 Bug。
+
+--------------------------------------------------
+[修改] 行 1733 - 1742 (主迴圈的 Blit Artist 繪製列表)
+--------------------------------------------------
+-        # 3. ArUco 標記 (儲存在 ax.art 中)
+-        for ax in [ax_A, ax_B]:
+-            if hasattr(ax, 'art'):
+-                if ax == ax_B and not ax_B.get_visible():
+-                    continue
+-                for a in ax.art:
+-                    ax.draw_artist(a)
++        # 3. ArUco 標記與投影標記 (儲存在 ax.art 和 ax.proj_art 中)
++        for ax in [ax_A, ax_B]:
++            if ax == ax_B and not ax_B.get_visible():
++                continue
++            if hasattr(ax, 'art'):
++                for a in ax.art:
++                    ax.draw_artist(a)
++            if hasattr(ax, 'proj_art'):
++                for a in ax.proj_art:
++                    ax.draw_artist(a)

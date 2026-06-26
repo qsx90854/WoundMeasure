@@ -1,0 +1,30 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-03T16:47:03+08:00
+
+說明：
+將局部函數 `undistort_corners_dict` 的宣告位置向上移動至 `extra_candidates_info` 搜尋邏輯之前，從而修復了因 Python 先調用後宣告產生的 `UnboundLocalError: cannot access local variable 'undistort_corners_dict'` 錯誤。
+
+--------------------------------------------------
+[修改] 行 651 - 716 (移動嵌套函數定義位置)
+--------------------------------------------------
+     else:
+         best_start, best_end, R_rel, t_rel, baseline = best_pair
+
++    def undistort_corners_dict(corners_dict):
++        undist = {}
++        for mid, pts in corners_dict.items():
++            pts_reshaped = pts.reshape(-1, 1, 2).astype(np.float32)
++            pts_undist = cv2.undistortPoints(pts_reshaped, mtx_L, dist_L, P=K_L)
++            undist[mid] = pts_undist.reshape(4, 2)
++        return undist
++
+     # 尋找次優額外右圖組
+     extra_candidates_info = []
+     ...
+-    def undistort_corners_dict(corners_dict):
+-        undist = {}
+-        for mid, pts in corners_dict.items():
+-            pts_reshaped = pts.reshape(-1, 1, 2).astype(np.float32)
+-            pts_undist = cv2.undistortPoints(pts_reshaped, mtx_L, dist_L, P=K_L)
+-            undist[mid] = pts_undist.reshape(4, 2)
+-        return undist

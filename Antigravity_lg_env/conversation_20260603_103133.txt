@@ -1,0 +1,12 @@
+時間點: 2026-06-03T10:31:33+08:00
+
+使用者提問:
+原本 depth_measure_multi_aruco_sbs_camera_v7_demo_live.py的流程是用相機的左半邊影像來當作這隻相機的影像 是不是沒改回來
+
+助手回答:
+是的，非常感謝您的細心提醒！我們已順利將 SBS 左相機影像的截取流程和解析度配置更新完畢：
+1. 在 `analyze_video_frames` 函數中載入影片時，將讀入的每幀 `frame` 截取左半影像 `frame[:, :frame.shape[1] // 2]` 作為分析對象。
+2. 在 `record_video_from_camera` 中設定相機解析度時，將原先寫死的 1920x1080 改為 `CAMERA_WIDTH` (2560) 與 `CAMERA_HEIGHT` (1024)。
+3. 在 `main` 函數載入影像尺寸計算時，將 `w_alg = w_raw` 修正為 `w_alg = w_raw // 2` (即 1280)。
+4. 檔案變更對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_live.py_20260603_103133.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

@@ -1,0 +1,8 @@
+時間: 2026-06-11 15:23:28
+
+使用者要求:
+現在例如按了"過濾高光反光"這個按鈕 整個算法不會重做一次 要重新再左圖點選一個候選點才會重做, 能夠在點擊"啟用CLAHE增強","改良匹配流程","色彩直方圖約束","啟用RGB-SIFT","Opponet-SIFT", "過濾高光反光"這幾個按鈕時, 就用當前選取的候選點重做一次算法嗎
+
+工程師分析與實作:
+1. 修改 make_on_opt 閉包函數，若變更的 key 屬於 ('enable_clahe', 'use_improved_matching', 'use_color_hist', 'filter_specular') 且當前 last_click 不為 None，則自動呼叫 do_measure(last_click[0], last_click[1]) 重做量測與更新。
+2. 修改 on_c10_clicked (RGB-SIFT 狀態切換) 和 on_c11_clicked (Opponent-SIFT 狀態切換) 函數，在狀態切換後，若 last_click 不為 None，則自動呼叫 do_measure(last_click[0], last_click[1])。

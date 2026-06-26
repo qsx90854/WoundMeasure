@@ -1,0 +1,129 @@
+修改檔案: depth_measure_multi_aruco_sbs.py
+時間點: 2026-05-04T15:37:40+08:00
+
+--- 減少部分 (原行數 682-749) ---
+-                if des_inject is not None and desB_glob is not None:
+-                    # 合併全局左圖描述子與局部注入描述子
+-                    des_mix_L = np.vstack([desA_glob, des_inject])
+-                    kpts_mix_L = list(kpA_glob) + list(kpts_inject)
+-                    
+-                    bf_m = cv2.BFMatcher(cv2.NORM_L2)
+-                    raw_matches = bf_m.match(des_mix_L, desB_glob)
+-                    
+-                    # 過濾：僅保留距離 < 450 的匹配
+-                    good_all = [m for m in raw_matches if m.distance < 450]
+-                    
+-                    # 篩選出在點擊區域 (50px 內) 的匹配點
+-                    ptsA_mix, ptsB_mix = [], []
+-                    good_inject = [] # 這裡紀錄屬於 injected 部分且匹配成功者，用於連線顯示
+-                    
+-                    click_pt = np.array([click_u, click_v])
+-                    for m in good_all:
+-                        ptL = kpts_mix_L[m.queryIdx].pt
+-                        if np.linalg.norm(np.array(ptL) - click_pt) < 50:
+-                            ptsA_mix.append(ptL)
+-                            ptsB_mix.append(kpB_glob[m.trainIdx].pt)
+-                            if m.queryIdx >= len(kpA_glob): # 屬於注入點
+-                                good_inject.append(m)
+-                    
+-                    if ptsA_mix:
+-                        ptsA_mix, ptsB_mix = np.array(ptsA_mix), np.array(ptsB_mix)
+-                        dist_sq = np.sum((ptsA_mix - click_pt)**2, axis=1)
+-                        weights_mix = 1.0 / (dist_sq + 1e-5)
+-                        off_mix = ptsB_mix - ptsA_mix
+-                        match_pt = np.array([click_u, click_v]) + np.sum(off_mix * weights_mix[:, np.newaxis], axis=0) / np.sum(weights)
+-                        method = "混合梯度SIFT"
+-                        print(f"  [Grad-SIFT] 注入匹配數: {len(good_inject)}, 參照總數: {len(ptsA_mix)}")
+-                        
+-                        # 印出注入點的前 10 筆匹配結果
+-                        if len(good_inject) > 0:
+-                            print("  [Grad-SIFT] 注入點匹配數值 (局部座標):")
+-                            for i, m in enumerate(good_inject[:10]):
+-                                pL, pR = kpts_mix_L[m.queryIdx].pt, kpB_glob[m.trainIdx].pt
+-                                print(f"    - Match {i}: Left({pL[0]:.1f}, {pL[1]:.1f}) -> Right({pR[0]:.1f}, {pR[1]:.1f}), Dist:{m.distance:.1f}")
+-                        
+-                        # 顯示 100 個注入的候選點 (左圖)
+-                        scatter_grad_inject.set_offsets([kp.pt for kp in kpts_inject])
+-                        # 顯示所有匹配成功的目標點 (右圖)
+-                        if len(ptsB_mix) > 0:
+-                            scatter_grad_match.set_offsets(ptsB_mix)
+-                            # 繪製注入點的連線
+-                            for m in good_inject:
+-                                con = ConnectionPatch(xyA=kpts_mix_L[m.queryIdx].pt, xyB=kpB_glob[m.trainIdx].pt, 
+-                                                      coordsA="data", coordsB="data", axesA=ax_A, axesB=ax_B, color="cyan", lw=0.8, alpha=0.4)
+-                                ax_B.add_artist(con); view_state['lg_lines'].append(con)
+-                        else:
+-                            scatter_grad_match.set_offsets(np.empty((0, 2)))
+-                    else:
+-                        print(f"  [Grad-SIFT-Diag] 點擊區域附近無任何 SIFT 匹配成果 (r=50)")
+-                        scatter_grad_inject.set_offsets([kp.pt for kp in kpts_inject])
+-                        scatter_grad_match.set_offsets(np.empty((0, 2)))
+-                    
+-                    # 顯示右圖所有 SIFT 特徵點 (輔助觀察密度)
+-                    if ptsB_glob_coords.size > 0:
+-                        scatter_all_sift_B.set_offsets(ptsB_glob_coords)
+
+--- 新增部分 (新行數 682 起) ---
++                # 2. 右圖 400x400 ROI 搜尋 5000 個高梯度點
++                u0_r, u1_r = max(0, u_i - 200), min(w, u_i + 200)
++                v0_r, v1_r = max(0, v_i - 200), min(h, v_i + 200)
++                patch_r = imgB_gray[v0_r:v1_r, u0_r:u1_r]
++                
++                if patch_r.size > 0:
++                    gx_r = cv2.Sobel(patch_r, cv2.CV_32F, 1, 0)
++                    gy_r = cv2.Sobel(patch_r, cv2.CV_32F, 0, 1)
++                    mag_r = cv2.sqrt(gx_r**2 + gy_r**2)
++                    flat_r = mag_r.flatten()
++                    top_k_r = min(len(flat_r), 5000)
++                    idx_grad_r = np.argsort(flat_r)[-top_k_r:]
++                    
++                    kpts_r = []
++                    for idx in idx_grad_r:
++                        py, px = divmod(idx, patch_r.shape[1])
++                        kpts_r.append(cv2.KeyPoint(float(u0_r + px), float(v0_r + py), 5.0))
++                    
++                    _, des_r = sift_engine.compute(imgB_gray, kpts_r)
++                    
++                    if des_inject is not None and des_r is not None:
++                        bf_m = cv2.BFMatcher(cv2.NORM_L2)
++                        raw_matches = bf_m.match(des_inject, des_r)
++                        
++                        # 過濾：僅保留距離 < 450 的匹配
++                        good_all = [m for m in raw_matches if m.distance < 450]
++                        
++                        ptsA_match, ptsB_match = [], []
++                        click_pt = np.array([click_u, click_v])
++                        
++                        for m in good_all:
++                            ptL = kpts_inject[m.queryIdx].pt
++                            ptR = kpts_r[m.trainIdx].pt
++                            if np.linalg.norm(np.array(ptL) - click_pt) < 50:
++                                ptsA_match.append(ptL)
++                                ptsB_match.append(ptR)
++                        
++                        if ptsA_match:
++                            ptsA_match, ptsB_match = np.array(ptsA_match), np.array(ptsB_match)
++                            dist_sq = np.sum((ptsA_match - click_pt)**2, axis=1)
++                            weights = 1.0 / (dist_sq + 1e-5)
++                            off = ptsB_match - ptsA_match
++                            match_pt = np.array([click_u, click_v]) + np.sum(off * weights[:, np.newaxis], axis=0) / np.sum(weights)
++                            method = "局部 ROI 梯度 SIFT"
++                            print(f"  [ROI-Grad-SIFT] 匹配成功數: {len(ptsA_match)} / 100")
++                            
++                            # 視覺化：左圖注入點
++                            scatter_grad_inject.set_offsets([kp.pt for kp in kpts_inject])
++                            # 視覺化：右圖匹配成功的點
++                            scatter_grad_match.set_offsets(ptsB_match)
++                            # 繪製匹配連線
++                            for i in range(len(ptsA_match)):
++                                con = ConnectionPatch(xyA=ptsA_match[i], xyB=ptsB_match[i], 
++                                                      coordsA="data", coordsB="data", axesA=ax_A, axesB=ax_B, color="cyan", lw=0.8, alpha=0.4)
++                                ax_B.add_artist(con); view_state['lg_lines'].append(con)
++                            
++                            # 右圖 5000 個候選點顯示 (黃色小點)
++                            scatter_all_sift_B.set_offsets([kp.pt for kp in kpts_r])
++                        else:
++                            print(f"  [ROI-Grad-SIFT] ROI 內無有效匹配成果")
++                            scatter_grad_inject.set_offsets([kp.pt for kp in kpts_inject])
++                            scatter_grad_match.set_offsets(np.empty((0, 2)))
++                            scatter_all_sift_B.set_offsets([kp.pt for kp in kpts_r])

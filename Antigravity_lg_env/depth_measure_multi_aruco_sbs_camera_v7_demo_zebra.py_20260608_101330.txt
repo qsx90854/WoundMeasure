@@ -1,0 +1,22 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-08T10:13:30+08:00
+
+說明：
+修改 `on_hide_R` 回呼函數。當使用者切換右圖顯示狀態時，動態調整測量數據框 (`depth_text`) 在圖表 `fig.transFigure` 下的百分比座標位置：
+- 當右圖被隱藏時，數值框抬高至原本右圖中央的 `(0.53, 0.45)` 處。
+- 當右圖被顯示時，數值框往下調整至右圖下方的 `(0.53, 0.05)` 處。
+
+--------------------------------------------------
+[修改] 行 2597 - 2608 (動態切換數值框位置)
+--------------------------------------------------
+     def on_hide_R(event):
+         visible = ax_B.get_visible()
+         ax_B.set_visible(not visible)
+         btn_hide_R.label.set_text("顯示右圖" if visible else "隱藏右圖")
++        if visible:
++            # 隱藏右圖時，抬高到原本右圖的中間位置
++            depth_text.set_position((0.53, 0.45))
++        else:
++            # 顯示右圖時，調整到右圖下方的位置
++            depth_text.set_position((0.53, 0.05))
+         request_blit_refresh()

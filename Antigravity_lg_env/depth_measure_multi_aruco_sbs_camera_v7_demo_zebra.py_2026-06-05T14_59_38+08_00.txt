@@ -1,0 +1,225 @@
+時間點: 2026-06-05T14:59:38+08:00
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+【減少部分】
+1. 原本約第 265 至 280 行：
+```python
+def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed"):
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"❌ 無法開啟影片: {video_path}")
+        return None
+    
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
+    
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+    cap.release()
+```
+
+2. 原本約第 329 至 337 行：
+```python
+    def get_frame_info(idxs):
+        info = []
+        for idx in idxs:
+            if idx not in detected_cache:
+                detected_cache[idx] = detect_frame_markers(frames[idx])
+            cd = detected_cache[idx]
+            if cd:
+                info.append({'idx': idx, 'corners': cd})
+        return info
+```
+
+3. 原本約第 467 至 468 行：
+```python
+        start_info = get_frame_info(sampled_start)
+        end_info = get_frame_info(sampled_end)
+```
+
+4. 原本約第 654 至 657 行：
+```python
+    best_reproj_err = None
+    if best_start is not None and best_end is not None:
+        best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
+        
+    return {
+```
+
+5. 原本約第 1219 至 1221 行（在 `select_video_source` 下方、`main` 的呼叫上方）：
+```python
+    return selected_path["action"], selected_path["path"]
+
+def main():
+```
+
+6. 原本約第 1275 行（呼叫 `analyze_video_frames`）：
+```python
+    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE, FRAME_RANGE_MODE)
+```
+
+【新增部分】
+1. 約第 265 至 288 行（`analyze_video_frames` 支援 `progress_callback`）：
+```python
+def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None):
+    if progress_callback:
+        progress_callback(2, "正在開啟影片檔案...")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"❌ 無法開啟影片: {video_path}")
+        return None
+    
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
+    
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frames.append(frame)
+        if progress_callback and len(frames) % 30 == 0:
+            load_percent = min(2 + (len(frames) / max(1, total_frames)) * 10, 12)
+            progress_callback(load_percent, f"正在載入影片影格 ({len(frames)}/{total_frames})...")
+            
+    cap.release()
+    if progress_callback:
+        progress_callback(12, f"影片載入完成，共 {len(frames)} 影格。")
+```
+
+2. 約第 338 至 350 行（`get_frame_info` 定義回報進度）：
+```python
+    def get_frame_info(idxs, stage_idx=0, is_start_segment=True):
+        info = []
+        seg_name = "開頭段" if is_start_segment else "結尾段"
+        for i, idx in enumerate(idxs):
+            if idx not in detected_cache:
+                detected_cache[idx] = detect_frame_markers(frames[idx])
+            cd = detected_cache[idx]
+            if cd:
+                info.append({'idx': idx, 'corners': cd})
+            if progress_callback:
+                stage_base = 15 + stage_idx * 15
+                if is_start_segment:
+                    percent = stage_base + (i / len(idxs)) * 7.5
+                else:
+                    percent = stage_base + 7.5 + (i / len(idxs)) * 7.5
+                progress_callback(min(percent, 98.0), f"正在分析第 {stage_idx + 1}/5 階段 - {seg_name} 偵測標籤 ({i + 1}/{len(idxs)})...")
+        return info
+```
+
+3. 約第 467 至 468 行（呼叫 `get_frame_info` 傳入進度參數）：
+```python
+        start_info = get_frame_info(sampled_start, stage_idx, is_start_segment=True)
+        end_info = get_frame_info(sampled_end, stage_idx, is_start_segment=False)
+```
+
+4. 約第 655 至 660 行（結束前進度 100% 通知）：
+```python
+    if progress_callback:
+        progress_callback(100, "分析完成，即將載入主量測介面...")
+```
+
+5. 約第 1219 至 1308 行（定義 `analyze_video_with_progress_bar` 函數）：
+```python
+    return selected_path["action"], selected_path["path"]
+
+def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode, range_mode):
+    import tkinter as tk
+    from tkinter import ttk
+    import threading
+    import queue
+
+    root = tk.Tk()
+    root.title("影片分析進度")
+    
+    # 視窗置中
+    window_width = 450
+    window_height = 150
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x_c = (screen_width - window_width) // 2
+    y_c = (screen_height - window_height) // 2
+    root.geometry(f"{window_width}x{window_height}+{x_c}+{y_c}")
+    root.configure(bg="#2D2D2D")
+    root.resizable(False, False)
+
+    # 狀態文字與進度變數
+    status_var = tk.StringVar(value="準備分析影片...")
+    progress_var = tk.DoubleVar(value=0.0)
+
+    # UI 元件
+    title_label = tk.Label(root, text="🎥 SBS 雙目影片自動標定中", font=("Microsoft JhengHei", 12, "bold"), fg="#FFFFFF", bg="#2D2D2D", pady=10)
+    title_label.pack()
+
+    status_label = tk.Label(root, textvariable=status_var, font=("Microsoft JhengHei", 10), fg="#E0E0E0", bg="#2D2D2D", wraplength=400)
+    status_label.pack(pady=5)
+
+    # 美化進度條樣式
+    style = ttk.Style()
+    style.theme_use('default')
+    style.configure("TProgressbar", thickness=15, troughcolor="#404040", background="#28A745")
+    
+    progress_bar = ttk.Progressbar(root, length=380, mode="determinate", variable=progress_var, style="TProgressbar")
+    progress_bar.pack(pady=10)
+
+    # thread 安全的更新機制
+    update_queue = queue.Queue()
+
+    def progress_callback(percent, status_text):
+        update_queue.put((percent, status_text))
+
+    # 用於儲存執行結果的字典
+    result_container = {"data": None, "error": None}
+
+    def worker():
+        try:
+            res = analyze_video_frames(
+                video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, 
+                select_mode, range_mode, progress_callback=progress_callback
+            )
+            result_container["data"] = res
+        except Exception as e:
+            result_container["error"] = e
+        finally:
+            update_queue.put("DONE")
+
+    # 啟動背景計算線程
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    # 定期檢查 Queue 並更新 UI
+    def check_queue():
+        try:
+            while True:
+                msg = update_queue.get_nowait()
+                if msg == "DONE":
+                    root.destroy()
+                    return
+                else:
+                    percent, text = msg
+                    progress_var.set(percent)
+                    status_var.set(text)
+                    root.update_idletasks()
+        except queue.Empty:
+            pass
+        root.after(100, check_queue)
+
+    root.after(100, check_queue)
+    root.mainloop()
+
+    if result_container["error"]:
+        raise result_container["error"]
+    return result_container["data"]
+
+def main():
+```
+
+6. 約第 1358 行（改為呼叫 `analyze_video_with_progress_bar`）：
+```python
+    video_data = analyze_video_with_progress_bar(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE, FRAME_RANGE_MODE)
+```

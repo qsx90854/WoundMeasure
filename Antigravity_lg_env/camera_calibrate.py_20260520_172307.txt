@@ -1,0 +1,40 @@
+檔案: camera_calibrate.py
+修改時間: 2026-05-20T17:23:07
+
+--- 減少的部份 ---
+第 63-75 行:
+```python
+    # 1. 進行內部參數標定
+    print("\n🎬 執行單相機內部標定...")
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(obj_points, img_points, (gray.shape[1], gray.shape[0]), None, None)
+    
+    # 計算每張影像的重投影誤差
+    total_error = 0
+    for i in range(len(obj_points)):
+        imgpts2, _ = cv2.projectPoints(obj_points[i], rvecs[i], tvecs[i], mtx, dist)
+        error = cv2.norm(img_points[i], imgpts2, cv2.NORM_L2) / len(imgpts2)
+        total_error += error
+    avg_error = total_error / len(obj_points)
+
+    print(f"📊 總平均重投影誤差: {avg_error:.4f}")
+```
+
+--- 新增的部份 ---
+第 63-77 行:
+```python
+    # 1. 進行內部參數標定
+    print(f"\n🎬 執行單相機內部標定... 影像解析度: {gray.shape[1]}x{gray.shape[0]}")
+    ret, mtx, dist, rvecs, tvecs = cv2.calibrateCamera(obj_points, img_points, (gray.shape[1], gray.shape[0]), None, None)
+    
+    # 計算每張影像的平均重投影誤差 (每個點的平均歐式距離，即 MAE)
+    total_error = 0
+    for i in range(len(obj_points)):
+        imgpts2, _ = cv2.projectPoints(obj_points[i], rvecs[i], tvecs[i], mtx, dist)
+        pts_diff = img_points[i].reshape(-1, 2) - imgpts2.reshape(-1, 2)
+        err = np.mean(np.linalg.norm(pts_diff, axis=1))
+        total_error += err
+    avg_error = total_error / len(obj_points)
+
+    print(f"📊 標定整體 RMS 重投影誤差 (OpenCV ret): {ret:.4f} pixels")
+    print(f"📊 平均每個角點的歐氏距離誤差 (MAE): {avg_error:.4f} pixels")
+```

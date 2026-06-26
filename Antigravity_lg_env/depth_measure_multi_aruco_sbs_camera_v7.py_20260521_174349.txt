@@ -1,0 +1,448 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-21T17:43:49
+
+--- 減少的部份 ---
+第 39-40 行:
+```python
+ENFORCE_COPLANAR      = True                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+```
+
+第 144 行:
+```python
+def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None):
+```
+
+第 151-155 行:
+```python
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (5, 5), (-1, -1), term)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (5, 5), (-1, -1), term)
+```
+
+第 170-174 行:
+```python
+    for mid in shared:
+        idxA, idxB = idsA_l.index(mid), idsB_l.index(mid)
+        cA_dict, cB_dict = {}, {}
+        for mid in shared:
+            idxA, idxB = idsA_l.index(mid), idsB_l.index(mid)
+            cA_dict[mid], cB_dict[mid] = cA[idxA][0], cB[idxB][0]
+            ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))
+            if ok:
+                R, _ = cv2.Rodrigues(rv)
+                objA.append((R @ canon.T).T + tv.T); imgB.append(cB[idxB][0])
+```
+
+第 194-197 行:
+```python
+    ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+    if not ok: return None
+    R_rel, _ = cv2.Rodrigues(rv_rel)
+    return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict
+```
+
+第 463 行:
+```python
+                    rad = 20; uei, vei = int(round(u_exp)), int(round(v_exp))
+```
+
+第 774 行:
+```python
+    auto_calc_active = False
+```
+
+第 776-785 行:
+```python
+    def on_auto_calc(event):
+        nonlocal auto_calc_active
+        auto_calc_active = not auto_calc_active
+        if auto_calc_active:
+            btn_auto_calc.label.set_text("連續計算: 開")
+            print("▶️ 開啟連續計算模式")
+        else:
+            btn_auto_calc.label.set_text("連續計算: 關")
+            print("⏸️ 關閉連續計算模式")
+        request_blit_refresh()
+```
+
+第 787-801 行:
+```python
+    def on_lock_L(event):
+        nonlocal live_L, locked_L, has_set_L
+        live_L = not live_L
+        if not live_L:
+            if len(frame_buffer) > 0:
+                locked_L = frame_buffer[-1].copy()
+                has_set_L = True
+                btn_lock_L.label.set_text("解鎖左圖")
+                print("🔒 左圖已鎖定當前畫面")
+                if has_set_R and not live_R:
+                    if not live_L:
+                        on_calc(None)
+        else:
+            btn_lock_L.label.set_text("鎖定左圖")
+            print("🔓 左圖恢復 Live")
+        request_blit_refresh()
+```
+
+第 803-817 行:
+```python
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                locked_R = frame_buffer[-1].copy()
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+                print("🔒 右圖已鎖定當前畫面")
+                if has_set_L and not live_L:
+                    if not live_L:
+                        on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            print("🔓 右圖恢復 Live")
+        request_blit_refresh()
+```
+
+第 846-917 行:
+```python
+    def calc_worker():
+        while True:
+            req = calc_request_q.get()
+            if req is None:   # 結束訊號
+                break
+            calc_busy.set()
+            try:
+                snap_imgA_gray = req['imgA_gray']
+                snap_cand      = req['cand']
+                snap_vs        = req['view_state']
+                u, v           = req['u'], req['v']
+
+                # ---------- ArUco 位姿解算 ----------
+                imgA_bgr_ = req['imgA_bgr']
+                imgB_bgr_ = req['imgB_bgr']
+                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+
+                res_pose = get_joint_relative_pose(snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM)
+                baseline_val = 0.0
+                pose_valid = False
+                pose_info = "未偵測到 ArUco"
+                R_r, t_r = None, None
+                cA_dict, cB_dict = {}, {}
+
+                if res_pose is not None:
+                    R_r, t_r, baseline_val, _, _, cA_dict, cB_dict = res_pose
+                    pose_valid = True
+                    direction = "向左" if t_r[0] > 0 else "向右"
+                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+                else:
+                    print("❌ 未偵測到共享 ArUco")
+
+                n_local, c_local = compute_global_plane(snap_imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+                if n_local is None:
+                    n_local, c_local = global_plane_n, global_plane_c
+                kb, db = sift.detectAndCompute(imgB_gray_, None)
+
+                # 更新 snap_cand
+                snap_cand = dict(snap_cand)
+                snap_cand.update({
+                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+                    'gray': imgB_gray_,
+                    'kpB': kb, 'desB': db,
+                    'plane_n': n_local, 'plane_c': c_local,
+                    'pose_info': pose_info, 'pose_valid': pose_valid,
+                    'baseline': baseline_val,
+                    'cornersA': cA_dict, 'cornersB': cB_dict
+                })
+                if pose_valid:
+                    snap_cand.update({
+                        'R_rel': R_r, 't_rel': t_r,
+                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+                    })
+
+                # ---------- 特徵匹配與深度計算 ----------
+                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs)
+
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+                    'baseline_val': baseline_val,
+                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
+                })
+            except Exception as e:
+                print(f"[calc_worker 錯誤] {e}")
+            finally:
+                calc_busy.clear()
+                calc_request_q.task_done()
+```
+
+--- 新增的部份 ---
+第 39-42 行:
+```python
+ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+ENABLE_POSE_SMOOTHING = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA  = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+```
+
+第 146 行:
+```python
+def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None):
+```
+
+第 153-157 行:
+```python
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (3, 3), (-1, -1), term)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (3, 3), (-1, -1), term)
+```
+
+第 172-192 行:
+```python
+    for mid in shared:
+        idxA, idxB = idsA_l.index(mid), idsB_l.index(mid)
+        cA_dict[mid], cB_dict[mid] = cA[idxA][0], cB[idxB][0]
+        
+        use_guess = False
+        rv_init, tv_init = None, None
+        if prev_marker_poses is not None and mid in prev_marker_poses:
+            rv_init = prev_marker_poses[mid][0].copy().astype(np.float32)
+            tv_init = prev_marker_poses[mid][1].copy().astype(np.float32)
+            use_guess = True
+            
+        if use_guess:
+            ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), rvec=rv_init, tvec=tv_init, useExtrinsicGuess=True)
+        else:
+            ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))
+            
+        if ok:
+            curr_marker_poses[mid] = (rv, tv)
+            R, _ = cv2.Rodrigues(rv)
+            objA.append((R @ canon.T).T + tv.T); imgB.append(cB[idxB][0])
+```
+
+第 210-221 行:
+```python
+    use_guess_rel = False
+    rv_rel_init, tv_rel_init = None, None
+    if prev_rel_pose is not None:
+        rv_rel_init = prev_rel_pose[0].copy().astype(np.float32)
+        tv_rel_init = prev_rel_pose[1].copy().astype(np.float32)
+        use_guess_rel = True
+
+    if use_guess_rel:
+        ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True)
+    else:
+        ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+        
+    if not ok: return None
+    R_rel, _ = cv2.Rodrigues(rv_rel)
+    return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel
+```
+
+第 489 行:
+```python
+                    rad = max(20, int(round(20 * (KL[0, 0] / 650.0)))); uei, vei = int(round(u_exp)), int(round(v_exp))
+```
+
+第 800-801 行:
+```python
+    auto_calc_active = False
+    reset_pose_history = True
+```
+
+第 803-814 行:
+```python
+    def on_auto_calc(event):
+        nonlocal auto_calc_active, reset_pose_history
+        auto_calc_active = not auto_calc_active
+        reset_pose_history = True
+        if auto_calc_active:
+            btn_auto_calc.label.set_text("連續計算: 開")
+            print("▶️ 開啟連續計算模式")
+        else:
+            btn_auto_calc.label.set_text("連續計算: 關")
+            print("⏸️ 關閉連續計算模式")
+        request_blit_refresh()
+```
+
+第 816-832 行:
+```python
+    def on_lock_L(event):
+        nonlocal live_L, locked_L, has_set_L, reset_pose_history
+        live_L = not live_L
+        reset_pose_history = True
+        if not live_L:
+            if len(frame_buffer) > 0:
+                locked_L = frame_buffer[-1].copy()
+                has_set_L = True
+                btn_lock_L.label.set_text("解鎖左圖")
+                print("🔒 左圖已鎖定當前畫面")
+                if has_set_R and not live_R:
+                    on_calc(None)
+        else:
+            btn_lock_L.label.set_text("鎖定左圖")
+            print("🔓 左圖恢復 Live")
+        request_blit_refresh()
+```
+
+第 834-850 行:
+```python
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R, reset_pose_history
+        live_R = not live_R
+        reset_pose_history = True
+        if not live_R:
+            if len(frame_buffer) > 0:
+                locked_R = frame_buffer[-1].copy()
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+                print("🔒 右圖已鎖定當前畫面")
+                if has_set_L and not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            print("🔓 右圖恢復 Live")
+        request_blit_refresh()
+```
+
+第 880-994 行:
+```python
+    def calc_worker():
+        nonlocal reset_pose_history
+        # 時序狀態變數，用來進行 Extrinsic Guess 初值約束與 EMA 平滑濾波
+        history_marker_poses = {}   # marker_id -> (rv, tv)
+        history_rel_pose = None     # (rv_rel, tv_rel)
+        
+        # EMA 平滑濾波歷史變數
+        filtered_rv_rel = None
+        filtered_tv_rel = None
+        
+        while True:
+            req = calc_request_q.get()
+            if req is None:   # 結束訊號
+                break
+            calc_busy.set()
+            try:
+                # 檢查是否需要重置時序歷史
+                if reset_pose_history:
+                    history_marker_poses.clear()
+                    history_rel_pose = None
+                    filtered_rv_rel = None
+                    filtered_tv_rel = None
+                    reset_pose_history = False
+                    print("🧹 時序位姿與平滑濾波歷史已重置")
+                    
+                snap_imgA_gray = req['imgA_gray']
+                snap_cand      = req['cand']
+                snap_vs        = req['view_state']
+                u, v           = req['u'], req['v']
+
+                # ---------- ArUco 位姿解算 ----------
+                imgA_bgr_ = req['imgA_bgr']
+                imgB_bgr_ = req['imgB_bgr']
+                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+
+                res_pose = get_joint_relative_pose(
+                    snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
+                    prev_marker_poses=history_marker_poses,
+                    prev_rel_pose=history_rel_pose
+                )
+                baseline_val = 0.0
+                pose_valid = False
+                pose_info = "未偵測到 ArUco"
+                R_r, t_r = None, None
+                cA_dict, cB_dict = {}, {}
+
+                if res_pose is not None:
+                    R_r, t_r, baseline_val, objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_r = res_pose
+                    pose_valid = True
+                    
+                    # 更新歷史標籤位姿
+                    history_marker_poses = curr_marker_poses
+                    
+                    # 進行時序 EMA 平滑濾波
+                    if ENABLE_POSE_SMOOTHING:
+                        if filtered_rv_rel is None or filtered_tv_rel is None:
+                            filtered_rv_rel = rv_r.copy()
+                            filtered_tv_rel = t_r.copy()
+                        else:
+                            alpha = POSE_SMOOTHING_ALPHA
+                            filtered_tv_rel = alpha * t_r + (1.0 - alpha) * filtered_tv_rel
+                            filtered_rv_rel = alpha * rv_r + (1.0 - alpha) * filtered_rv_rel
+                        
+                        # 覆蓋 R_r 與 t_r
+                        t_r = filtered_tv_rel.copy()
+                        rv_r_smooth = filtered_rv_rel.copy()
+                        R_r, _ = cv2.Rodrigues(rv_r_smooth)
+                        baseline_val = float(np.linalg.norm(t_r))
+                        
+                    # 更新歷史相對位姿供下一幀 extrinsic guess 使用
+                    if ENABLE_POSE_SMOOTHING:
+                        history_rel_pose = (filtered_rv_rel.copy(), filtered_tv_rel.copy())
+                    else:
+                        history_rel_pose = (rv_r.copy(), t_r.copy())
+                        
+                    direction = "向左" if t_r[0] > 0 else "向右"
+                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+                    
+                    # 🌟 修正平面擬合：直接以左圖單獨估出的 3D 點 objA 來進行平面擬合，避免依賴相對位姿，徹底切斷污染源
+                    if len(objA) >= 3:
+                        c_local = np.mean(objA, axis=0)
+                        _, _, Vt = np.linalg.svd(objA - c_local)
+                        n_local = Vt[-1]
+                        if np.dot(n_local, c_local) > 0: n_local = -n_local
+                    else:
+                        n_local, c_local = global_plane_n, global_plane_c
+                else:
+                    print("❌ 未偵測到共享 ArUco")
+                    n_local, c_local = global_plane_n, global_plane_c
+                    
+                kb, db = sift.detectAndCompute(imgB_gray_, None)
+
+                # 更新 snap_cand
+                snap_cand = dict(snap_cand)
+                snap_cand.update({
+                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+                    'gray': imgB_gray_,
+                    'kpB': kb, 'desB': db,
+                    'plane_n': n_local, 'plane_c': c_local,
+                    'pose_info': pose_info, 'pose_valid': pose_valid,
+                    'baseline': baseline_val,
+                    'cornersA': cA_dict, 'cornersB': cB_dict
+                })
+                if pose_valid:
+                    snap_cand.update({
+                        'R_rel': R_r, 't_rel': t_r,
+                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+                    })
+
+                # ---------- 特徵匹配與深度計算 ----------
+                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs)
+
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+                    'baseline_val': baseline_val,
+                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
+                })
+            except Exception as e:
+                print(f"[calc_worker 錯誤] {e}")
+            finally:
+                calc_busy.clear()
+                calc_request_q.task_done()
+```

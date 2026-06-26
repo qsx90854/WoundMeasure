@@ -1,0 +1,13 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T10:44:53
+
+[減少的部分]
+行 460 附近 (compute_measure 中的 SGBM 區塊):
+-                    rectA_s = cv2.remap(cand['gray'], map1_L_s, map2_L_s, cv2.INTER_LINEAR)
+-                    rectB_s = cv2.remap(img_right_inst, map1_R_s, map2_R_s, cv2.INTER_LINEAR)
+
+[新增的部分]
+行 460 附近 (compute_measure 中的 SGBM 區塊):
++                    rectA_s = cv2.remap(snap_imgA_gray, map1_L_s, map2_L_s, cv2.INTER_LINEAR)
++                    rectB_s = cv2.remap(img_R_gray, map1_R_s, map2_R_s, cv2.INTER_LINEAR)

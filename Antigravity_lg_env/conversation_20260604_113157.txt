@@ -1,0 +1,12 @@
+時間點: 2026-06-04T11:31:57+08:00
+
+使用者提問:
+請將depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py 做以下修改: 1.錄完影片進入算法UI時, 對比增強功能預設不開啟(就顯示原本的彩色圖); 2.如果有用自訂擬合平面, 原本顯示字串的第三行數字(跟Aruco標記的高度距離數值)就不顯示 3. 右圖預設隱藏, 且顯示數值用的框框區域往上抬高到UI中間
+
+助手回答:
+已為您完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 的三點修改：
+1. 將 `ENABLE_CLAHE_DEFAULT` 預設值設為 `False`，進入 UI 時即預設顯示原始彩色影像。
+2. 在測量文字 `main_text` 計算邏輯中，若 `custom_plane_fitted` 為 True，則主動省略顯示「傷口高度(相對於標記)」此文字行。
+3. 初始化時，將右圖所在的 `ax_B` 隱藏 (`ax_B.set_visible(False)`)，按鈕預設設為「顯示右圖」。並將測量數據黑框 (`depth_text`) 綁定到左圖的 `ax_A` 變換系上，且高度 Y 坐標抬高到正中間的 `0.45` 處，重繪時改由 `ax_A` 繪製，確保右圖隱藏時黑框仍常駐顯示。
+檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env` 中。
+請您手動重新執行程式以驗證修改。

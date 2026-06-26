@@ -1,0 +1,16 @@
+時間: 2026-05-13T13:53:49
+使用者請求:
+好 那就照你說的方法優化depth_measure_multi_aruco_sbs_camera_v7.py這個檔案
+
+回答訊息:
+已針對 `depth_measure_multi_aruco_sbs_camera_v7.py` 完成效能優化修改。
+
+### 修正內容：
+1. **瘦身 `on_calc`（主執行緒）**：
+   - 移除了 `process_view`（反畸變）與 `cv2.cvtColor`（轉灰階）等耗時運算。
+   - 現在主執行緒在觸發計算時，只負責抓取原始影像 `current_L_snap` 與 `locked_R`，並以 `raw_imgA` 與 `raw_imgB` 的名稱直接塞入 Queue。
+2. **增重 `calc_worker`（背景執行緒）**：
+   - 在背景執行緒收到 Request 後，第一時間才在背景進行 `process_view` 與轉灰階運算。
+   - 產出的 `imgA_bgr_`、`snap_imgA_gray` 等變數完美接軌後續的 SIFT 與 ArUco 運算。
+
+依據規則 3，我並未嘗試自己執行 Python 檔案。我也已經在專案底下的 `Antigravity_lg_env` 資料夾中建立了本次對話紀錄與程式碼差異備份檔。請您重新開啟該版本測試，預期在開啟「連續計算」時，Live 影像的流暢度會有顯著提升。

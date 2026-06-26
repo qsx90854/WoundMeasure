@@ -1,0 +1,28 @@
+時間: 2026-05-12T10:46:12
+使用者請求:
+目前的程式主要目的是找出左右圖對應的點 用三角測距算出深度資訊, 目前的方式是用影像中的ArUco圖案估計RT與baseline , 並在左鍵點擊一個點時, 參考周圍的資訊去右圖找到一個內插出來的匹配點, 根據目前程式碼, 有哪些優化深度準確率的建議嗎
+
+回答訊息:
+針對您目前「ArUco 估計外參 + 局部高梯度點 (Grad-SIFT) 匹配 + 幾何內插 + ECC 精修 + 極線約束」的精巧架構，以下提供幾個從數學幾何與演算法層面進一步提升深度準確率的優化建議：
+
+1. **將極線約束 (Epipolar Constraint) 提前至特徵篩選階段 (Pre-filtering)**
+   - **現狀**：程式目前是在算完 `m_pt`（內插出的匹配點）後，才強制將它投影到極線上（Post-correction）。
+   - **優化**：在 `bf.match` 算出 `good` 匹配點後，計算這些黃色/青色候選點到極線的**垂直距離**。剔除距離極線大於 1~2 pixel 的離群值，只用真正符合幾何限制的點去計算 `findHomography` 或 `estimateAffinePartial2D`。這樣內插出來的目標點會精準非常多。
+
+2. **升級 ArUco 姿態估計演算法 (Pose Optimization)**
+   - **現狀**：目前使用 OpenCV 預設的 `cv2.solvePnP` 來解算相機之間的 RT。預設方法在面對純共面（Planar）的標籤時，偶爾會有解的抖動（Ambiguity）。
+   - **優化**：在 `get_joint_relative_pose` 中，將 `cv2.solvePnP` 的參數加上 `flags=cv2.SOLVEPNP_SQPNP` 或 `cv2.SOLVEPNP_IPPE`。這兩種演算法對於共面特徵的抗噪能力更強，能讓 Baseline 與 RT 更加穩定。
+
+3. **立體校正 (Stereo Rectification) 降維打擊**
+   - **現狀**：程式直接在原始影像上使用 2D 範圍搜尋匹配點。
+   - **優化**：既然已經精確算出左右圖的 RT，可以先透過 `cv2.stereoRectify` 計算對齊矩陣，並對搜尋區域進行列對齊（Row-aligned）。這樣一來，尋找匹配點就會從「2D 搜尋」變成嚴格的「1D 水平線搜尋」，大幅降低誤判率，且能輕鬆使用拋物線擬合（Parabola Fitting）達到極高精度的次像素視差。
+
+4. **三角測距 (Triangulation) 的誤差最小化**
+   - **現狀**：使用 `cv2.triangulatePoints`，這是基於代數誤差（Algebraic Error）的直接線性轉換（DLT）解法。
+   - **優化**：DLT 雖然快，但在視差極小或存在雜訊時容易產生偏差。若要追求極致準確度，可以自己實作或引入「最佳三角化（Optimal Triangulation）」，透過迭代最小化**重投影幾何誤差（Reprojection Error）**來決定 3D 座標。
+
+5. **導入次像素 ZNCC (Zero-Normalized Cross-Correlation) 輔助**
+   - **現狀**：使用 ECC 做最後精修。ECC 在紋理明顯時極佳，但平滑或漸層區域容易發散。
+   - **優化**：當 ECC 報錯或失敗時，回退使用 ZNCC 在極線上進行 1D 的次像素滑動比對。ZNCC 對於光照變化（左右相機曝光不均）具有極強的抗性，通常能彌補 ECC 失敗時的空缺。
+
+（註：注意到您的專案名稱包含 `Lightglue`，若效能允許，直接將局部 Patch 交由 LightGlue 模型進行匹配，其神經網路內建的上下文感知能力與次像素精度，通常能直接超越傳統 SIFT 匹配的極限。）

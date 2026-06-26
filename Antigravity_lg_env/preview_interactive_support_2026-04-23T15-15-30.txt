@@ -1,0 +1,8 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-23 15:15:30
+
+【UI 交互優化】新增特徵預覽模式之縮放與拖曳功能
+內容：
+1. **擴充事件監聽**：更新了 `on_press`、`on_release` 與 `on_scroll` 函式，將新建立的 `ax_sift_match` (SIFT 預覽) 與原本的 `ax_match` (LightGlue 預覽) 納入交互範圍。
+2. **操作體驗**：現在使用者進入「看原始 SIFT 連線」或「看 LightGlue 連線」模式後，可以如同量測模式一般，使用滑鼠滾輪進行縮放，或按住左鍵進行拖曳。
+原因：回應使用者反映預覽模式無法操作的問題，提升在大數據量特徵點下的檢視細節能力。

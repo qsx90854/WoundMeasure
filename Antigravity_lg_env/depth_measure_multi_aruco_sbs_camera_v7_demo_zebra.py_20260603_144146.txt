@@ -1,0 +1,47 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-03T14:41:46+08:00
+
+說明：
+在影片離線分析 `select_mode = "reproj_min"` 時，加入尋找重投影誤差最大（最差）的圖片對，並在分析結束後，將最優與最差對的影像畫上觀測的 ArUco 框（青色）與重投影的框（紅色），存成 PNG 檔。
+
+--------------------------------------------------
+[新增] 行 438 - 495 (嵌套函數定義 save_debug_pair_images)
+--------------------------------------------------
++    def save_debug_pair_images(item_s, item_e, suffix):
++        img_A = frames[item_s['idx']].copy()
++        img_B = frames[item_e['idx']].copy()
++        ...
++        cv2.imwrite(os.path.join(save_dir, f"frame_A_{suffix}.png"), img_A)
++        cv2.imwrite(os.path.join(save_dir, f"frame_B_{suffix}.png"), img_B)
++        log_and_print(f"✅ 儲存偵錯對圖片至: {save_dir}/frame_A_{suffix}.png 與 frame_B_{suffix}.png")
+
+--------------------------------------------------
+[修改] 行 640 - 670 (reproj_min 篩選邏輯，加入 worst_pair 篩選與存檔呼叫)
+--------------------------------------------------
+     elif select_mode == "reproj_min":
+         best_pair = None
+         min_reproj_err = float('inf')
++        worst_pair = None
++        max_reproj_err = -1.0
+         
+         for item_s in valid_start:
+             for item_e in valid_end:
+@@ -596,6 +596,9 @@
+                     if err < min_reproj_err:
+                         min_reproj_err = err
+                         best_pair = (item_s, item_e, R_rel_cand, t_rel_cand, bsl)
++                    if err != float('inf') and err > max_reproj_err:
++                        max_reproj_err = err
++                        worst_pair = (item_s, item_e, R_rel_cand, t_rel_cand, bsl)
+                         
+         if best_pair is None:
+             log_and_print("⚠️ [Reproj Min] 未找到合法的候選對，降級使用首幀與尾幀")
+@@ -606,6 +606,11 @@
+         else:
+             best_start, best_end, R_rel, t_rel, baseline = best_pair
+             log_and_print(f"✅ [Reproj Min] 挑選出雙向重投影誤差最小的配對，預估平均誤差為: {min_reproj_err:.2f} px")
++            save_debug_pair_images(best_start, best_end, "best")
++            if worst_pair is not None:
++                worst_start, worst_end, _, _, worst_bsl = worst_pair
++                log_and_print(f"✅ [Debug] 挑選出雙向重投影誤差最大的最差配對 (idx_A: {worst_start['idx']}, idx_B: {worst_end['idx']})，預估平均誤差為: {max_reproj_err:.2f} px，Baseline: {worst_bsl:.2f} mm")
++                save_debug_pair_images(worst_start, worst_end, "worst")

@@ -1,0 +1,15 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T16-04-13
+
+[減少的部分]
+無
+
+[新增的部分]
+行 663 附近 (在 on_lock_L 中):
++                if has_set_R and not live_R:
++                    on_calc(None)
+
+行 676 附近 (在 on_lock_R 中):
++                if has_set_L and not live_L:
++                    on_calc(None)

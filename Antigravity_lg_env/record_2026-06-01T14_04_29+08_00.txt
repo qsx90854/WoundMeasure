@@ -1,0 +1,16 @@
+對話時間：2026-06-01T14:04:29+08:00
+
+使用者提問：
+我跑camera_calibrate.py會跑出 📊 平均每個角點的歐氏距離誤差 (MAE): 0.3431 pixels
+Traceback (most recent call last):
+  File "D:\Lightglue\lg_env\camera_calibrate.py", line 110, in <module>
+    calibrate()
+  File "D:\Lightglue\lg_env\camera_calibrate.py", line 105, in calibrate
+    json.dump(result, f, indent=4, ensure_ascii=False)
+  ...
+TypeError: Object of type float32 is not JSON serializable
+
+回答內容：
+此錯誤原因在於 OpenCV 標定計算出的 avg_error 類型為 `numpy.float32`，而在 Python 的 `json.dump` 序列化時不支援 NumPy 的資料型態。
+已將 `camera_calibrate.py` 中寫入 JSON 字典的 `reprojection_error` 欄位值修改為 `float(avg_error)`，強制將其轉換為 Python 內建的 float 類型，即可正常進行序列化。
+由於使用者規則限制，此處不會嘗試執行此 Python 檔案。請您重新執行以驗證是否已排除錯誤。

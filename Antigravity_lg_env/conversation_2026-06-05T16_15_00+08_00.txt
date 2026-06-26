@@ -1,0 +1,11 @@
+對話時間點：2026-06-05T16:15:00+08:00
+專案名稱：lg_env
+對話紀錄：
+
+使用者指出了 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 檔案中在拖曳機制修改後大段重複、語法移位與錯位的現象，要求清除損壞的冗餘程式碼。
+
+模型處理方案：
+1. 深入分析 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 檔案中 2160 行至 2550 行的代碼結構，精確圈定發生重複的起止位置。
+2. 以小範圍精確匹配方式（分四次 replace），依次刪除了 2390 行至 2516 行的舊 `do_measure` 變數、舊 `on_press`、`on_release` 及 `on_motion` 重複函數體。
+3. 成功消除所有 python 語法錯誤（syntax error），並保留了最新且可跨 axes 流暢拖曳的 Figure 座標系 HUD 拖曳邏輯。
+4. 嚴格遵守全域規則，未使用 terminal 執行 Python 程式，在專案的 Antigravity_lg_env 目錄下完成了對話日誌與檔案修改日誌的雙重備份。

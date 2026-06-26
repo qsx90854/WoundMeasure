@@ -1,0 +1,26 @@
+時間點: 2026-04-17T13:56:52+08:00
+
+【減少的部份】
+刪除舊有的 `on_click(event)` 事件與其直接綁定邏輯：
+    def on_click(event):
+        # 舊測量邏輯...
+    fig.canvas.mpl_connect('button_press_event', on_click)
+刪除舊列印訊息：
+    print("\n✅ UI 已開啟，在左圖任意點擊以量測深度。滑鼠滾輪可進行縮放。關閉視窗結束程式。")
+
+【新增的部份】
+加入了 CheckButtons 的 UI 與 `update_plane` 的更新機制：
+    from matplotlib.widgets import CheckButtons
+    ax_check = fig.add_axes([0.01, 0.7, 0.08, min(0.05 * len(shared_ids), 0.25)])
+    check = CheckButtons(ax_check, check_labels, [True] * len(shared_ids))
+    def update_plane(label=None): ...
+
+加入了拖曳平移的狀態機邏輯：
+    pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False}
+    def on_press(event): ...
+    def on_release(event): ...
+    def on_motion(event): ...
+將原本在 on_click 的量測邏輯包裝進獨立的 `do_measure` 函式。
+
+加入了新的訊息提示：
+    print("\n✅ UI 已開啟：\n  - 左鍵點擊：量測深度\n  - 左鍵拖曳：平移畫布\n  - 滾輪：縮放畫布\n  - 左上角：勾選參與基準平面計算的 ArUco\n關閉視窗結束程式。")

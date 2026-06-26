@@ -1,0 +1,28 @@
+時間: 2026-05-11T16:52:58
+使用者請求:
+門檻調大還是沒有, 請確認相關程式碼的變數型態是不是有問題
+
+回答訊息:
+經過詳細分析您提供的程式碼片段，變數型態（影像為 `uint8`，描述子為對應的矩陣）並沒有問題，但我發現了一個嚴重的**邏輯與縮進（Indentation）錯誤**，這才是導致 `NORM_HAMMING` 模式下永遠顯示「無匹配點」的真正原因！
+
+問題分析：
+請觀察您貼出的程式碼第 446 行到第 456 行：
+```python
+446:                         if snap_view_state.get('use_hamming', False):
+...
+450:                             good = [m for m in matches if m.distance < 100]
+451:                         else:
+...
+455:                             good = [m for m in matches if m.distance < 450]
+456:                             pts_info = []
+457:                             for m in good:
+...
+```
+在第 451 行的 `else`（SIFT 模式）之後，第 456 行的 `pts_info = []` 以及後續遍歷 `good` 匹配點的迴圈，**全都被縮進到了 `else` 區塊裡面**！
+
+這導致：
+1. 當您啟用 `NORM_HAMMING` 時，程式走 `if` 分支，算出了 `good`，但**完全沒有執行**後續將匹配點存入 `pts_info` 的動作。
+2. 程式往下走時，`pts_info` 依然是空的，所以最後必定判定為「無匹配點」。
+
+解決方案：
+必須將第 456 行開始的 `pts_info = []` 以及後續的 `for m in good:` 迴圈，**向左縮進一個層級**，讓它獨立於 `if-else` 之外，這樣不論是 ORB 還是 SIFT 算出來的 `good`，都能正確被處理。

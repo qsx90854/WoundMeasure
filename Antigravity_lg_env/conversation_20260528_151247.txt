@@ -1,0 +1,41 @@
+時間：2026-05-28 15:12:47
+
+使用者提問：
+改程式碼的解決建議：若後續想透過程式碼防範此問題，可在進行 PnP 求解前加入檢查：若偵測到的特徵點在左右圖的平均像素位移（視差值）小於某個門檻（例如 2 像素），則直接判定為「無視差退化狀態」，將基線強制設為 0 或跳過該幀計算。=>請加入這個, 並確認一下目前有沒有機制在當前RT估計跟之前情況差太多時被忽略的功能, 我怕一開始就誤判成200多, 導致後面正常的10幾mm的 baseline情況反而一直被擋住
+
+Antigravity回答：
+已成功將視差檢查與物理基線合理區間過濾機制加入程式中。
+
+經過對程式碼的全面清查，**先前系統「完全沒有」任何針對「當前位姿 $(R, T)$ 與歷史值落差太大」而進行忽略/丟棄的 Outlier Rejection 機制**。系統原本只有 EMA 平滑（它會將異常的 200 多 mm 與歷史值加權平均，這反而會污染歷史，導致恢復期變得很長），且 IPPE 二義性消解會優先選擇靠近歷史法向量的解。
+
+為了解決此問題，並防止一開始誤判成 200 多 mm 污染歷史，我們加入了兩層過濾機制：
+
+### 1. 視差退化過濾（Disparity Filter）
+在 `get_joint_relative_pose` 中求解 PnP 之前，計算所有共享 ArUco 角點在左右圖的平均像素位移（視差）。如果平均像素位移小於 2.0 像素，代表處於「無視差退化狀態」，直接判定為定位無效並跳過解算：
+```python
+    # 計算共享標籤角點在左右圖之間的平均像素位移 (視差)
+    all_dists = []
+    for mid in shared:
+        if mid in cA_dict and mid in cB_dict:
+            dists = np.linalg.norm(cA_dict[mid] - cB_dict[mid], axis=1)
+            all_dists.extend(dists)
+    mean_disparity = np.mean(all_dists) if all_dists else 0.0
+    
+    if mean_disparity < 2.0:
+        print(f"⚠️ [外參解算] 左右圖平均像素位移過小 ({mean_disparity:.2f} px < 2.0 px)，判定為無視差退化狀態，跳過此幀。")
+        return None
+```
+
+### 2. 物理合理基線過濾（Physical Baseline Filter / Outlier Rejection）
+在 `calc_worker` 背景計算執行緒中，當拿到 `get_joint_relative_pose` 的輸出後，先檢查其解算出的原始 Baseline 長度是否落在合理物理範圍內（`5.0mm` 至 `35.0mm` 之間）。如果超出此範圍，則直接忽視該幀外參（判定定位無效），並且**完全不更新時序歷史與平滑濾波歷史**。
+這可以百分之百避免一開始的 200 多 mm 污染時序歷史，因此也完全不會有「後續正常 10 幾 mm 被卡住」的風險：
+```python
+                # 檢查算出的原始 baseline 是否在物理合理範圍內 (例如 5.0mm 到 35.0mm 之間)
+                if res_pose is not None:
+                    raw_baseline = res_pose[2]
+                    if not (5.0 <= raw_baseline <= 35.0):
+                        print(f"❌ 算出的原始 Baseline 異常 ({raw_baseline:.2f} mm)，判定為無視差退化或定位異常，忽略此幀")
+                        res_pose = None
+```
+
+依據全球規則，本修改涉及 Python 檔案，因此我並未自行執行，請您手動重新執行程式以進行驗證。

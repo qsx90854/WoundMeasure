@@ -1,0 +1,13 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-21 14:50:20
+
+【新增/恢復】
+行數：140 ~ 211
+內容：
+還原了完整的 get_joint_relative_pose 實作，包含 cv2.aruco.detectMarkers、強制共面優化 (ENFORCE_COPLANAR) 以及聯立的 Joint solvePnP。
+
+【修改】
+行數：408 ~ 410
+內容：
+將呼叫 get_joint_relative_pose 的引數還原為：
+res = get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, ACTUAL_MARKER_SIZE_MM, active_ids=active_ids)

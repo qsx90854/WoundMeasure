@@ -1,0 +1,5 @@
+時間：2026-05-18T16:45:26
+對話：
+User: 請給一個程式, Measure_SIFT.py, 功能為開啟相機之後live將sift算子偵測到的pixel標註在圖片上並顯示出來
+Antigravity:
+已經為您撰寫了全新的 `Measure_SIFT.py` 腳本。程式使用 OpenCV 的 `VideoCapture` 讀取相機影像，並即時轉換為灰階丟入 `cv2.SIFT_create().detect()` 進行特徵點抓取。為了確保高 FPS 流暢度，程式在抓取時僅求出 Keypoints 而不會計算冗長的 Descriptors，最後利用 `cv2.drawKeypoints` 即時將點畫在彩圖上並呈現總數量。

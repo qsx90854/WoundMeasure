@@ -1,0 +1,20 @@
+修改時間: 2026-06-01T16:08:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (約原 L732 - L780):
+-    video_data = analyze_video_frames(VIDEO_PATH, STAR    candidates = [current_cand]Uco 多影格平均 (Bsl: {video_data['baseline']:.1f}mm)" if POSE_SELECT_MODE=="average" else f"ArUco 最優對 (Bsl: {video_data['baseline']:.1f}mm)"
+-    }
+-    # 計算右圖的 SIFT 特徵
+-    kb, db = sift.detectAndCompute(current_cand['gray'], None)
+-    current_cand.update({'kpB': kb, 'desB': db})
+-    candidates = [current_cand], mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
+-    ... (重複之相機參數 setup) ...
+-    candidates = [current_cand]
+
+新增的部份 (約新 L732 - L784):
++    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE)
++    if video_data is None:
++        print("❌ 影片 Pose 分析失敗，無法啟動測量工具")
++        sys.exit(1)
++    ... (優化後的 video_data 設定、去畸變 left/right img、建立單一 candidates 列表) ...
++    candidates = [current_cand]

@@ -1,0 +1,11 @@
+對話時間: 2026-06-02T11:12:30+08:00
+
+本次對話與回答摘要：
+1. 解決了「複驗用的橘色 rect 和紫色 rect 出現一瞬間就消失」的問題。
+2. 根本原因：
+   - 系統採用了 Matplotlib Blit（雙快取快顯）繪圖機制。
+   - `draw_reprojected_aruco` 創建的反投影框 artists 儲存在了 `ax.reproj_art` 下，而測量點反投影點 `scatter_B_reproj` 也是動態更新。
+   - 然而，主迴圈的 Blit 渲染路徑中，未對 `ax.reproj_art` 的 artists 和 `scatter_B_reproj` 調用 `draw_artist`。因此它們只在啟動時或重繪的第一影格出現，在隨後恢復背景（`restore_region`）時，就被靜態背景覆蓋且沒有重新疊加繪製，導致肉眼看起來像「閃爍一下就消失」。
+3. 修正措施：
+   - 在主渲染迴圈的 `draw_artist` 更新流程中，為 `scatter_B_reproj` 和 `reproj_art` 補上了專屬的 `draw_artist` 渲染調用。這確保了它們在 Blit 每幀刷新時都會在前景正常被畫出來，不再會消失。
+4. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_11_00+08_00.txt。

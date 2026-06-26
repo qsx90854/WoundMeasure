@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <style>
+      .page { fill: #f4f7fb; }
+      .panel { fill: #ffffff; stroke: #dbe4ef; stroke-width: 2; }
+      .title { font: 700 42px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #172033; }
+      .subtitle { font: 500 20px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #5c6878; }
+      .section { font: 700 28px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #1b2738; }
+      .step-title { font: 700 24px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #182438; }
+      .body { font: 500 18px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #4f5d6f; }
+      .small { font: 500 16px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #667487; }
+      .factor-title { font: 700 20px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #192538; }
+      .factor-body { font: 500 17px "Microsoft JhengHei", "Noto Sans TC", Arial, sans-serif; fill: #536273; }
+      .num { font: 700 18px Arial, sans-serif; fill: #ffffff; }
+      .formula { font: 700 22px Consolas, "Microsoft JhengHei", monospace; fill: #223046; }
+      .line { stroke: #b7c4d4; stroke-width: 4; stroke-linecap: round; }
+      .arrow { fill: none; stroke: #566a82; stroke-width: 4; marker-end: url(#arrow); }
+      .card { fill: #ffffff; stroke-width: 2.5; }
+      .factor { fill: #ffffff; stroke: #d7e0eb; stroke-width: 2; }
+      .blue { stroke: #78a8e8; }
+      .teal { stroke: #69bfb6; }
+      .gold { stroke: #e1b451; }
+      .red { stroke: #df8277; }
+      .purple { stroke: #9a82ce; }
+      .slate { stroke: #7e98a0; }
+    </style>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="9" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#566a82"/>
+    </marker>
+  </defs>
+
+  <rect class="page" width="1600" height="1000"/>
+  <rect class="panel" x="44" y="36" width="1512" height="928" rx="28"/>
+
+  <text class="title" x="82" y="94">相機外參計算流程與準確率影響因素</text>
+  <text class="subtitle" x="84" y="132">外參代表相機與世界座標或另一台相機之間的旋轉 R 與平移 t。</text>
+
+  <text class="section" x="90" y="196">計算流程</text>
+  <text class="section" x="890" y="196">準確率影響因素</text>
+
+  <line x1="820" y1="168" x2="820" y2="888" stroke="#e1e7ef" stroke-width="2"/>
+
+  <g transform="translate(90 232)">
+    <line class="line" x1="36" y1="56" x2="36" y2="628"/>
+
+    <g transform="translate(0 0)">
+      <rect class="card blue" x="0" y="0" width="700" height="112" rx="16"/>
+      <circle cx="36" cy="56" r="24" fill="#2d6eb7"/>
+      <text class="num" x="31" y="63">1</text>
+      <text class="step-title" x="76" y="38">取得輸入資料</text>
+      <text class="body" x="76" y="68">影像、內參 K、畸變參數</text>
+      <text class="body" x="76" y="94">標定板尺寸或 3D 世界座標點</text>
+    </g>
+
+    <path class="arrow" d="M350 122 L350 156"/>
+
+    <g transform="translate(0 166)">
+      <rect class="card teal" x="0" y="0" width="700" height="112" rx="16"/>
+      <circle cx="36" cy="56" r="24" fill="#178a7f"/>
+      <text class="num" x="31" y="63">2</text>
+      <text class="step-title" x="76" y="38">偵測特徵並建立對應</text>
+      <text class="body" x="76" y="68">角點、ArUco、棋盤格或影像特徵</text>
+      <text class="body" x="76" y="94">建立 2D ↔ 3D 或 2D ↔ 2D 對應</text>
+    </g>
+
+    <path class="arrow" d="M350 288 L350 322"/>
+
+    <g transform="translate(0 332)">
+      <rect class="card gold" x="0" y="0" width="700" height="112" rx="16"/>
+      <circle cx="36" cy="56" r="24" fill="#b78115"/>
+      <text class="num" x="31" y="63">3</text>
+      <text class="step-title" x="76" y="38">求解初始姿態</text>
+      <text class="body" x="76" y="68">單相機常用 PnP / solvePnP</text>
+      <text class="body" x="76" y="94">雙相機常用 E 矩陣或 stereoCalibrate</text>
+    </g>
+
+    <path class="arrow" d="M350 454 L350 488"/>
+
+    <g transform="translate(0 498)">
+      <rect class="card red" x="0" y="0" width="700" height="112" rx="16"/>
+      <circle cx="36" cy="56" r="24" fill="#bf5149"/>
+      <text class="num" x="31" y="63">4</text>
+      <text class="step-title" x="76" y="38">最佳化與濾除離群點</text>
+      <text class="body" x="76" y="68">最小化重投影誤差</text>
+      <text class="body" x="76" y="94">搭配 RANSAC 或 Bundle Adjustment</text>
+    </g>
+
+    <path class="arrow" d="M350 620 L350 654"/>
+
+    <g transform="translate(0 664)">
+      <rect class="card blue" x="0" y="0" width="700" height="126" rx="16"/>
+      <circle cx="36" cy="63" r="24" fill="#2d6eb7"/>
+      <text class="num" x="31" y="70">5</text>
+      <text class="step-title" x="76" y="39">輸出並驗證外參</text>
+      <text class="body" x="76" y="69">得到旋轉 R、平移 t、基線與座標方向</text>
+      <text class="formula" x="76" y="104">X_camera = R · X_world + t</text>
+    </g>
+  </g>
+
+  <g transform="translate(890 232)">
+    <g transform="translate(0 0)">
+      <rect class="factor blue" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">影像品質</text>
+      <text class="factor-body" x="24" y="70">清晰度、曝光、解析度</text>
+      <text class="factor-body" x="24" y="98">雜訊與動態模糊</text>
+      <text class="small" x="24" y="126">會影響角點定位。</text>
+    </g>
+
+    <g transform="translate(330 0)">
+      <rect class="factor teal" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">標定物品質</text>
+      <text class="factor-body" x="24" y="70">尺寸是否準確</text>
+      <text class="factor-body" x="24" y="98">平面是否平整</text>
+      <text class="small" x="24" y="126">會影響 t 的尺度。</text>
+    </g>
+
+    <g transform="translate(0 174)">
+      <rect class="factor gold" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">內參與畸變</text>
+      <text class="factor-body" x="24" y="70">焦距、主點、畸變係數</text>
+      <text class="factor-body" x="24" y="98">校正不準會傳到外參</text>
+      <text class="small" x="24" y="126">邊緣誤差常特別明顯。</text>
+    </g>
+
+    <g transform="translate(330 174)">
+      <rect class="factor red" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">拍攝幾何</text>
+      <text class="factor-body" x="24" y="70">距離、視角、基線</text>
+      <text class="factor-body" x="24" y="98">姿態要有足夠變化</text>
+      <text class="small" x="24" y="126">角度太單一會不穩。</text>
+    </g>
+
+    <g transform="translate(0 348)">
+      <rect class="factor purple" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">對應點品質</text>
+      <text class="factor-body" x="24" y="70">誤匹配與離群點</text>
+      <text class="factor-body" x="24" y="98">亞像素角點精度</text>
+      <text class="small" x="24" y="126">會直接拉歪 R / t。</text>
+    </g>
+
+    <g transform="translate(330 348)">
+      <rect class="factor slate" x="0" y="0" width="300" height="144" rx="16"/>
+      <text class="factor-title" x="24" y="38">環境穩定</text>
+      <text class="factor-body" x="24" y="70">相機固定、同步</text>
+      <text class="factor-body" x="24" y="98">光源穩定、無晃動</text>
+      <text class="small" x="24" y="126">避免每張圖外參漂移。</text>
+    </g>
+
+    <g transform="translate(0 542)">
+      <rect x="0" y="0" width="630" height="184" rx="18" fill="#eef4fa" stroke="#d8e2ed" stroke-width="2"/>
+      <text class="factor-title" x="28" y="42">建議檢查指標</text>
+      <text class="factor-body" x="28" y="78">1. 平均重投影誤差是否合理</text>
+      <text class="factor-body" x="28" y="112">2. 誤差是否集中在影像邊緣或某些姿態</text>
+      <text class="factor-body" x="28" y="146">3. 三角化尺度、座標軸方向與實測距離是否一致</text>
+    </g>
+  </g>
+</svg>

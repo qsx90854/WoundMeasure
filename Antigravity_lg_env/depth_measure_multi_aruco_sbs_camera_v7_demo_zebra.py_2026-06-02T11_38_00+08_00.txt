@@ -1,0 +1,75 @@
+修改時間: 2026-06-02T11:38:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L27 - L35):
+-POSE_SELECT_MODE      = "average"                  # "average" (平均姿態去噪) 或 "best_pair"
+(約原 L418 - L451):
+-(無 compute_pair_reprojection_error 函數與 reproj_min 選擇邏輯)
+
+新增的部份:
+(約新 L27 - L35):
++POSE_SELECT_MODE      = "reproj_min"               # "reproj_min" (最小重投影誤差), "average" (平均姿態去噪) 或 "best_pair"
+(約新 L416 - L515):
++    def compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L):
++        corners_s = item_s['corners']
++        corners_e = item_e['corners']
++        R_s, t_s = item_s['R'], item_s['t']
++        R_e, t_e = item_e['R'], item_e['t']
++        R_rel = R_s @ R_e.T
++        t_rel = t_s - R_rel @ t_e
++        R_rel_back = R_rel.T
++        t_rel_back = -R_rel.T @ t_rel
++        shared_mids = set(corners_s.keys()).intersection(set(corners_e.keys()))
++        if not shared_mids:
++            return float('inf')
++        errors = []
++        for mid in shared_mids:
++            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_e[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
++            if not ok_init: continue
++            R_i, _ = cv2.Rodrigues(rv_i)
++            P_e = (R_i @ canon.T).T + tv_i.T
++            P_s_proj = (R_rel @ P_e.T).T + t_rel.T
++            pts_s_proj, _ = cv2.projectPoints(P_s_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
++            pts_s_proj = pts_s_proj.reshape(4, 2)
++            err = np.linalg.norm(pts_s_proj - corners_s[mid], axis=1)
++            errors.extend(err)
++        for mid in shared_mids:
++            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_s[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
++            if not ok_init: continue
++            R_i, _ = cv2.Rodrigues(rv_i)
++            P_s = (R_i @ canon.T).T + tv_i.T
++            P_e_proj = (R_rel_back @ P_s.T).T + t_rel_back.T
++            pts_e_proj, _ = cv2.projectPoints(P_e_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
++            pts_e_proj = pts_e_proj.reshape(4, 2)
++            err = np.linalg.norm(pts_e_proj - corners_e[mid], axis=1)
++            errors.extend(err)
++        if not errors:
++            return float('inf')
++        return np.mean(errors)
+...
++    elif select_mode == "reproj_min":
++        best_pair = None
++        min_reproj_err = float('inf')
++        for item_s in valid_start:
++            for item_e in valid_end:
++                R_s, t_s = item_s['R'], item_s['t']
++                R_e, t_e = item_e['R'], item_e['t']
++                R_rel_cand = R_s @ R_e.T
++                t_rel_cand = t_s - R_rel_cand @ t_e
++                bsl = float(np.linalg.norm(t_rel_cand))
++                if 5.0 <= bsl <= 35.0:
++                    err = compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L)
++                    if err < min_reproj_err:
++                        min_reproj_err = err
++                        best_pair = (item_s, item_e, R_rel_cand, t_rel_cand, bsl)
++        if best_pair is None:
++            print("⚠️ [Reproj Min] 未找到合法的候選對，降級使用首幀與尾幀")
++            best_start = valid_start[0]
++            best_end = valid_end[-1]
++            R_rel = best_start['R'] @ best_end['R'].T
++            t_rel = best_start['t'] - R_rel @ best_end['t']
++            baseline = float(np.linalg.norm(t_rel))
++        else:
++            best_start, best_end, R_rel, t_rel, baseline = best_pair
++            print(f"✅ [Reproj Min] 挑選出雙向重投影誤差最小的配對，預估平均誤差為: {min_reproj_err:.2f} px")

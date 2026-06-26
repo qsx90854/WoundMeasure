@@ -1,0 +1,11 @@
+時間點: 2026-04-20T14:33:37+08:00
+
+【新增的部份】
+1. 新增檔案 `d:\Lightglue\lg_env\stereo_calibrate.py`：
+   - 實作了 side-by-side 影像讀取與 `img[:, :w//2]`, `img[:, w//2:]` 切割邏輯。
+   - 實作了雙相機各自的 `cv2.calibrateCamera` 流程。
+   - 實作了基於 `cv2.projectPoints` 的重投影誤差計算。
+   - 實作了篩選 `errors.sort()` 前 5 名最佳影像的功能。
+   - 實作了 `cv2.stereoCalibrate` 獲取 `R, T, E, F` 外參。
+   - 實作了 JSON 序列化封裝與檔案輸出。
+   - 加入了 Sub-pixel 角點精煉 (`cv2.cornerSubPix`) 以提升標定精度。

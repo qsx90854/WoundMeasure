@@ -1,0 +1,10 @@
+修改檔案：d:\Lightglue\lg_env\camera_calibrate.py
+修改時間：2026-06-01T14:04:29+08:00
+
+--- 減少的部份 ---
+行號 82:
+        "reprojection_error": avg_error,
+
+--- 新增的部份 ---
+行號 82:
+        "reprojection_error": float(avg_error),

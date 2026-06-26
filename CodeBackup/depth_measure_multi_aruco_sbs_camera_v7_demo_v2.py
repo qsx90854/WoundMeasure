@@ -1,0 +1,1322 @@
+"""
+depth_measure_multi_aruco_sbs_camera.py
+================
+互動式深度量測工具 (SBS 併排影片 + JSON 標定參數版本)。
+
+特點：
+- 支援影片輸入，可指定左圖幀與多個右圖候選幀
+- 整合 JSON 標定參數，支援左右相機不對稱的內參與畸變修正
+- 雙內參精確幾何：三角測距、單應性映射與基本矩陣均使用獨立的 KL/KR
+- 多幀平均量測：點擊左圖後同時計算所有候選幀深度並平均
+- 採用 Grad-SIFT 匹配演算法
+- 動態 UI：提供右圖候選幀切換選單與匹配狀態切換
+"""
+
+import os, sys, glob, json, threading, queue
+import numpy as np
+import cv2
+import matplotlib
+matplotlib.use("TkAgg")
+import matplotlib.pyplot as plt
+plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'PingFang HK', 'SimHei', 'Arial Unicode MS', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False
+from matplotlib.patches import ConnectionPatch, Rectangle
+from matplotlib.widgets import RadioButtons, Button, CheckButtons
+import onnxruntime as ort
+
+# ==================== 全局設定區 ====================
+CAMERA_INDEX          = 1                          # 相機索引
+FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+UPDATE_INTERVAL       = 0.0                     # 畫面更新與計算間隔 (秒)
+CAMERA_WIDTH          = 1920                       # 相機解析度寬
+CAMERA_HEIGHT         = 1080                        # 相機解析度高
+CAMERA_FPS            = 30                          # 相機 FPS
+
+
+PARAMS_JSON_PATH      = "calibration_result_c2.json"  # 標定參數 JSON 檔路徑
+ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
+TARGET_W              = 1024                       # 統一縮放寬度
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+ENFORCE_COPLANAR      = False                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+
+
+# ===================================================
+
+def load_json_camera_params(json_path):
+    if not os.path.exists(json_path):
+        print(f"❌ 找不到參數檔案: {json_path}"); return None, None, None, None, None, None
+    with open(json_path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    mtx_L = np.array(data['intrinsic_L']['matrix'], dtype=np.float32)
+    dist_L = np.zeros(5, dtype=np.float32)
+    mtx_R = np.array(data['intrinsic_R']['matrix'], dtype=np.float32)
+    dist_R = np.zeros(5, dtype=np.float32)
+    extrinsic = data.get('extrinsic', {})
+    R_rel = np.array(extrinsic.get('R', np.eye(3)))
+    t_rel = np.array(extrinsic.get('T', np.zeros(3))).reshape(3, 1)
+    F_orig = np.array(extrinsic.get('F')) if 'F' in extrinsic else None
+
+    # forvideo,勿修改
+    mtx_R = mtx_L
+    dist_R = dist_L
+
+    return mtx_L, dist_L, mtx_R, dist_R, extrinsic, F_orig
+
+def compute_fundamental_matrix(K_L, K_R, R_rel, t_rel):
+    t = t_rel.flatten()
+    tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]], dtype=np.float64)
+    E = tx @ R_rel
+    K_R_inv, K_L_inv = np.linalg.inv(K_R.astype(np.float64)), np.linalg.inv(K_L.astype(np.float64))
+    return K_R_inv.T @ E @ K_L_inv
+
+def triangulate_point_3d(pt_A, pt_B, K_L, K_R, R_rel, t_rel):
+    P0 = (K_L.astype(np.float64) @ np.hstack([np.eye(3), np.zeros((3, 1))])).astype(np.float32)
+    P1 = (K_R.astype(np.float64) @ np.hstack([R_rel, t_rel])).astype(np.float32)
+    # 強制使用 float32，避免 OpenCV 在處理整數點陣列時發生隱性記憶體錯亂 (計算出極端錯誤的負深度)
+    ptsA_f32 = np.array([[pt_A[0]], [pt_A[1]]], dtype=np.float32)
+    ptsB_f32 = np.array([[pt_B[0]], [pt_B[1]]], dtype=np.float32)
+    pts4d = cv2.triangulatePoints(P0, P1, ptsA_f32, ptsB_f32)
+    pt3d = (pts4d[:3] / pts4d[3]).flatten()
+    return pt3d
+
+def epipolar_line(F, pt, img_w):
+    l = F @ np.array([pt[0], pt[1], 1.0])
+    a, b, c = l
+    if abs(b) > 1e-8: return (0, int(-c/b)), (img_w-1, int(-(a*(img_w-1)+c)/b))
+    return (int(-c/a), 0), (int(-c/a), img_w-1)
+
+def find_precise_match(imgA_gray, imgB_gray, pt_A, F, K_L, K_R, R_rel, t_rel, plane_normal, plane_center):
+    if plane_normal is None or plane_center is None: return None
+    h, w = imgA_gray.shape
+    d = np.dot(plane_normal, plane_center)
+    H_3D = R_rel + (t_rel @ plane_normal.reshape(1, 3)) / d
+    H_AB = K_R @ H_3D @ np.linalg.inv(K_L.astype(np.float64))
+    H_BA = np.linalg.inv(H_AB)
+    imgB_warped = cv2.warpPerspective(imgB_gray, H_BA, (w, h), flags=cv2.INTER_LINEAR)
+    patch_size = 15
+    u, v = int(round(pt_A[0])), int(round(pt_A[1]))
+    u0, u1 = max(0, u-patch_size), min(w, u+patch_size+1)
+    v0, v1 = max(0, v-patch_size), min(h, v+patch_size+1)
+    patch_l = imgA_gray[v0:v1, u0:u1]
+    if patch_l.size == 0: return None
+    search = 30
+    x0, y0 = max(0, u-search-patch_size), max(0, v-search-patch_size)
+    x1, y1 = min(w, u+search+patch_size+1), min(h, v+search+patch_size+1)
+    roi_r = imgB_warped[y0:y1, x0:x1]
+    if roi_r.shape[0] < patch_l.shape[0] or roi_r.shape[1] < patch_l.shape[1]: return None
+    res = cv2.matchTemplate(roi_r, patch_l, cv2.TM_CCOEFF_NORMED)
+    _, max_val, _, max_loc = cv2.minMaxLoc(res)
+    if max_val < 0.4: return None
+    pt_w_h = np.array([x0 + max_loc[0] + patch_size, y0 + max_loc[1] + patch_size, 1.0])
+    pt_B_h = H_AB @ pt_w_h
+    return (float(pt_B_h[0]/pt_B_h[2]), float(pt_B_h[1]/pt_B_h[2]))
+
+def compute_global_plane(imgA_gray, K_L, marker_size_mm):
+    dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+    if hasattr(cv2.aruco, 'ArucoDetector'):
+        detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
+        cA, idsA, _ = detector.detectMarkers(imgA_gray)
+    else:
+        params = cv2.aruco.DetectorParameters_create()
+        cA, idsA, _ = cv2.aruco.detectMarkers(imgA_gray, dict_4x4, parameters=params)
+    if idsA is None or len(idsA) < 1: return None, None
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    for c in cA: cv2.cornerSubPix(imgA_gray, c, (5, 5), (-1, -1), term)
+    
+    half = marker_size_mm / 2.0
+    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+    objA = []
+    for c in cA:
+        ok, rv, tv = cv2.solvePnP(canon, c[0], K_L, np.zeros(5))
+        if ok:
+            R, _ = cv2.Rodrigues(rv)
+            objA.append((R @ canon.T).T + tv.T)
+    if not objA: return None, None
+    objA = np.vstack(objA).astype(np.float32)
+    c = np.mean(objA, axis=0)
+    _, _, Vt = np.linalg.svd(objA - c)
+    n = Vt[-1]
+    if np.dot(n, c) > 0: n = -n
+    return n, c
+_temporal_corners_A = {}
+_temporal_strikes_A = {}
+_temporal_corners_B = {}
+_temporal_strikes_B = {}
+
+def smooth_aruco_corners(corners_list, ids_list, temp_corners, temp_strikes, outlier_thresh=5.0, alpha=0.3):
+    """
+    時序平滑濾波器：
+    利用指數移動平均 (EMA) 穩定角點，若角點瞬間位移過大 (大於 outlier_thresh)，
+    則視為雜訊並捨棄 (沿用舊點)。若連續 3 幀都偏移過大，才認定為真實移動並重置。
+    """
+    if corners_list is None or ids_list is None:
+        return corners_list
+    
+    smoothed_list = []
+    current_ids = [i[0] for i in ids_list]
+    for i, cid in enumerate(current_ids):
+        pts = corners_list[i][0]
+        if cid in temp_corners:
+            old_pts = temp_corners[cid]
+            max_dist = np.max(np.linalg.norm(pts - old_pts, axis=1))
+            if max_dist > outlier_thresh:
+                strikes = temp_strikes.get(cid, 0) + 1
+                if strikes < 3:
+                    smoothed_pts = old_pts
+                    temp_strikes[cid] = strikes
+                else:
+                    smoothed_pts = pts
+                    temp_strikes[cid] = 0
+            else:
+                smoothed_pts = alpha * pts + (1 - alpha) * old_pts
+                temp_strikes[cid] = 0
+        else:
+            smoothed_pts = pts
+            temp_strikes[cid] = 0
+            
+        temp_corners[cid] = smoothed_pts
+        smoothed_list.append(np.array([smoothed_pts], dtype=np.float32))
+        
+    for k in list(temp_corners.keys()):
+        if k not in current_ids:
+            del temp_corners[k]
+            if k in temp_strikes:
+                del temp_strikes[k]
+                
+    return smoothed_list
+
+def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None):
+    dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+    if hasattr(cv2.aruco, 'ArucoDetector'):
+        detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
+        cA, idsA, _ = detector.detectMarkers(imgA_gray)
+        cB, idsB, _ = detector.detectMarkers(imgB_gray)
+    else:
+        params = cv2.aruco.DetectorParameters_create()
+        cA, idsA, _ = cv2.aruco.detectMarkers(imgA_gray, dict_4x4, parameters=params)
+        cB, idsB, _ = cv2.aruco.detectMarkers(imgB_gray, dict_4x4, parameters=params)
+    
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (11, 11), (-1, -1), term)
+        cA = smooth_aruco_corners(cA, idsA, _temporal_corners_A, _temporal_strikes_A)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (11, 11), (-1, -1), term)
+        cB = smooth_aruco_corners(cB, idsB, _temporal_corners_B, _temporal_strikes_B)
+
+    if idsA is None or idsB is None: return None
+    idsA_l, idsB_l = [i[0] for i in idsA], [i[0] for i in idsB]
+    shared = list(set(idsA_l).intersection(set(idsB_l)))
+    if not shared: return None
+    half = marker_size_mm / 2.0
+    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+    objA, imgB = [], []
+    cA_dict, cB_dict = {}, {}
+    for mid in shared:
+        idxA, idxB = idsA_l.index(mid), idsB_l.index(mid)
+        cA_dict[mid], cB_dict[mid] = cA[idxA][0], cB[idxB][0]
+        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE)
+        if ok:
+            R, _ = cv2.Rodrigues(rv)
+            objA.append((R @ canon.T).T + tv.T); imgB.append(cB[idxB][0])
+    if not objA: return None
+    objA = np.vstack(objA).astype(np.float32)
+    imgB = np.vstack(imgB).astype(np.float32)
+
+    # --- 🌟 套用全域共面約束 (Global Coplanar Refinement) ---
+    if ENFORCE_COPLANAR and global_plane_n is not None and global_plane_c is not None:
+        normal = global_plane_n
+        d_val = np.dot(normal, global_plane_c)
+        
+        K_L_inv = np.linalg.inv(K_L.astype(np.float64))
+        refined_objA = []
+        for mid in shared:
+            pts_2d = cA_dict[mid] # 4x2
+            rays = np.hstack([pts_2d, np.ones((4, 1))]) @ K_L_inv.T
+            t_vals = d_val / (rays @ normal)
+            refined_objA.append(rays * t_vals[:, np.newaxis])
+        objA = np.vstack(refined_objA).astype(np.float32)
+
+    ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_SQPNP)
+    if not ok: return None
+    R_rel, _ = cv2.Rodrigues(rv_rel)
+    return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict
+
+
+
+
+
+def get_patch(img, pt, size):
+    h, w = img.shape; x, y = int(round(pt[0])), int(round(pt[1]))
+    x0, x1 = x - size//2, x + size//2 + 1
+    y0, y1 = y - size//2, y + size//2 + 1
+    if x0 < 0 or y0 < 0 or x1 > w or y1 > h: return None
+    return img[y0:y1, x0:x1]
+
+def snap_to_aruco_corner(x, y, corners_dict):
+    pt = np.array([x, y])
+    for corners in corners_dict.values():
+        dists = np.linalg.norm(corners - pt, axis=1)
+        if np.min(dists) < 10:
+            return float(corners[np.argmin(dists)][0]), float(corners[np.argmin(dists)][1])
+    return x, y
+
+def main():
+    import collections, time
+    
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+    cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
+    if not cap.isOpened(): print(f"❌ 無法開啟相機"); sys.exit(1)
+    
+    # 讀取第一幀獲取尺寸
+    ret, first_frame = cap.read()
+    if not ret: print("❌ 無法讀取相機畫面"); sys.exit(1)
+    
+    h_raw, w_raw = first_frame.shape[:2]
+    w_alg = w_raw # 使用完整畫面
+    active_pts = {1: (w_alg // 2, h_raw // 2), 2: None}
+    
+    mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
+    newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtxL_o, distL, (w_alg, h_raw), 1, (w_alg, h_raw))
+    
+    # 假設右圖參照左圖參數 (同一相機)
+    newKR_o = newKL_o.copy()
+    
+    # 預先建立去畸變查找表（只算一次，之後每幀用 remap 即可）
+    _map1, _map2 = cv2.initUndistortRectifyMap(
+        mtxL_o, distL, None, newKL_o, (w_alg, h_raw), cv2.CV_16SC2
+    )
+
+    def process_view(img, K=None, dist=None, nK=None):
+        """去畸變。K/dist/nK 保留以維持呼叫介面相容，實際使用預建查找表。"""
+        undist = cv2.remap(img, _map1, _map2, cv2.INTER_LINEAR)
+        return undist, 1.0
+        
+    imgA_bgr, scale = process_view(first_frame.copy(), mtxL_o, distL, newKL_o)
+    imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY); h, w = imgA_gray.shape
+    KL = newKL_o.copy().astype(np.float64)
+    KL[0,0]*=scale; KL[1,1]*=scale; KL[0,2]*=scale; KL[1,2]*=scale
+    
+    # 使用 JSON 中的外參，讓深度計算有基準
+    R_r = np.array(extrinsic.get('R', np.eye(3)))
+    t_r = np.array(extrinsic.get('T', np.zeros(3))).reshape(3, 1)
+    
+    sift = cv2.SIFT_create(contrastThreshold=0.005)
+    orb = cv2.ORB_create(nfeatures=1000)
+    
+    global_plane_n, global_plane_c = compute_global_plane(imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+    
+    frame_buffer = collections.deque(maxlen=FRAME_GAP + 1)
+    
+    current_cand = {
+        'idx': 0, 'rgb': cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB), 'gray': imgA_gray,
+        'K_R': KL, 'R_rel': R_r, 't_rel': t_r, 'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
+        'cornersA': {}, 'cornersB': {}, 'kpB': [], 'desB': None,
+        'plane_n': global_plane_n, 'plane_c': global_plane_c
+    }
+    candidates = [current_cand]
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
+    fig.canvas.manager.set_window_title("MeasureTool")
+    try:
+        fig.canvas.toolbar.pack_forget() # 隱藏底部的功能條
+    except:
+        pass
+    fig.subplots_adjust(top=0.82, right=0.98, left=0.05)
+    ax_A, ax_B = axes
+    im_A = ax_A.imshow(cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB))
+    im_B = ax_B.imshow(current_cand['rgb'])
+    for ax in axes:
+        ax.axis("off")
+        ax.set_facecolor('#1E1E1E')
+        
+    # 加入專業感的影像外框
+    from matplotlib.patches import Rectangle
+    border_A = Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor='#00FF00', lw=2, alpha=0.8) # 綠色代表 Live
+    border_B = Rectangle((-0.5, -0.5), w, h, fill=False, edgecolor='#FFCC00', lw=2, alpha=0.8) # 黃色代表鎖定/參考
+    ax_A.add_patch(border_A)
+    ax_B.add_patch(border_B)
+    
+    # 設定標題為白色
+    ax_A.set_title('Camera (Live)', color='white', fontsize=10, fontweight='bold', pad=10)
+    ax_B.set_title('右圖 (Locked)', color='white', fontsize=10, fontweight='bold', pad=10)
+
+    def draw_aruco(ax, corners):
+        if not hasattr(ax, 'art'): ax.art = []
+        for a in ax.art: a.remove()
+        ax.art = []
+        for mid, pts in corners.items():
+            p = np.vstack((pts, pts[0])); l, = ax.plot(p[:,0], p[:,1], 'cyan', lw=1.5)
+            t = ax.text(pts[0,0], pts[0,1]-5, f"ID:{mid}", color='cyan', fontsize=8)
+            ax.art.extend([l, t])
+            
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+
+    draw_aruco(ax_A, current_cand['cornersA'])
+    draw_aruco(ax_B, current_cand['cornersB'])
+
+    scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
+    scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
+    scatter_A2 = ax_A.scatter([], [], s=80, c='magenta', marker='x', zorder=5)
+    scatter_B2 = ax_B.scatter([], [], s=80, c='magenta', marker='x', zorder=5)
+    dist_line_A, = ax_A.plot([], [], color='white', linestyle='--', lw=2, zorder=4)
+    dist_line_B, = ax_B.plot([], [], color='white', linestyle='--', lw=2, zorder=4)
+    p2p_text = ax_A.text(0.5, 0.95, "", transform=ax_A.transAxes, ha='center', color='cyan', fontsize=14, fontweight='bold', bbox=dict(facecolor='#121212', alpha=0.6))
+    
+    scatter_grad_inject = ax_A.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+    scatter_grad_match = ax_B.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+    scatter_all_sift_B = ax_B.scatter([], [], s=2, c='yellow', alpha=0.3, zorder=3)
+    epi_line, = ax_B.plot([], [], 'yellow', lw=1, alpha=0.6, zorder=4)
+    epi_line2, = ax_B.plot([], [], 'magenta', lw=1, alpha=0.6, zorder=4)
+    sift_rect = Rectangle((0, 0), 0, 0, linewidth=1, edgecolor='magenta', facecolor='none', linestyle='--', alpha=0.8, zorder=4)
+    ax_B.add_patch(sift_rect)
+    sift_rect.set_visible(False)
+    sift_rect_center, = ax_B.plot([], [], '+', color='magenta', markersize=12, markeredgewidth=1.5, zorder=5)
+    sift_rect_center.set_visible(False)
+    # HUD 風格的文字面板
+    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=18, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+    fps_text = ax_A.text(0.01, 0.97, "FPS: --", transform=ax_A.transAxes,
+                         color='#00FF00', fontsize=10, fontweight='bold', va='top',
+                         bbox=dict(facecolor='#121212', alpha=0.6, edgecolor='none'), zorder=10)
+    # Blit 最佳化：標記每幀會改變的 artists 為 animated，防止它們被無謂嫚入靜態背景圖
+    im_A.set_animated(True)
+    im_B.set_animated(True)
+    fps_text.set_animated(True)
+    # blit_state: 管理背景圖狀態
+    blit_state = {'bg': None, 'needs_refresh': True}
+
+    def request_blit_refresh():
+        """UI 元件有治變時呼叫，主迴圈下一幀會重新全圖儲存新背景。"""
+        blit_state['needs_refresh'] = True
+
+
+    # 勾選框面板 (改成兩行排列，每顆獨立以利排版)
+    # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
+    ax_c1 = fig.add_axes([0.05, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c2 = fig.add_axes([0.17, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c3 = fig.add_axes([0.29, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c4 = fig.add_axes([0.05, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c5 = fig.add_axes([0.17, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
+    
+    # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
+    btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
+    
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5]:
+        c.label.set_color('white')
+        c.label.set_fontsize(8)
+        c.ax.patch.set_edgecolor('white')
+        c.ax.patch.set_linewidth(1.0)
+            
+    # 使用閉包來處理點擊事件與文字切換
+    def make_on_opt(btn, key, label_text):
+        def _on_opt(event):
+            view_state[key] = not view_state[key]
+            # 根據狀態切換 [X] 或 [ ]
+            prefix = "[X] " if view_state[key] else "[ ] "
+            btn.label.set_text(prefix + label_text)
+            
+            if key == 'manual' and not view_state['manual']:
+                view_state['manual_pt_A'] = None
+            request_blit_refresh()
+        return _on_opt
+        
+    c1.on_clicked(make_on_opt(c1, 'precise', "嚴格精細匹配"))
+    c2.on_clicked(make_on_opt(c2, 'grad_sift', "梯度 SIFT 匹配"))
+    c3.on_clicked(make_on_opt(c3, 'enforce_epi', "強制極線對齊"))
+    c4.on_clicked(make_on_opt(c4, 'ecc', "啟用 ECC 精修"))
+    c5.on_clicked(make_on_opt(c5, 'manual', "手動匹配模式"))
+
+    def redraw_grad_lines(highlight_idx=None):
+        """清除所有梯度SIFT連線 (包含高亮), 依 view_state['grad_data'] 重新繪製."""
+        # 清除所有舊的連線 Artist
+        for item in view_state['grad_lines']:
+            try: item.remove()
+            except: pass
+        view_state['grad_lines'] = []
+        old_h = view_state.get('highlighted_grad_line_artist')
+        if old_h is not None:
+            try: old_h.remove()
+            except: pass
+        view_state['highlighted_grad_line_artist'] = None
+        
+        gd = view_state.get('grad_data')
+        if gd is None or not view_state['show_grad_lines']:
+            return
+        
+        ptsA, ptsB = gd['ptsA'], gd['ptsB']
+        for i in range(len(ptsA)):
+            if i == highlight_idx:
+                continue  # 跟高亮連線分開畫
+            con = ConnectionPatch(xyA=ptsA[i], xyB=ptsB[i], coordsA="data", coordsB="data",
+                                  axesA=ax_A, axesB=ax_B, color="cyan", lw=0.8, alpha=0.4, zorder=4)
+            ax_B.add_artist(con)
+            view_state['grad_lines'].append(con)
+        
+        if highlight_idx is not None and 0 <= highlight_idx < len(ptsA):
+            hl = ConnectionPatch(xyA=ptsA[highlight_idx], xyB=ptsB[highlight_idx], coordsA="data", coordsB="data",
+                                 axesA=ax_A, axesB=ax_B, color="red", lw=2.5, alpha=1.0, zorder=10)
+            ax_B.add_artist(hl)
+            view_state['highlighted_grad_line_artist'] = hl
+        view_state['highlighted_grad_line'] = highlight_idx
+
+
+
+
+
+    # ---- 執行緒通訊佇列 ----
+    calc_request_q = queue.Queue(maxsize=1)   # 最多排 1 個請求，避免積壓
+    calc_result_q  = queue.Queue()
+    calc_busy      = threading.Event()        # 用於標記背景正在計算中
+
+    measure_results = {}
+    last_clicks = {1: None, 2: None}
+
+    # ---- 純計算（可在背景執行緒安全呼叫，不觸碰 Matplotlib）----
+    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
+        """純計算版 do_measure，回傳結果 dict，不更新任何 UI 元件。"""
+        cand = snap_cand
+        m_pt, method, neighbors = None, "", []
+        g_ptsA, g_ptsB, g_kptsB, g_rect = None, None, None, None
+
+        if not cand.get('pose_valid', True):
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': '未偵測到 ArUco', 'u': u, 'v': v}
+        if cand.get('baseline', 0.0) < 15.0:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': '視差不足(<15mm)', 'u': u, 'v': v}
+
+        if manual_match_pt is not None:
+            m_pt, method = manual_match_pt, "手動點選"
+
+        if m_pt is None:
+            for mid, cA in cand['cornersA'].items():
+                d = np.linalg.norm(cA - np.array([u, v]), axis=1)
+                if np.min(d) < 10:
+                    best_idx = np.argmin(d)
+                    u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
+                    m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
+                    break
+            if m_pt is None and snap_view_state['grad_sift']:
+                ui, vi = int(round(u)), int(round(v))
+                sobel_range = 12
+                patch_g = snap_imgA_gray[max(0,vi-sobel_range):min(snap_imgA_gray.shape[0],vi+sobel_range+1),
+                                         max(0,ui-sobel_range):min(snap_imgA_gray.shape[1],ui+sobel_range+1)]
+                if patch_g.size > 0:
+                    gx, gy = cv2.Sobel(patch_g, cv2.CV_32F, 1, 0), cv2.Sobel(patch_g, cv2.CV_32F, 0, 1)
+                    mag = cv2.sqrt(gx**2 + gy**2); flat = mag.flatten()
+                    idx_g = np.argsort(flat)[-min(len(flat), 100):]
+                    kpts_inj = [cv2.KeyPoint(float(max(0,ui-sobel_range)+px), float(max(0,vi-sobel_range)+py), 31.0)
+                                for py, px in [divmod(idx, patch_g.shape[1]) for idx in idx_g]]
+                    if snap_view_state.get('use_hamming', False):
+                        _, des_inj = orb.compute(snap_imgA_gray, kpts_inj)
+                    else:
+                        _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+                    u_exp, v_exp = u, v
+                    if cand['plane_n'] is not None:
+                        H_AB = cand['K_R'] @ (cand['R_rel'] + (cand['t_rel'] @ cand['plane_n'].reshape(1,3))/np.dot(cand['plane_n'], cand['plane_c'])) @ np.linalg.inv(KL)
+                        pt_exp = H_AB @ np.array([u, v, 1.0]); u_exp, v_exp = pt_exp[0]/pt_exp[2], pt_exp[1]/pt_exp[2]
+                    rad = 20; uei, vei = int(round(u_exp)), int(round(v_exp))
+                    u0, u1, v0, v1 = max(0, uei-rad), min(snap_imgA_gray.shape[1], uei+rad), max(0, vei-rad), min(snap_imgA_gray.shape[0], vei+rad)
+                    patch_r = cand['gray'][v0:v1, u0:u1]
+                    if patch_r.size > 0:
+                        gxr, gyr = cv2.Sobel(patch_r, cv2.CV_32F, 1, 0), cv2.Sobel(patch_r, cv2.CV_32F, 0, 1)
+                        magr = cv2.sqrt(gxr**2 + gyr**2); flatr = magr.flatten()
+                        idx_gr = np.argsort(flatr)[-min(len(flatr), 400):]
+                        kpts_r = [cv2.KeyPoint(float(u0+px), float(v0+py), 31.0)
+                                  for py, px in [divmod(idx, patch_r.shape[1]) for idx in idx_gr]]
+                        g_kptsB = [kp.pt for kp in kpts_r]
+                        g_rect = (u0, v0, u1-u0, v1-v0)
+                        if snap_view_state.get('use_hamming', False):
+                            _, des_r = orb.compute(cand['gray'], kpts_r)
+                            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+                            matches = bf.match(des_inj, des_r)
+                            good = [m for m in matches if m.distance < 100]
+                        else:
+                            _, des_r = sift.compute(cand['gray'], kpts_r)
+                            bf = cv2.BFMatcher(cv2.NORM_L2)
+                            matches = bf.match(des_inj, des_r)
+                            good = [m for m in matches if m.distance < 450]
+                        
+                        pts_info = []
+                        for m in good:
+                            pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
+                            if np.linalg.norm(pL - np.array([u, v])) < 50:
+                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+                        if len(pts_info) >= 3:
+                            offs = np.array([x['off'] for x in pts_info]); med_off = np.median(offs, axis=0)
+                            pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 15]
+                        if pts_info:
+                            ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
+                            ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
+                            mapped = None
+                            if len(ptsA_m) >= 6:
+                                H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
+                                if H_local is not None:
+                                    pt_h = H_local @ np.array([u, v, 1.0])
+                                    mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
+                            if mapped is None and len(ptsA_m) >= 3:
+                                M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+                                if M_local is not None:
+                                    pt_a = M_local @ np.array([u, v, 1.0])
+                                    mapped = pt_a[:2]
+                            if mapped is None:
+                                wts = 1.0 / (np.sum((ptsA_m - np.array([u, v]))**2, axis=1) + 1e-5)
+                                mapped = np.array([u, v]) + np.sum((ptsB_m - ptsA_m) * wts[:, np.newaxis], axis=0) / np.sum(wts)
+                            m_pt, method = mapped, "Grad-SIFT"
+                            g_ptsA, g_ptsB = ptsA_m, ptsB_m
+            if m_pt is None and snap_view_state['precise']:
+                res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
+                                           KL, cand['K_R'], cand['R_rel'], cand['t_rel'],
+                                           cand['plane_n'], cand['plane_c'])
+                if res_p: m_pt, method = np.array(res_p), "Precise"
+
+        if m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco":
+            l_B = cand['F'] @ np.array([u, v, 1.0])
+            denom = l_B[0]**2 + l_B[1]**2
+            if denom > 1e-9:
+                dist_e = (l_B[0]*m_pt[0] + l_B[1]*m_pt[1] + l_B[2]) / np.sqrt(denom)
+                m_pt = np.array([m_pt[0] - l_B[0]/np.sqrt(denom)*dist_e,
+                                  m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
+                method += "+極線對齊"
+        if m_pt is not None and snap_view_state['ecc']:
+            tmpl = get_patch(snap_imgA_gray, (u, v), 31)
+            roi = get_patch(cand['gray'], m_pt, 61)
+            if tmpl is not None and roi is not None:
+                warp = np.eye(2, 3, dtype=np.float32)
+                warp[0, 2] = (61 - 31) / 2.0; warp[1, 2] = (61 - 31) / 2.0
+                criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-4)
+                try:
+                    _, warp = cv2.findTransformECC(tmpl, roi, warp, cv2.MOTION_TRANSLATION, criteria)
+                    m_pt = np.array([m_pt[0] - 30.5 + warp[0, 2] + 15.5,
+                                     m_pt[1] - 30.5 + warp[1, 2] + 15.5])
+                    method += "+ECC精修"
+                except: method += "+ECC失敗"
+        if m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco":
+            l_B = cand['F'] @ np.array([u, v, 1.0])
+            denom = l_B[0]**2 + l_B[1]**2
+            if denom > 1e-9:
+                dist_e = (l_B[0]*m_pt[0] + l_B[1]*m_pt[1] + l_B[2]) / np.sqrt(denom)
+                m_pt = np.array([m_pt[0] - l_B[0]/np.sqrt(denom)*dist_e,
+                                  m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
+
+        d_val, p3d_val, fail_reason = None, None, ""
+        if m_pt is not None:
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: ({m_pt[0]:.1f}, {m_pt[1]:.1f}) | 匹配方式: {method}")
+            R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
+            t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
+            print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
+            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])
+            if p3d[2] <= 0:
+                fail_reason = "深度為負(在相機後方)"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            elif p3d[2] > MAX_DEPTH_MM:
+                fail_reason = "超過最大深度"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            else:
+                d_val = np.linalg.norm(p3d); p3d_val = p3d
+                p_dist_str = "N/A"
+                if cand['plane_n'] is not None:
+                    p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
+                    p_dist_str = f"{p_dist:.2f} mm"
+                print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+        else:
+            fail_reason = "無匹配點"
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
+            print(f"   [計算失敗] 原因: {fail_reason}")
+
+        return {'pt': m_pt, 'p3d': p3d_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+                'fail_reason': fail_reason, 'u': u, 'v': v}
+
+    def do_measure(pt_id, u, v, manual_match_pt=None):
+        """同步計算並立即更新 UI（用於手動點選的即時響應）。"""
+        last_clicks[pt_id] = (u, v)
+        if len(plane_dist_history) > 0:
+            plane_dist_history.clear()
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        view_state['grad_data'] = None
+        redraw_grad_lines(None)  # 清除舊連線
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        snap_vs = dict(view_state)
+        if not live_L and locked_L is not None:
+            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+        else:
+            left_img_gray = imgA_gray
+            
+        res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
+        if current_cand['idx'] not in measure_results:
+            measure_results[current_cand['idx']] = {}
+        measure_results[current_cand['idx']][pt_id] = res
+        
+        apply_measure_result()
+
+    def apply_measure_result():
+        """在主執行緒中，用 compute_measure 的純資料結果更新所有 Matplotlib UI 元件。"""
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        view_state['grad_data'] = None
+        redraw_grad_lines(None)
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        update_display()
+    
+    plane_dist_history = collections.deque(maxlen=15)
+    
+    def update_display():
+        cand_results = measure_results.get(current_cand['idx'], {})
+        res1 = cand_results.get(1, {'pt': None, 'neighbors': [], 'p3d': None, 'g_ptsA': None})
+        res2 = cand_results.get(2, {'pt': None, 'neighbors': [], 'p3d': None, 'g_ptsA': None})
+        
+        u1, v1 = last_clicks[1] if last_clicks[1] else (0, 0)
+        u2, v2 = last_clicks[2] if last_clicks[2] else (0, 0)
+        
+        scatter_A.set_offsets([[u1, v1]] if last_clicks[1] else np.empty((0,2)))
+        scatter_A2.set_offsets([[u2, v2]] if last_clicks[2] else np.empty((0,2)))
+        
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        # 清除舊連線 Artists
+        for item in view_state['grad_lines']:
+            try:
+                con = item[0] if isinstance(item, tuple) else item
+                con.remove()
+            except: pass
+        view_state['grad_lines'] = []
+        old_h = view_state.get('highlighted_grad_line_artist')
+        if old_h is not None:
+            try: old_h.remove()
+            except: pass
+        view_state['highlighted_grad_line_artist'] = None
+        view_state['highlighted_grad_line'] = None
+        view_state['grad_data'] = None
+        
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        scatter_grad_inject.set_offsets(np.empty((0,2)))
+        scatter_grad_match.set_offsets(np.empty((0,2)))
+        scatter_all_sift_B.set_offsets(np.empty((0,2)))
+        
+        if res1.get('g_kptsB') is not None:
+            scatter_all_sift_B.set_offsets(res1['g_kptsB'])
+            sift_rect.set_bounds(*res1['g_rect'])
+            sift_rect.set_visible(True)
+            # 更新 Rect 中心標記
+            rx, ry, rw, rh = res1['g_rect']
+            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+            sift_rect_center.set_visible(True)
+            
+            if res1.get('g_ptsA') is not None:
+                scatter_grad_inject.set_offsets(res1['g_ptsA'])
+                scatter_grad_match.set_offsets(res1['g_ptsB'])
+                view_state['grad_data'] = {'ptsA': res1['g_ptsA'], 'ptsB': res1['g_ptsB']}
+                redraw_grad_lines(None)  # 初始無高亮
+            else:
+                scatter_grad_inject.set_offsets(np.empty((0,2)))
+                scatter_grad_match.set_offsets(np.empty((0,2)))
+                
+        pose_info_str = current_cand.get('pose_info', '')
+        
+        # Point 1 Update
+        if res1.get('pt') is not None:
+            scatter_B.set_offsets([[res1['pt'][0], res1['pt'][1]]])
+            p0, p1 = epipolar_line(current_cand['F'], (u1, v1), w); epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+        else: 
+            scatter_B.set_offsets(np.empty((0,2))); epi_line.set_data([], [])
+
+        # Point 2 Update
+        if res2.get('pt') is not None:
+            scatter_B2.set_offsets([[res2['pt'][0], res2['pt'][1]]])
+            p0, p1 = epipolar_line(current_cand['F'], (u2, v2), w); epi_line2.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+        else: 
+            scatter_B2.set_offsets(np.empty((0,2))); epi_line2.set_data([], [])
+
+        # 兩點間連線
+        if last_clicks[1] is not None and last_clicks[2] is not None:
+            dist_line_A.set_data([u1, u2], [v1, v2])
+        else:
+            dist_line_A.set_data([], [])
+            
+        if res1.get('pt') is not None and res2.get('pt') is not None:
+            dist_line_B.set_data([res1['pt'][0], res2['pt'][0]], [res1['pt'][1], res2['pt'][1]])
+        else:
+            dist_line_B.set_data([], [])
+
+        # HUD 文字更新
+        p2p_str = ""
+        if res1.get('p3d') is not None and res2.get('p3d') is not None:
+            dist_3d = np.linalg.norm(res1['p3d'] - res2['p3d'])
+            p2p_str = f"歐式距離 (3D): {dist_3d:.2f} mm"
+        p2p_text.set_text(p2p_str)
+
+        depth_info = []
+        for pid, pres, pl in [(1, res1, "紅"), (2, res2, "紫")]:
+            if pres.get('d') is not None:
+                p_dist_str = ""
+                if pres.get('p3d') is not None and current_cand.get('plane_n') is not None:
+                    p_dist = abs(np.dot(current_cand['plane_n'], pres['p3d'] - current_cand['plane_c']))
+                    p_dist_str = f" | 距平面: {p_dist:.1f}mm"
+                depth_info.append(f"[{pl}] 深度: {pres['d']:.1f}mm{p_dist_str}")
+        
+        main_text = "\n".join(depth_info) if depth_info else "請點選點位"
+        main_text += f"\n外參: {pose_info_str}"
+        depth_text.set_text(main_text)
+
+        request_blit_refresh()
+
+
+
+    pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False, 'dragging_hud': False, 'btn': 1}
+    def on_press(event):
+        if event.button not in (1, 2): return
+        
+        # 檢查是否點擊在深度數值 HUD 區域內
+        try:
+            bbox = depth_text.get_window_extent(fig.canvas.get_renderer())
+            if bbox.contains(event.x, event.y):
+                pan_state['dragging_hud'] = True
+                return
+        except Exception:
+            pass
+            
+        if event.inaxes not in (ax_A, ax_B): return
+        pan_state.update({'pressing': True, 'dragged': False, 'x': event.x, 'y': event.y, 'ax': event.inaxes, 'btn': event.button})
+
+    def on_release(event):
+        if pan_state.get('dragging_hud', False):
+            pan_state['dragging_hud'] = False
+            return
+        if not pan_state['pressing']: return
+        pan_state['pressing'] = False
+        if not pan_state['dragged'] and event.xdata is not None:
+            ux, vx = float(event.xdata), float(event.ydata)
+            btn_id = pan_state.get('btn', 1)
+            
+            # 自動吸附 ArUco 角點
+            if pan_state['ax'] == ax_A:
+                ux, vx = snap_to_aruco_corner(ux, vx, current_cand['cornersA'])
+            elif pan_state['ax'] == ax_B:
+                ux, vx = snap_to_aruco_corner(ux, vx, current_cand['cornersB'])
+                
+            if view_state['manual']:
+                if pan_state['ax'] == ax_A:
+                    view_state['manual_pt_A'] = (ux, vx); last_clicks[1] = (ux, vx)
+                    scatter_A.set_offsets([[ux, vx]])
+                    p0, p1 = epipolar_line(current_cand['F'], (ux, vx), w)
+                    epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+                    depth_text.set_text("手動模式：請在右圖極線上點選對應點")
+                    request_blit_refresh()
+                elif pan_state['ax'] == ax_B:
+                    # 有 grad_data 時，點擊右圖做高亮（不管連線目前是否顯示）
+                    if view_state.get('grad_data') and not view_state['manual_pt_A']:
+                        ptsB_arr = view_state['grad_data']['ptsB']
+                        dists = np.linalg.norm(ptsB_arr - np.array([ux, vx]), axis=1)
+                        nearest_idx = int(np.argmin(dists))
+                        view_state['show_grad_lines'] = True
+                        btn_grad_toggle.label.set_text('隱藏梯度 SIFT 連線')
+                        redraw_grad_lines(nearest_idx)
+                        request_blit_refresh()
+                    elif view_state['manual_pt_A']:
+                        do_measure(1, view_state['manual_pt_A'][0], view_state['manual_pt_A'][1], manual_match_pt=np.array([ux, vx]))
+            else:
+                if pan_state['ax'] == ax_A:
+                    active_pts[btn_id] = (int(round(ux)), int(round(vx)))
+                    do_measure(btn_id, active_pts[btn_id][0], active_pts[btn_id][1])
+                elif pan_state['ax'] == ax_B and view_state.get('grad_data'):
+                    ptsB_arr = view_state['grad_data']['ptsB']
+                    dists = np.linalg.norm(ptsB_arr - np.array([ux, vx]), axis=1)
+                    nearest_idx = int(np.argmin(dists))
+                    view_state['show_grad_lines'] = True
+                    btn_grad_toggle.label.set_text('隱藏梯度 SIFT 連線')
+                    redraw_grad_lines(nearest_idx)
+                    request_blit_refresh()
+    def on_motion(event):
+        if pan_state.get('dragging_hud', False):
+            if event.inaxes == ax_B:
+                inv = ax_B.transAxes.inverted()
+                new_pos = inv.transform((event.x, event.y))
+                # 限制範圍，避免文字飛出視窗 (x: 0.01~0.75, y: 0.01~0.95)
+                new_x = max(0.01, min(0.75, new_pos[0]))
+                new_y = max(0.01, min(0.95, new_pos[1]))
+                depth_text.set_position((new_x, new_y))
+                request_blit_refresh()
+            return
+            
+        if not pan_state['pressing'] or event.inaxes != pan_state['ax']: return
+        dx, dy = event.x - pan_state['x'], event.y - pan_state['y']
+        if not pan_state['dragged'] and abs(dx) < 3 and abs(dy) < 3: return
+        pan_state['dragged'] = True
+        ax = pan_state['ax']
+        inv = ax.transData.inverted()
+        p0, p1 = inv.transform((pan_state['x'], pan_state['y'])), inv.transform((event.x, event.y))
+        dx_d, dy_d = p1 - p0
+        ax.set_xlim(ax.get_xlim() - dx_d); ax.set_ylim(ax.get_ylim() - dy_d)
+        pan_state.update({'x': event.x, 'y': event.y})
+        request_blit_refresh()
+
+    def on_scroll(event):
+        if event.inaxes not in (ax_A, ax_B): return
+        ax, f = event.inaxes, 1.2 if event.button == 'down' else 1/1.2
+        xl, yl = ax.get_xlim(), ax.get_ylim()
+        x, y = event.xdata, event.ydata
+        ax.set_xlim([x - (x-xl[0])*f, x + (xl[1]-x)*f]); ax.set_ylim([y - (y-yl[0])*f, y + (yl[1]-y)*f])
+        request_blit_refresh()
+
+    fig.canvas.mpl_connect('scroll_event', on_scroll)
+    fig.canvas.mpl_connect('motion_notify_event', on_motion)
+    fig.canvas.mpl_connect('button_release_event', on_release)
+    fig.canvas.mpl_connect('button_press_event', on_press)
+
+    # 手動鎖定模式的狀態變數
+    locked_L = None
+    locked_R = None
+    live_L = True
+    live_R = True
+    has_set_L = False
+    has_set_R = False
+    
+    current_cand = {
+        'idx': 0,
+        'K_R': KL,
+        'pose_valid': False,
+        'baseline': 0.0,
+        'cornersA': {},
+        'cornersB': {}
+    }
+    
+    # 建立按鈕 (已統一尺寸、排列，並升級為精緻的「微發光邊框」與「功能分色」設計)
+    # 使用更深邃的背景色 (#1A1A1A)，與主背景形成對比
+    btn_style = dict(color='#1A1A1A', hovercolor='#333333')
+    
+    ax_btn_lock_L = fig.add_axes([0.58, 0.92, 0.08, 0.04])
+    btn_lock_L = Button(ax_btn_lock_L, "鎖定左圖", **btn_style)
+    
+    ax_btn_lock_R = fig.add_axes([0.68, 0.92, 0.08, 0.04])
+    btn_lock_R = Button(ax_btn_lock_R, "鎖定右圖", **btn_style)
+    
+    ax_btn_hide_R = fig.add_axes([0.78, 0.92, 0.08, 0.04])
+    btn_hide_R = Button(ax_btn_hide_R, "隱藏右圖", **btn_style)
+    
+    ax_btn_norm = fig.add_axes([0.88, 0.92, 0.08, 0.04])
+    btn_norm_toggle = Button(ax_btn_norm, '切換 HAMMING', **btn_style)
+    
+    ax_btn_calc = fig.add_axes([0.58, 0.86, 0.08, 0.04])
+    btn_calc = Button(ax_btn_calc, "單次計算深度", **btn_style)
+    
+    ax_btn_auto_calc = fig.add_axes([0.68, 0.86, 0.08, 0.04])
+    btn_auto_calc = Button(ax_btn_auto_calc, "連續計算: 關", **btn_style)
+    
+    ax_btn_grad = fig.add_axes([0.78, 0.86, 0.08, 0.04])
+    btn_grad_toggle = Button(ax_btn_grad, '顯示梯度 SIFT 連線', **btn_style)
+    
+    # 統一設定字型、文字顏色與邊框寬度
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle]:
+        b.label.set_color('#E0E0E0') # 質感白
+        b.label.set_fontsize(8)
+        b.ax.patch.set_linewidth(1.2) # 細緻邊框
+        
+    # 依功能進行邊框分色（專業軟體常見的語意化色彩）
+    # 1. 影像鎖定/控制類：使用專業藍 (#007ACC)
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R]:
+        b.ax.patch.set_edgecolor('#007ACC')
+        
+    # 2. 深度計算類：使用警告橘/強調橘 (#D83B01)
+    for b in [btn_calc, btn_auto_calc]:
+        b.ax.patch.set_edgecolor('#D83B01')
+        
+    # 3. 功能切換類：使用中性的深灰 (#555555)
+    for b in [btn_norm_toggle, btn_grad_toggle]:
+        b.ax.patch.set_edgecolor('#555555')
+        
+    btn_grad_toggle.label.set_fontsize(7) # 特長文字微調
+    
+    def on_grad_toggle(event):
+        view_state['show_grad_lines'] = not view_state['show_grad_lines']
+        btn_grad_toggle.label.set_text('隱藏梯度 SIFT 連線' if view_state['show_grad_lines'] else '顯示梯度 SIFT 連線')
+        redraw_grad_lines(view_state.get('highlighted_grad_line'))
+        request_blit_refresh()
+        
+    def on_norm_toggle(event):
+        view_state['use_hamming'] = not view_state['use_hamming']
+        btn_norm_toggle.label.set_text('使用 L2' if view_state['use_hamming'] else '切換 HAMMING')
+        request_blit_refresh()
+    
+    def on_hide_R(event):
+        visible = ax_B.get_visible()
+        ax_B.set_visible(not visible)
+        btn_hide_R.label.set_text("顯示右圖" if visible else "隱藏右圖")
+        request_blit_refresh()
+    
+    auto_calc_active = False
+    
+    def on_auto_calc(event):
+        nonlocal auto_calc_active
+        auto_calc_active = not auto_calc_active
+        if auto_calc_active:
+            btn_auto_calc.label.set_text("連續計算: 開")
+            print("▶️ 開啟連續計算模式")
+        else:
+            btn_auto_calc.label.set_text("連續計算: 關")
+            print("⏸️ 關閉連續計算模式")
+        request_blit_refresh()
+    
+    def on_lock_L(event):
+        nonlocal live_L, locked_L, has_set_L
+        live_L = not live_L
+        if not live_L:
+            if len(frame_buffer) > 0:
+                locked_L = frame_buffer[-1].copy()
+                has_set_L = True
+                btn_lock_L.label.set_text("解鎖左圖")
+                print("🔒 左圖已鎖定當前畫面")
+                if has_set_R and not live_R:
+                    on_calc(None)
+        else:
+            btn_lock_L.label.set_text("鎖定左圖")
+            print("🔓 左圖恢復 Live")
+        request_blit_refresh()
+        
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                locked_R = frame_buffer[-1].copy()
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+                print("🔒 右圖已鎖定當前畫面")
+                if not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            print("🔓 右圖恢復 Live")
+        request_blit_refresh()
+        
+    def on_calc(event):
+        if not has_set_R:
+            print("⚠️ 請先鎖定右圖！")
+            return
+        # 快照計算所需數據，存入 request queue（不阻塞主執行緒）
+        current_L_snap   = frame_buffer[-1].copy() if live_L and len(frame_buffer) > 0 else locked_L
+        req = {
+            'raw_imgA':   current_L_snap,
+            'raw_imgB':   locked_R,
+            'cand':       dict(current_cand),
+            'view_state': dict(view_state),
+            'pts_to_calc': dict(active_pts)
+        }
+        # 丟棄積壓的舊請求，只保留最新一次
+        while not calc_request_q.empty():
+            try: calc_request_q.get_nowait()
+            except: pass
+        try:
+            calc_request_q.put_nowait(req)
+        except queue.Full:
+            pass
+
+    # ---- 背景工作執行緒 ----
+    def calc_worker():
+        while True:
+            req = calc_request_q.get()
+            if req is None:   # 結束訊號
+                break
+            calc_busy.set()
+            try:
+                snap_cand      = req['cand']
+                snap_vs        = req['view_state']
+                pts_to_calc    = req['pts_to_calc']
+
+                # ---------- 在背景執行緒進行耗時的反畸變與灰階轉換 ----------
+                imgA_bgr_, _ = process_view(req['raw_imgA'], mtxL_o, distL, newKL_o)
+                snap_imgA_gray = cv2.cvtColor(imgA_bgr_, cv2.COLOR_BGR2GRAY)
+                
+                imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
+                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+
+                # ---------- ArUco 位姿解算 ----------
+
+                res_pose = get_joint_relative_pose(snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM)
+                baseline_val = 0.0
+                pose_valid = False
+                pose_info = "未偵測到 ArUco"
+                R_r, t_r = None, None
+                cA_dict, cB_dict = {}, {}
+
+                if res_pose is not None:
+                    R_r, t_r, baseline_val, _, shared, cA_dict, cB_dict = res_pose
+                    pose_valid = True
+                    direction = "向左" if t_r[0] > 0 else "向右"
+                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+                    
+                    # 🌟 透過立體三角測量計算所有共享角點的 3D 座標，用來擬合平面
+                    all_pts3d = []
+                    for mid in shared:
+                        ptsA = cA_dict[mid] # 4x2
+                        ptsB = cB_dict[mid] # 4x2
+                        for i in range(4):
+                            p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
+                            all_pts3d.append(p3d)
+                            
+                    if len(all_pts3d) >= 3:
+                        all_pts3d = np.array(all_pts3d)
+                        c_local = np.mean(all_pts3d, axis=0)
+                        _, _, Vt = np.linalg.svd(all_pts3d - c_local)
+                        n_local = Vt[-1]
+                        if np.dot(n_local, c_local) > 0: n_local = -n_local
+                    else:
+                        n_local, c_local = global_plane_n, global_plane_c
+                else:
+                    print("❌ 未偵測到共享 ArUco")
+                    n_local, c_local = global_plane_n, global_plane_c
+                kb, db = sift.detectAndCompute(imgB_gray_, None)
+
+                # 更新 snap_cand
+                snap_cand = dict(snap_cand)
+                snap_cand.update({
+                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+                    'gray': imgB_gray_,
+                    'kpB': kb, 'desB': db,
+                    'plane_n': n_local, 'plane_c': c_local,
+                    'pose_info': pose_info, 'pose_valid': pose_valid,
+                    'baseline': baseline_val,
+                    'cornersA': cA_dict, 'cornersB': cB_dict
+                })
+                if pose_valid:
+                    snap_cand.update({
+                        'R_rel': R_r, 't_rel': t_r,
+                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+                    })
+
+                # ---------- 特徵匹配與深度計算 ----------
+                measure_res_dict = {}
+                for pt_id, pt in pts_to_calc.items():
+                    if pt is not None:
+                        u, v = pt
+                        res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs)
+                        measure_res_dict[pt_id] = res
+
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res_dict': measure_res_dict,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+                    'baseline_val': baseline_val,
+                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
+                })
+            except Exception as e:
+                print(f"[calc_worker 錯誤] {e}")
+            finally:
+                calc_busy.clear()
+                calc_request_q.task_done()
+
+    worker_thread = threading.Thread(target=calc_worker, daemon=True)
+    worker_thread.start()
+    btn_lock_L.on_clicked(on_lock_L)
+    btn_lock_R.on_clicked(on_lock_R)
+    btn_calc.on_clicked(on_calc)
+    btn_auto_calc.on_clicked(on_auto_calc)
+    btn_hide_R.on_clicked(on_hide_R)
+    btn_grad_toggle.on_clicked(on_grad_toggle)
+    btn_norm_toggle.on_clicked(on_norm_toggle)
+
+    # ---- Blit 初始化 ----
+    # 切斷 im_A/im_B 的 stale propagation callback：
+    # im.set_data() 會把 artist 標為 stale，stale 向上傳遞到 figure 後
+    # 觸發 canvas.draw_idle()，最終讓 flush_events() 執行完整重繪。
+    # 由於 im_A/im_B 由我們的 blit 路徑手動管理，不需要這個機制。
+    im_A._stale_callback = None
+    im_B._stale_callback = None
+
+    # Monkey-patch draw_idle：按鈕/Widget 觸發的 draw_idle 只需設 flag
+    fig.canvas.draw_idle = request_blit_refresh
+
+    # 顯示視窗並做初始全繪，存成靜態背景
+    plt.show(block=False)
+    fig.canvas.draw()
+    blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
+    blit_state['needs_refresh'] = False
+
+    import time as _time
+    _fps_t0 = _time.perf_counter()
+    _fps_counter = 0
+    _fps_val = 0.0
+    # 各階段耗時累計 (單位: ms)
+    _t_cap = _t_buf = _t_calc_q = _t_result_q = _t_proc = _t_setdata = _t_pause = 0.0
+    _perf_frames = 0
+    _perf_t0 = _time.perf_counter()
+    _last_auto_calc_time = 0.0
+
+    while plt.fignum_exists(fig.number):
+        _t0 = _time.perf_counter()
+
+        ret, frame = cap.read()
+        if not ret: break
+        _t1 = _time.perf_counter(); _t_cap += (_t1 - _t0) * 1000
+
+        frame_left = frame.copy()
+        frame_buffer.append(frame_left)
+        if len(frame_buffer) > 30:
+            frame_buffer.popleft()
+        _t2 = _time.perf_counter(); _t_buf += (_t2 - _t1) * 1000
+
+        # 如果處於連續計算模式，自動觸發（非阻塞），限制每秒最多計算 2 次 (間隔 0.5 秒)
+        _cur_time = _time.perf_counter()
+        if auto_calc_active and has_set_R and (_cur_time - _last_auto_calc_time >= 0.5) and calc_request_q.empty() and not calc_busy.is_set():
+            _last_auto_calc_time = _cur_time
+            on_calc(None)
+        _t3 = _time.perf_counter(); _t_calc_q += (_t3 - _t2) * 1000
+
+        # 輪詢 result queue，有結果就在主執行緒更新 UI
+        try:
+            result = calc_result_q.get_nowait()
+            measure_res_dict = result['measure_res_dict']
+            snap_cand   = result['snap_cand']
+            # 同步更新 current_cand，讓手動點選時可用
+            current_cand.update(snap_cand)
+            if current_cand['idx'] not in measure_results:
+                measure_results[current_cand['idx']] = {}
+            for pt_id, res in measure_res_dict.items():
+                measure_results[current_cand['idx']][pt_id] = res
+            # 更新 ArUco 顯示
+            draw_aruco(ax_A, result['cA_dict'])
+            draw_aruco(ax_B, result['cB_dict'])
+            # 更新 imgA_gray 以便手動點選使用（nonlocal 更新）
+            imgA_gray = cv2.cvtColor(result['imgA_bgr'], cv2.COLOR_BGR2GRAY)
+            # 用 apply_measure_result 更新所有 UI
+            apply_measure_result()
+        except queue.Empty:
+            pass
+        _t4 = _time.perf_counter(); _t_result_q += (_t4 - _t3) * 1000
+
+        # 決定顯示內容
+        if live_L:
+            display_L = frame_left.copy()
+        else:
+            display_L = locked_L
+            
+        if live_R:
+            display_R = frame_left.copy()
+        else:
+            display_R = locked_R
+            
+        imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+        imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)
+        _t5 = _time.perf_counter(); _t_proc += (_t5 - _t4) * 1000
+        
+        im_A.set_data(cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB))
+        im_B.set_data(cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB))
+        _t6 = _time.perf_counter(); _t_setdata += (_t6 - _t5) * 1000
+
+        # FPS 計算與更新
+        _fps_counter += 1
+        _now = _time.perf_counter()
+        _elapsed = _now - _fps_t0
+        if _elapsed >= 0.5:
+            _fps_val = _fps_counter / _elapsed
+            fps_text.set_text(f"FPS: {_fps_val:.1f}")
+            _fps_t0 = _now
+            _fps_counter = 0
+
+        # ---- Blit 渲染 ----
+        if blit_state['needs_refresh'] or blit_state['bg'] is None:
+            # 有 UI 更新（按鈕文字、散點、深度文字…等），做一次完整全圖繪製
+            fig.canvas.draw()
+            blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
+            blit_state['needs_refresh'] = False
+        else:
+            # 只更新影像與 FPS（最快路徑）
+            fig.canvas.restore_region(blit_state['bg'])
+        # 兩路徑都需要 draw_artist + blit，確保畫面不空白
+        ax_A.draw_artist(im_A)
+        ax_A.draw_artist(scatter_A)
+        ax_A.draw_artist(scatter_A2)
+        ax_A.draw_artist(dist_line_A)
+        ax_A.draw_artist(scatter_grad_inject)
+        ax_A.draw_artist(p2p_text)
+        
+        if ax_B.get_visible():
+            ax_B.draw_artist(im_B)
+            
+            # === 手動繪製覆蓋層（解決點、線被影像遮擋的問題） ===
+            # 1. 散點與基礎幾何
+            ax_B.draw_artist(scatter_B)
+            ax_B.draw_artist(scatter_B2)
+            ax_B.draw_artist(dist_line_B)
+            ax_B.draw_artist(scatter_grad_match)
+            ax_B.draw_artist(scatter_all_sift_B)
+            ax_B.draw_artist(epi_line)
+            ax_B.draw_artist(epi_line2)
+            ax_B.draw_artist(sift_rect)
+            ax_B.draw_artist(sift_rect_center)
+    
+            # 2. 梯度 SIFT 連線
+            for line in view_state.get('grad_lines', []):
+                ax_B.draw_artist(line)
+            if view_state.get('highlighted_grad_line_artist'):
+                ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
+                
+        # 繪製深度資訊文字，即使右圖隱藏也維持顯示
+        ax_B.draw_artist(depth_text)
+
+        # 3. ArUco 標記 (儲存在 ax.art 中)
+        for ax in [ax_A, ax_B]:
+            if hasattr(ax, 'art'):
+                if ax == ax_B and not ax_B.get_visible():
+                    continue
+                for a in ax.art:
+                    ax.draw_artist(a)
+        # =========================================================
+
+        ax_A.draw_artist(fps_text)
+        fig.canvas.blit(fig.bbox)
+        fig.canvas.flush_events()
+        _t7 = _time.perf_counter(); _t_pause += (_t7 - _t6) * 1000
+
+        # 每 2 秒印出各階段平均耗時
+        _perf_frames += 1
+        if (_t7 - _perf_t0) >= 2.0:
+            n = _perf_frames
+            print(
+                f"[耗時分析] {n}幀平均 | "
+                f"cap.read={_t_cap/n:.1f}ms  "
+                f"frame_buf={_t_buf/n:.2f}ms  "
+                f"calc_q={_t_calc_q/n:.2f}ms  "
+                f"result_q={_t_result_q/n:.2f}ms  "
+                f"process_view={_t_proc/n:.1f}ms  "
+                f"set_data={_t_setdata/n:.2f}ms  "
+                f"plt.pause={_t_pause/n:.1f}ms  "
+                f"| FPS={_fps_val:.1f}"
+            )
+            _t_cap=_t_buf=_t_calc_q=_t_result_q=_t_proc=_t_setdata=_t_pause=0.0
+            _perf_frames = 0
+            _perf_t0 = _t7
+        
+    cap.release()
+
+if __name__ == "__main__":
+    main()

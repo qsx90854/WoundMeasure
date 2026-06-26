@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-23-42
+
+[減少的部分]
+行 28-30:
+CAMERA_INDEX          = 0                          # 相機索引
+FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+UPDATE_INTERVAL       = 1.0                        # 畫面更新與計算間隔 (秒)
+
+行 204:
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+
+[新增的部分]
+行 28-32:
+CAMERA_INDEX          = 0                          # 相機索引
+FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+UPDATE_INTERVAL       = 1.0                        # 畫面更新與計算間隔 (秒)
+CAMERA_WIDTH          = 2560                       # 相機解析度寬
+CAMERA_HEIGHT         = 720                        # 相機解析度高
+
+行 204-206:
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)

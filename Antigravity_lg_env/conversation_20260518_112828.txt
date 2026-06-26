@@ -1,0 +1,5 @@
+時間：2026-05-18T11:28:28
+對話：
+User: 另外目前用Aruco pattern作即時RT估計, 因為有即時利用RT來作stereo 對齊, 從對齊後畫面一直再抖動來看, RT每次估計的應該都還是有些許不同, 有什麼讓這邊比較穩定的建議嗎
+Antigravity:
+提供了四種改善 ArUco RT 估計抖動的電腦視覺策略：1. 時域濾波平滑 (EMA/Kalman Filter) 2. 光流追蹤角點 (KLT Tracker) 3. 調整角點亞像素精化參數 4. 使用 Aruco Board API 進行聯合優化。

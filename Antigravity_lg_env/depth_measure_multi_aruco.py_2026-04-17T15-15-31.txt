@@ -1,0 +1,40 @@
+時間點: 2026-04-17T15:15:31+08:00
+
+【減少的部份】
+從 `template_match_epipolar` 中刪除了舊有基於 `step=2` 的粗糙尋找與整數回傳：
+    step = 2
+    best_val, best_pt = None, None
+    ... 
+    if best_val is None or val > best_val:
+        best_val = val
+        best_pt = (x + tmpl_w // 2, y + tmpl_h // 2)
+
+從 `do_measure` 拿掉原有的單純帶入：
+    pt3d = triangulate_point_3d((click_u, click_v), match_pt, K, R_rel, t_rel)
+
+【新增的部份】
+在 ArUco 角點偵測後新增次像素優化迴圈：
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+    if cornersA is not None and len(cornersA) > 0:
+        for c in cornersA:
+            cv2.cornerSubPix(imgA_gray, c, (5, 5), (-1, -1), term)
+    ... (cornersB 也同理)
+
+在 `template_match_epipolar` 新增 Parabola 二階曲線擬合法：
+    step = 1
+    ...
+    if 0 < best_idx < len(candidates) - 1:
+        v_m1 = candidates[best_idx - 1][0]
+        v_0  = candidates[best_idx][0]
+        v_p1 = candidates[best_idx + 1][0]
+        denom = 2.0 * (v_m1 - 2.0 * v_0 + v_p1)
+        offset = (v_m1 - v_p1) / denom if abs(denom) > 1e-6 else 0.0
+        ...
+
+在 `do_measure` 新增將匹配點嚴格投影至 Epipolar Line 上的數學：
+    pt_h_A = np.array([click_u, click_v, 1.0])
+    l_B = F @ pt_h_A
+    a, b, c_l = l_B
+    dist_line = (a * match_pt[0] + b * match_pt[1] + c_l) / (a**2 + b**2)
+    proj_match_pt = np.array([match_pt[0] - a * dist_line, match_pt[1] - b * dist_line])
+    pt3d = triangulate_point_3d((click_u, click_v), proj_match_pt, K, R_rel, t_rel)

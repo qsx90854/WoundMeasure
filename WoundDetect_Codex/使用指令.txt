@@ -1,0 +1,4 @@
+python WoundDetect_Codex\aruco_triangulate_point.py --video test_video_Zebra\video_20260601_172424.mp4 --calibration calibration_result_Zebra_1_no_dis.json
+
+python WoundDetect_Codex\aruco_triangulate_point.py --video test_video_Zebra\video_20260601_172436.mp4 --calibration calibration_result_Zebra_1_no_dis.json
+

@@ -1,0 +1,3 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 264-265 行: 完善 `on_clear` 按鈕功能。原本已經會清空追蹤座標 (`track_pts`)、追蹤歷史 (`track_history`) 與深度文字結果。現在額外加入了 `app_state['pick_mode'] = False` 以及 `app_state['playing'] = False`。確保使用者在任何狀態下（例如剛點完第一個點，或正在影片播放追蹤中）按下 Clear Tracks，整個系統都會被強制重置為最乾淨的閒置與暫停狀態，避免後續操作受到殘留狀態影響。

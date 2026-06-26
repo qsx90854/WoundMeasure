@@ -1,0 +1,4 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 133-134, 265, 271, 326-329, 366-373 行: 新增 `app_state['ui_track_history']` 變數。原本的軌跡線是依賴 `track_history` 來繪製，但 `track_history` 只有在 ArUco 偵測成功時才會紀錄。現在改由獨立的 `ui_track_history` 來紀錄畫面上光流追蹤到的所有連續像素點，確保畫面模糊時，軌跡線依然能平滑且連續地畫在畫面上。
+- [修改] 218-220 行: 將 `cv2.calcOpticalFlowPyrLK` 的參數從原本的 `winSize=(15,15), maxLevel=2` 加大為 `winSize=(31,31), maxLevel=3`。較大的搜索視窗與更多的影像金字塔層級能捕捉更大範圍的影像結構特徵，大幅強化了系統在畫面產生動態模糊 (Motion Blur) 或快速移動時的抗飄移 (Drift) 能力。

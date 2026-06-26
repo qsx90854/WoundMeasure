@@ -1,0 +1,14 @@
+時間: 2026-05-08T10-43-35
+使用者請求:
+請做以下修改: 1. 請改成用當前frame作為左圖, frame B作為右圖  2.如果當前frame A跟B計算出來的baseline小於15 mm, 則 frame B不更新, 還是用比較舊以前的那一張, 這是用來避免相機不動之後, frame A跟frame B都變成幾乎一樣的畫面導致算不出深度
+
+回答訊息:
+已完成 `depth_measure_multi_aruco_sbs_camera.py` 的修改：
+1. **角色互換**：將「當前幀（Frame A）」作為左圖（`imgA`），「歷史幀（Frame B）」作為右圖（`imgB`）。點擊座標預設仍為畫面中心。
+2. **Baseline 門檻與歷史幀鎖定**：
+   - 引入 `get_joint_relative_pose` 函數來即時計算當前幀與歷史幀之間的空間位移（Baseline）。
+   - 若計算出的 Baseline 小於 15 mm，則程式會保持使用現有的歷史幀，不從佇列中更新，以確保有足夠的視差進行深度計算。
+   - 若 Baseline 大於等於 15 mm，則會更新歷史幀以維持約 30 幀的時間間隔。
+   - **優化**：當成功計算出位移時，程式會即時更新外參（`R_rel`、`t_rel`），這將大幅提升 Live 模式下的深度量測精度。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

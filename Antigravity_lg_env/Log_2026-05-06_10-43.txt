@@ -1,0 +1,14 @@
+時間點: 2026-05-06 10:43
+
+對話摘要:
+將原本單一的 `videoframe_gap_number` 參數拆分為兩個獨立參數，以便分別控制「左圖與第一張右圖的間距」以及「各個右圖候選幀之間的間距」。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 刪除: `videoframe_gap_number` 全域變數。
+- 新增: `videoframe_left_to_right_gap` 全域變數 (預設 10)。
+- 新增: `videoframe_right_to_right_gap` 全域變數 (預設 10)。
+- 修改: `main` 函式中讀取候選幀的迴圈，將 `f_idx` 的計算公式更新為：`videoframe_leftImage_index + videoframe_left_to_right_gap + i * videoframe_right_to_right_gap`。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

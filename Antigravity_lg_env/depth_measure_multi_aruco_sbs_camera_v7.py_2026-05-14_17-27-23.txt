@@ -1,0 +1,22 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-27-23
+
+減少的部份:
+行號 475 附近:
+                    kpts_inj = [cv2.KeyPoint(float(max(0,ui-sobel_range)+px), float(max(0,vi-sobel_range)+py), 31.0)
+
+行號 482 附近:
+                    rad_u = 20
+
+行號 520 附近:
+                        kpts_r = [cv2.KeyPoint(float(u0+px), float(v0+py), 31.0)
+
+新增的部份:
+行號 475 附近 (顯式加上 angle=-1.0):
+                    kpts_inj = [cv2.KeyPoint(float(max(0,ui-sobel_range)+px), float(max(0,vi-sobel_range)+py), 31.0, -1.0)
+
+行號 482 附近 (加大搜尋範圍):
+                    rad_u = 100
+
+行號 521 附近 (顯式加上 angle=-1.0):
+                        kpts_r = [cv2.KeyPoint(float(u0+px), float(v0+py), 31.0, -1.0)

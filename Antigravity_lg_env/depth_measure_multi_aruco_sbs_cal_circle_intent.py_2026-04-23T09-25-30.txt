@@ -1,0 +1,9 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_cal_circle_intent.py
+時間：2026-04-23 09:25:30
+
+【功能同步】新增外部參數對比報告 (Extrinsic Comparison Report)
+內容：
+1. 新增 `print_extrinsic_report` 函式，用於比對 ArUco 估算的 RT 與 JSON 標定值。
+2. 在程式啟動執行初始 ArUco 姿態估算後，自動印出對比訊息。
+3. 在使用者透過 UI 的 CheckButtons 手動切換 ArUco ID 重新擬合時，同步更新並印出對比報告。
+原因：提供使用者即時的反饋，評估當前影像下 ArUco 估算的精準度與標定值的偏離程度。

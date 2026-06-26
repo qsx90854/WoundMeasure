@@ -1,0 +1,55 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-08-30
+
+減少的部份:
+行號 319-321 附近:
+    scatter_grad_inject = ax_A.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+    scatter_grad_match = ax_B.scatter([], [], s=15, c='cyan', alpha=0.6, zorder=4)
+    scatter_all_sift_B = ax_B.scatter([], [], s=2, c='yellow', alpha=0.3, zorder=3)
+
+行號 443 附近:
+        g_ptsA, g_ptsB, g_kptsB, g_rect = None, None, None, None
+
+行號 474-475 附近:
+                    kpts_inj = [cv2.KeyPoint(float(max(0,ui-sobel_range)+px), float(max(0,vi-sobel_range)+py), 31.0)
+                                for py, px in [divmod(idx, patch_g.shape[1]) for idx in idx_g]]
+
+行號 640-641 附近:
+        return {'pt': m_pt, 'p3d': p3d_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+
+行號 700-715 附近:
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        scatter_grad_inject.set_offsets(np.empty((0,2)))
+        scatter_grad_match.set_offsets(np.empty((0,2)))
+        scatter_all_sift_B.set_offsets(np.empty((0,2)))
+
+行號 1250 附近:
+        ax_A.draw_artist(im_A)
+        ax_A.draw_artist(scatter_A)
+        ax_A.draw_artist(scatter_grad_inject)
+        
+        if ax_B.get_visible():
+
+新增的部份:
+行號 321 附近 (新增 scatter_all_sift_A):
+    scatter_all_sift_A = ax_A.scatter([], [], s=2, c='yellow', alpha=0.3, zorder=3)
+
+行號 442 附近:
+        g_ptsA, g_ptsB, g_kptsA, g_kptsB, g_rect = None, None, None, None, None
+
+行號 474 附近 (新增 g_kptsA 提取):
+                    g_kptsA = [kp.pt for kp in kpts_inj]
+
+行號 638 附近 (新增 g_kptsA 回傳):
+                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_kptsA': g_kptsA, 'g_rect': g_rect,
+
+行號 708 附近 (新增 scatter_all_sift_A 更新):
+        scatter_all_sift_A.set_offsets(np.empty((0,2)))
+        
+        if res.get('g_kptsA') is not None:
+            scatter_all_sift_A.set_offsets(res['g_kptsA'])
+
+行號 1253 附近 (新增 draw_artist):
+        ax_A.draw_artist(scatter_all_sift_A)

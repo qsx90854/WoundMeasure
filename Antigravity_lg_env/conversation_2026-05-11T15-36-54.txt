@@ -1,0 +1,14 @@
+時間: 2026-05-11T15:36:54
+使用者請求:
+請加一個按鈕, 原本使用NORM_L2, 按一下就變成NORM_HAMMING的流程, 再按一下就變回來
+
+回答訊息:
+依據您的需求，已實作切換 NORM_HAMMING 流程的按鈕與底層邏輯。
+因為 `NORM_HAMMING` 必須搭配二進位描述子（如 ORB），我將此按鈕設計為切換「演算法組合」：
+1. **預設模式 (NORM_L2)**：使用 SIFT 提取特徵 + `cv2.NORM_L2` 匹配 + 距離閾值 `< 450`。
+2. **漢明模式 (NORM_HAMMING)**：使用 ORB 提取特徵 + `cv2.NORM_HAMMING` 匹配 + 距離閾值 `< 50`。
+
+修改內容：
+1. 在初始化時建立 `orb = cv2.ORB_create(nfeatures=1000)`。
+2. 在 UI 底部新增「切換 NORM_HAMMING」按鈕。
+3. 在 `compute_measure` 函式中，依據 `view_state['use_hamming']` 的狀態，自動切換特徵提取器與匹配參數。

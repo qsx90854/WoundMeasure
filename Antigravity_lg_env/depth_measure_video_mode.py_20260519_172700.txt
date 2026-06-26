@@ -1,0 +1,7 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [新增] 42-44 行: 引入 `cv2.createCLAHE` 對傳入的灰階影像進行局部對比度強化，把模糊糊掉的邊界拉伸回來，直接提升 OpenCV 原生 `detectMarkers` 的成功率。
+- [新增] 60-76 行: 實作「Optical Flow Fallback (光流補幀)」演算法。如果原生偵測器宣告失敗，我們拿出 `prev_aruco_corners`，使用 `winSize=(31, 31)` 的大視窗 LK 光流法，強行把前一幀的 4 個角點追蹤到當前的模糊畫面中，並透過 `cornerSubPix` 做微調。這讓 ArUco 標籤在相機劇烈晃動時具備極強的防斷訊能力。
+- [新增] 175 行: 在 `app_state` 加入 `prev_aruco_corners`。
+- [修改] 251-255 行: 在 `update_frame` 呼叫解算器時，傳入 `prev_gray` 與 `prev_aruco_corners`，並將解算成功 (含補幀成功) 的角點回存給下一幀使用。
+- [修改] 333 行: 在 `on_clear` 增加清空 `prev_aruco_corners`，確保重置時乾淨。

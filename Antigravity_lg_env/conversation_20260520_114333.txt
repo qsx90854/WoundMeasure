@@ -1,0 +1,21 @@
+時間：2026-05-20T11:43:33
+對話：
+User: 現在 depth_measure_multi_aruco_sbs_camera_v7_demo.py開啟即時計算模式時, 有規定間隔多久算一次嗎 還是全速計算?
+Antigravity:
+目前的即時計算模式（Auto 模式）**並非全速計算**，而是有設定限制的。
+
+具體邏輯位在程式後方的**主迴圈中（約第 1118 行）**：
+```python
+        # 如果處於連續計算模式，自動觸發（非阻塞），限制每秒最多計算 2 次 (間隔 0.5 秒)
+        _cur_time = _time.perf_counter()
+        if auto_calc_active and has_set_R and (_cur_time - _last_auto_calc_time >= 0.5) and calc_request_q.empty() and not calc_busy.is_set():
+            _last_auto_calc_time = _cur_time
+            on_calc(None)
+```
+
+### 主要設計考量：
+1.  **間隔限制**：目前限制為每隔 **0.5 秒**（即每秒最多計算 2 次）才可發送一次計算請求。
+2.  **安全防呆限制**：除了 0.5 秒的時序限制外，還要求 `calc_request_q.empty()` (請求佇列為空) 且 `not calc_busy.is_set()` (背景計算執行緒目前不忙碌) 時，才會觸發計算。
+    *   這是為了避免因為背景的 SIFT/LightGlue 特徵點匹配或影像前處理計算時間較長，導致主執行緒瘋狂塞單而造成畫面嚴重卡頓（Lag）甚至是記憶體溢出。
+
+如果需要調整此計算頻率（例如想改快一點或慢一點），可以直接修改 `(_cur_time - _last_auto_calc_time >= 0.5)` 中的 `0.5` 數值。

@@ -1,0 +1,35 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-17-23
+
+[減少的部分]
+行 28-29:
+#VIDEO_PATH            = "su01_test_images_4/video_20260506_174329.mp4"#"su01_test_images_4/video_20260506_164810.mp4"#"video_20260505_155449.mp4"           # 輸入影片路徑
+VIDEO_PATH            = "video_20260505_155449.mp4"           # 輸入影片路徑
+
+行 234-312 (原始 main 函數中讀取影片與初始化 candidates 的部分):
+包括 cap = cv2.VideoCapture(VIDEO_PATH), get_frame 迴圈, 以及 solvePnP 等姿態估計。
+
+行 665-666:
+    radio.on_clicked(change_cand)
+    plt.show()
+
+[新增的部分]
+行 28-30:
+CAMERA_INDEX          = 0                          # 相機索引
+FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+UPDATE_INTERVAL       = 1.0                        # 畫面更新與計算間隔 (秒)
+
+行 234 開始的 main 函數初始化 (改為相機讀取與 buffer 設定):
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    ...
+    frame_buffer = collections.deque(maxlen=FRAME_GAP + 1)
+    current_cand = { ... }
+    candidates = [current_cand]
+
+行 596 開始的 Live 迴圈 (取代 plt.show()):
+    plt.show(block=False)
+    while plt.fignum_exists(fig.number):
+        ...
+        do_measure(center_u, center_v)
+        plt.pause(0.001)

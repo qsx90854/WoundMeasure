@@ -1,0 +1,17 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py
+修改時間: 2026-05-20T16:53:05
+
+--- 減少的部份 ---
+第 230-231 行:
+```python
+    h_raw, w_raw = first_frame.shape[:2]
+    w_alg = w_raw # 使用全影像
+```
+
+--- 新增的部份 ---
+第 230-232 行:
+```python
+    h_raw, w_raw = first_frame.shape[:2]
+    print(f"📷 實際讀取相機解析度為: {w_raw} x {h_raw}")
+    w_alg = w_raw # 使用全影像
+```

@@ -1,0 +1,8 @@
+對話時間: 2026-06-01T16:17:30+08:00
+
+本次對話與回答摘要：
+1. 解決了使用者點擊左圖時只顯示「未偵測到 ArUco (無效點)」且無 log 輸出的問題。
+2. 根本原因在於 `current_cand` 變數在程式中段（約原 L1527 處）被硬編碼重新賦值為一個空白字典且 `pose_valid=False` 的狀態。這覆蓋掉了主程式初始化時從 `analyze_video_frames` 取得的真實位姿與有效性標記。
+3. 已將該段冗餘的 `current_cand` 初始化刪除，完整保留主程式一開始設定的 ArUco 位姿數據。
+4. 另外，在特徵點匹配失敗（即 `p3d is None` 且 `m_pt is None`）的分支上新增了終端機的 Console Error Log 輸出，並將原因設定為「無匹配點」，以便使用者能夠精準掌握錯誤原因。
+5. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-01T16_17_00+08_00.txt。

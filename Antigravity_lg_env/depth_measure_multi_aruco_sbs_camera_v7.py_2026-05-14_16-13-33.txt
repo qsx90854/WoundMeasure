@@ -1,0 +1,16 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_16-13-33
+
+減少的部份:
+行號 1142-1143:
+        imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+        imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)
+
+新增的部份:
+行號 1142-1149 (約略範圍):
+        if current_cand.get('is_rectified', False):
+            imgA_bgr = cv2.remap(display_L, current_cand['map1_L'], current_cand['map2_L'], cv2.INTER_LINEAR)
+            imgB_bgr = cv2.remap(display_R, current_cand['map1_R'], current_cand['map2_R'], cv2.INTER_LINEAR)
+        else:
+            imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+            imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)

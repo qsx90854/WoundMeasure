@@ -1,0 +1,32 @@
+檔案修改時間：2026-05-29 09:27:49
+被修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py
+
+--------------------------------------------------
+變更: 清除 get_joint_relative_pose 尾部的重複代碼殘留與縮排語法錯誤
+--------------------------------------------------
+減少部份 (原第 349 行至第 374 行)：
+-     return (R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel), map_calibratedv2.solvePnPGeneric(
+-             objA, imgB, K_R, np.zeros(5),
+-             flags=cv2.SOLVEPNP_IPPE
+-         )
+-         if ok_rel and len(rvecs_rel) > 0:
+-             best_idx = 0
+-             if len(rvecs_rel) == 2:
+-                 R0, _ = cv2.Rodrigues(rvecs_rel[0])
+-                 R1, _ = cv2.Rodrigues(rvecs_rel[1])
+-                 best_idx = 0 if np.trace(R0) > np.trace(R1) else 1
+-             rv_rel = rvecs_rel[best_idx]
+-             tv_rel = tvecs_rel[best_idx]
+-             ok_rel = True
+-     else:
+-         if use_guess_rel:
+-             ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True)
+-         else:
+-             ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+- 
+-     if not ok_rel: return None
+-     R_rel, _ = cv2.Rodrigues(rv_rel)
+-     return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel
+
+新增部份 (新第 349 行)：
++     return (R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel), map_calibrated

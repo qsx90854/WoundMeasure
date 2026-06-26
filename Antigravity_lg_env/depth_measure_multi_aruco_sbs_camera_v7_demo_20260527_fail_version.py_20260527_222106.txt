@@ -1,0 +1,64 @@
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py
+修改時間: 20260527_222106
+
+=== 變更 1 (全域設定區新增變數) ===
+原始行號範圍: 43-45 (原始檔案)
+減少內容:
+----------------------------------------
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+----------------------------------------
+新增內容:
+----------------------------------------
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+ARUCO_SUBPIX_WIN_SIZE = 3                          # ArUco 角點 cornerSubPix 搜尋半徑 (winSize)
+----------------------------------------
+
+=== 變更 2 (在 cornerSubPix 中套用該變數) ===
+原始行號範圍: 157-161 (原始檔案)
+減少內容:
+----------------------------------------
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (3, 3), (-1, -1), term)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (3, 3), (-1, -1), term)
+----------------------------------------
+新增內容:
+----------------------------------------
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (ARUCO_SUBPIX_WIN_SIZE, ARUCO_SUBPIX_WIN_SIZE), (-1, -1), term)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (ARUCO_SUBPIX_WIN_SIZE, ARUCO_SUBPIX_WIN_SIZE), (-1, -1), term)
+----------------------------------------
+
+=== 變更 3 (於 draw_aruco 繪製 cornerSubPix 搜尋範圍矩形框) ===
+原始行號範圍: 407-410 (原始檔案)
+減少內容:
+----------------------------------------
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+----------------------------------------
+新增內容:
+----------------------------------------
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+                
+                # 繪製 cornerSubPix 搜尋範圍矩形框 (搜尋視窗寬高為 2 * ARUCO_SUBPIX_WIN_SIZE)
+                r_size = 2 * ARUCO_SUBPIX_WIN_SIZE
+                r_patch = Rectangle(
+                    (pts[i,0] - ARUCO_SUBPIX_WIN_SIZE, pts[i,1] - ARUCO_SUBPIX_WIN_SIZE),
+                    r_size, r_size,
+                    fill=False, edgecolor='white', lw=0.5, alpha=0.6, zorder=4
+                )
+                ax.add_patch(r_patch)
+                ax.art.append(r_patch)
+----------------------------------------

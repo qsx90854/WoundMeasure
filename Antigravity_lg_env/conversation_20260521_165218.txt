@@ -1,0 +1,10 @@
+時間：2026-05-21T16:52:18
+對話：
+User: 我發現depth_measure_multi_aruco_sbs_camera_v7.py 如果在開啟連續計算時才鎖定右圖, 計算出來的baseline都會異常
+Antigravity:
+分析與原因：
+當您在「開啟連續計算（Auto Calc = 開）」時才點選「鎖定右圖（Lock Right）」時，系統會立即調用 `on_calc(None)`。此時由於左圖處於 Live（`live_L = True`）狀態，背景線程會同時抓取 `current_L_snap`（當前 Frame）與剛剛鎖定的 `locked_R`（同樣是當前 Frame），導致進行計算的 Left 與 Right 影像實質上完全相同。
+這會造成 PnP 位姿估計（solvePnP）在退化配置（無位移）下因高頻噪聲干擾而求解出極度異常的平移量（Baseline）。在有時序連續性約束的 `v7_demo.py` 中，這個異常初值會被寫入 `history_rel_pose`，造成後續的 `useExtrinsicGuess=True` 不斷陷於局部極值而持續異常；在沒有時序約束的 `v7.py` 中，因為沒有移開相機，首幀異常的 Baseline 與不正確的雙目對齊 Map 也會直接破壞畫面與初始值。
+
+解決方案：
+我們修改了 `depth_measure_multi_aruco_sbs_camera_v7.py`、`depth_measure_multi_aruco_sbs_camera_v7_demo.py` 等 5 個相關檔案中的 `on_lock_R` 邏輯。當鎖定右圖時，僅在左圖也已被鎖定（`not live_L`）時才立即調用 `on_calc(None)`。如果左圖依然處於 Live 狀態，則不立即觸發計算，而是交由主迴圈的自動計算（連續計算）在下一個週期（0.5秒後，此時左圖已經更新為不同影格）自動觸發。如此一來便能完美避開使用完全相同幀影像進行計算的退化狀況，確保計算出的 Baseline 恆常正常。

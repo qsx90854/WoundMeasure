@@ -1,0 +1,11 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_cal_circle_intent.py
+時間：2026-04-22 14:29:23
+
+【修改功能】橢圓區域批次量測 - 改為使用 LightGlue 特徵點
+內容：
+1. 移除 `main` 函式中計算 SGBM 視差圖的全域邏輯，節省啟動時間。
+2. 修改 `calculate_ellipse_stats()`：
+   - 不再遍歷每個像素，而是遍歷 LightGlue (或 OpenCV) 偵測到的所有特徵匹配點。
+   - 篩選落在橢圓範圍內的特徵點，並進行 3D 三維重建。
+   - 計算這些特徵與擬合平面的垂直距離統計值（平均值與標準差）。
+原因：回應使用者需求，維持使用 LightGlue 匹配架構，不使用 SGBM。

@@ -1,0 +1,15 @@
+時間: 2026-05-12T16:49:24
+使用者請求:
+單獨勾選Farnback 其他選項都不勾的時候, 計算深度時會跳: ... Number of proj points coordinates must be == 2 ...
+
+回答訊息:
+這個錯誤是由於 OpenCV 的 `cv2.triangulatePoints` 函數嚴格要求輸入的二維點座標必須包含 $X$ 與 $Y$ 兩個維度（即形狀必須為 $2 \times N$）。
+
+問題點分析：
+我在前次實作中，傳入該函數的點位只給了水平座標（即 `[[u_rect]]` 與 `[[mapped_rectB[0]]]`），漏掉了垂直座標（$V$ 軸），導致 OpenCV 抱怨點的維度不等於 2。
+先前在「梯度 SIFT 匹配」模式下，因為有時候會優先觸發 ArUco 或 Precise 等其他匹配分支，所以這個潛在的 bug 沒有被突顯出來；而當您單獨勾選 Farneback 時，強迫程式走入了這個出錯的分支。
+
+我已經將 Grad-SIFT 與 Farneback 兩個分支中的 `cv2.triangulatePoints` 參數都進行了修正：
+* 補上了缺失的 `v_rect` 與 `mapped_rectB[1]`，確保傳入的都是完整的 $2 \times 1$ 二維點座標。
+
+請您再次重新執行程式進行測試！

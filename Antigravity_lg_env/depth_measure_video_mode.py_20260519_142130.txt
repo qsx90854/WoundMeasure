@@ -1,0 +1,3 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 21-29 行: 修正 `load_calibration` 函式。因為 `calibration_result_c2.json` 的結構是立體相機標定格式，內含 `"intrinsic_L"` 與 `"intrinsic_R"` 等階層，有別於原本單相機的 `"K"` 與 `"dist"`，所以加入了 `if 'intrinsic_L' in data:` 的判斷，正確讀取 `data['intrinsic_L']['matrix']` 與 `data['intrinsic_L']['distortion']`。同時也保留對舊格式的相容性。

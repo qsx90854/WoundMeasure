@@ -1,0 +1,24 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T11-22-33
+
+[減少的部分]
+行 359-361 (原始 do_measure 中迴圈開頭):
+    未檢查 pose_valid。
+
+行 629-645 (原始 Live 迴圈中的 Baseline 計算):
+    pose_info 預設為 "JSON 預設(無共享 ArUco)"。
+    未計算方向。
+
+行 651-656:
+    未傳入 pose_valid。
+
+[新增的部分]
+行 362-370 附近 (do_measure):
+    加入 `if not cand.get('pose_valid', True):` 檢查，若無效則設定失敗原因為「未偵測到 ArUco」並 `continue` 跳過後續計算。
+
+行 642-656 附近 (Live 迴圈):
+    `pose_info` 預設改為 "未偵測到 ArUco"。
+    新增 `pose_valid` 旗標。
+    新增 `direction = "向左" if t_r[0] > 0 else "向右"` 判斷，並加入 `pose_info` 中。
+    將 `pose_valid` 存入 `current_cand`。

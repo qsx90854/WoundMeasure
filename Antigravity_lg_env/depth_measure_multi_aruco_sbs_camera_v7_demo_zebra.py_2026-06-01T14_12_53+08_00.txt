@@ -1,0 +1,10 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T14:12:53+08:00
+
+--- 減少的部份 ---
+行號 383:
+    w_alg = w_raw // 2 # 使用畫面左半邊
+
+--- 新增的部份 ---
+行號 383:
+    w_alg = w_raw # 使用完整相機畫面

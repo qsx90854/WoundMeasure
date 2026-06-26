@@ -1,0 +1,12 @@
+時間點: 2026-05-05 08:12
+
+對話摘要:
+新增 SAVE_ARUCO_DEBUG_IMG 變數與相關邏輯，用於將偵測到的 ArUco 標籤標註並存出為圖片，方便偵錯。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: 全域變數 SAVE_ARUCO_DEBUG_IMG (預設為 True)。
+- 新增: 在 main 迴圈中，若開啟儲存功能，會自動建立 debug_aruco 資料夾，並存出左圖基準幀與每一張右圖候選幀的偵測結果圖 (包含綠色/黃色外框與 ID 文字)。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

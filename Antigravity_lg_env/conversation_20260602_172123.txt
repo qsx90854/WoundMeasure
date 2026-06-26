@@ -1,0 +1,16 @@
+時間點: 2026-06-02T17:21:23+08:00
+
+使用者提問:
+好 請這樣修改
+
+助手回答:
+已為您完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 的程式修改。
+主要變更如下：
+1. 定義全域變數 `ANALYSIS_LOG` 與 `COMBINATION_LOG` 收集日誌。
+2. 替換控制台列印為 `log_and_print`。
+3. 在 `analyze_video_frames` 內遍歷並收集所有兩兩影格的 Baseline 與重投影誤差組合。
+4. 在 UI 啟動前，以 `'w'` 模式初始化寫入日誌至影片同名的 `.txt` 首部。
+5. 每次點選點時以追加模式 `'a'` 寫入點位與量測數值至該檔案末端。
+
+檔案變更與行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_20260602_172123.txt` 中。
+請您檢視或執行測試。

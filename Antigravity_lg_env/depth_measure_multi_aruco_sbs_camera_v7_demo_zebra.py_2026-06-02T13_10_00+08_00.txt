@@ -1,0 +1,35 @@
+修改時間: 2026-06-02T13:10:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L1568 - L1578):
+-            if res['p3d'] is not None:
+-                rvec_rel, _ = cv2.Rodrigues(current_cand['R_rel'])
+-                pt_reproj_B, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), rvec_rel, current_cand['t_rel'], KL, np.zeros(5))
+-                pt_reproj_B = pt_reproj_B.reshape(2)
+-                scatter_B_reproj.set_offsets([[pt_reproj_B[0], pt_reproj_B[1]]])
+-                
+-                # 投影回左圖 A (左相機坐標系下 R=I, t=0)
+-                pt_reproj_A, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), np.zeros(3), np.zeros(3), KL, np.zeros(5))
+-                pt_reproj_A = pt_reproj_A.reshape(2)
+-                scatter_A_reproj.set_offsets([[pt_reproj_A[0], pt_reproj_A[1]]])
+-            else:
+
+新增的部份:
+(約新 L1568 - L1583):
++            if res['p3d'] is not None:
++                rvec_rel, _ = cv2.Rodrigues(current_cand['R_rel'])
++                pt_reproj_B, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), rvec_rel, current_cand['t_rel'], KL, np.zeros(5))
++                pt_reproj_B = pt_reproj_B.reshape(2)
++                scatter_B_reproj.set_offsets([[pt_reproj_B[0], pt_reproj_B[1]]])
++                
++                # 投影回左圖 A (左相機坐標系下 R=I, t=0)
++                pt_reproj_A, _ = cv2.projectPoints(res['p3d'].reshape(1, 1, 3), np.zeros(3), np.zeros(3), KL, np.zeros(5))
++                pt_reproj_A = pt_reproj_A.reshape(2)
++                scatter_A_reproj.set_offsets([[pt_reproj_A[0], pt_reproj_A[1]]])
++                
++                # 計算點匹配重投影誤差並印出
++                err_L = np.linalg.norm(np.array([u, v]) - pt_reproj_A)
++                err_R = np.linalg.norm(np.array(res['pt']) - pt_reproj_B)
++                print(f"📊 [點匹配重投影誤差] 左圖 (點選點 vs 右圖點反投影): {err_L:.2f} px | 右圖 (匹配點 vs 左圖點正投影): {err_R:.2f} px")
++            else:

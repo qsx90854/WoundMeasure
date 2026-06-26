@@ -1,0 +1,63 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T16-58-40
+
+[減少的部分]
+行 456-482 (原縮進):
+-                            pts_info = []
+-                            for m in good:
+-                                pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
+-                                if np.linalg.norm(pL - np.array([u, v])) < 50:
+-                                    pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+-                            if len(pts_info) >= 3:
+-                                offs = np.array([x['off'] for x in pts_info]); med_off = np.median(offs, axis=0)
+-                                pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 15]
+-                            if pts_info:
+-                                ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
+-                                ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
+-                                mapped = None
+-                                if len(ptsA_m) >= 6:
+-                                    H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
+-                                    if H_local is not None:
+-                                        pt_h = H_local @ np.array([u, v, 1.0])
+-                                        mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
+-                                if mapped is None and len(ptsA_m) >= 3:
+-                                    M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+-                                    if M_local is not None:
+-                                        pt_a = M_local @ np.array([u, v, 1.0])
+-                                        mapped = pt_a[:2]
+-                                if mapped is None:
+-                                    wts = 1.0 / (np.sum((ptsA_m - np.array([u, v]))**2, axis=1) + 1e-5)
+-                                    mapped = np.array([u, v]) + np.sum((ptsB_m - ptsA_m) * wts[:, np.newaxis], axis=0) / np.sum(wts)
+-                                m_pt, method = mapped, "Grad-SIFT"
+-                                g_ptsA, g_ptsB = ptsA_m, ptsB_m
+
+[新增的部分]
+行 456-482 (新縮進):
++                        pts_info = []
++                        for m in good:
++                            pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
++                            if np.linalg.norm(pL - np.array([u, v])) < 50:
++                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
++                        if len(pts_info) >= 3:
++                            offs = np.array([x['off'] for x in pts_info]); med_off = np.median(offs, axis=0)
++                            pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 15]
++                        if pts_info:
++                            ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
++                            ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
++                            mapped = None
++                            if len(ptsA_m) >= 6:
++                                H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
++                                if H_local is not None:
++                                    pt_h = H_local @ np.array([u, v, 1.0])
++                                    mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
++                            if mapped is None and len(ptsA_m) >= 3:
++                                M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
++                                if M_local is not None:
++                                    pt_a = M_local @ np.array([u, v, 1.0])
++                                    mapped = pt_a[:2]
++                            if mapped is None:
++                                wts = 1.0 / (np.sum((ptsA_m - np.array([u, v]))**2, axis=1) + 1e-5)
++                                mapped = np.array([u, v]) + np.sum((ptsB_m - ptsA_m) * wts[:, np.newaxis], axis=0) / np.sum(wts)
++                            m_pt, method = mapped, "Grad-SIFT"
++                            g_ptsA, g_ptsB = ptsA_m, ptsB_m

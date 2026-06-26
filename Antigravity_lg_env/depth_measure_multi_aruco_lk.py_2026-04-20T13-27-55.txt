@@ -1,0 +1,6 @@
+時間點: 2026-04-20T13:27:55+08:00
+
+【新增的部份】
+1. 建立 `measure_state['lg_lines'] = []` 陣列用來追蹤當前畫出的跨圖軸連線。
+2. 於 `do_measure` 函式頂部加入 `line.remove()` 以確保每次新點擊都會先自動清空上一輪遺留的 LightGlue 連線。
+3. 在 LightGlue 使用 IDW 內插邏輯分支中 (`if len(in_radius_idx) > 0`)，引入 `from matplotlib.patches import ConnectionPatch`，將收集到的左右特徵點，以洋紅色 (`magenta`) 虛線直接跨圖連接 `ax_A` 與 `ax_B`，以視覺化參照關係。

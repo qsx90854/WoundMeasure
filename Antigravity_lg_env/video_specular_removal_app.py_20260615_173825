@@ -1,0 +1,46 @@
+修改時間: 2026-06-15 17:38:25
+修改檔案: video_specular_removal_app.py
+
+=========================================
+變更 1: 修正 v_scale 元件建立與佈局
+原始行數: 151 - 152
+=========================================
+減少部分:
+-----------------------------------------
+        self.v_scale = ttk.Scale(param_frame, from_=100, to=255, value=190, orient=tk.HORIZONTAL, command=self.on_param_change)
+        self.v_scale.pack(side=tk.LEFT, width=120, padx=5)
+
+新增部分:
+-----------------------------------------
+        self.v_scale = ttk.Scale(param_frame, from_=100, to=255, value=190, orient=tk.HORIZONTAL, command=self.on_param_change, length=120)
+        self.v_scale.pack(side=tk.LEFT, padx=5)
+
+
+=========================================
+變更 2: 修正 s_scale 元件建立與佈局
+原始行數: 159 - 160
+=========================================
+減少部分:
+-----------------------------------------
+        self.s_scale = ttk.Scale(param_frame, from_=10, to=150, value=60, orient=tk.HORIZONTAL, command=self.on_param_change)
+        self.s_scale.pack(side=tk.LEFT, width=120, padx=5)
+
+新增部分:
+-----------------------------------------
+        self.s_scale = ttk.Scale(param_frame, from_=10, to=150, value=60, orient=tk.HORIZONTAL, command=self.on_param_change, length=120)
+        self.s_scale.pack(side=tk.LEFT, padx=5)
+
+
+=========================================
+變更 3: 修正 sigma_scale 元件建立與佈局
+原始行數: 174 - 175
+=========================================
+減少部分:
+-----------------------------------------
+        self.sigma_scale = ttk.Scale(param_frame, from_=1.0, to=15.0, value=5.0, orient=tk.HORIZONTAL, command=self.on_param_change)
+        self.sigma_scale.pack(side=tk.LEFT, width=100, padx=5)
+
+新增部分:
+-----------------------------------------
+        self.sigma_scale = ttk.Scale(param_frame, from_=1.0, to=15.0, value=5.0, orient=tk.HORIZONTAL, command=self.on_param_change, length=100)
+        self.sigma_scale.pack(side=tk.LEFT, padx=5)

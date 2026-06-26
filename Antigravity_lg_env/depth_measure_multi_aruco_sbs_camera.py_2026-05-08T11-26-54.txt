@@ -1,0 +1,23 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T11-26-54
+
+[減少的部分]
+行 226-228 (原始 main 開頭):
+    未初始化 active_u/v。
+
+行 582-583 (原始 on_release 中的點擊處理):
+    直接呼叫 do_measure(ux, vx)，未保留座標。
+
+行 694-697 (原始 Live 迴圈結尾):
+    每次都重新計算畫面中心並強制量測中心點。
+
+[新增的部分]
+行 227-228:
+    新增 `active_u = w_alg // 2` 與 `active_v = h_raw // 2` 作為全局量測點的初始值。
+
+行 582-587 附近 (on_release):
+    加入 `nonlocal active_u, active_v`，並在點擊左圖時更新這兩個變數，再進行量測。
+
+行 692-694 附近 (Live 迴圈結尾):
+    刪除計算中心的程式碼，改為 `do_measure(active_u, active_v)`，使自動量測會跟隨使用者最後點擊的位置。

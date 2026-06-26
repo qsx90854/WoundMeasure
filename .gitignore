@@ -1,0 +1,109 @@
+# Windows image file caches
+Thumbs.db
+ehthumbs.db
+
+# Folder config file
+Desktop.ini
+
+# Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+# Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+# Windows shortcuts
+*.lnk
+
+# =========================
+# Operating System Files
+# =========================
+
+# OSX
+# =========================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+#others
+.vs/
+.vscode/
+build/
+image/
+out/
+
+# =========================
+# Local Python environment / heavy dependencies
+# =========================
+Lib/
+Scripts/
+Include/
+share/
+pyvenv.cfg
+
+# =========================
+# Large generated/data folders
+# =========================
+_useless/
+DNG/
+nii/
+video__/
+test_video/
+test_video_Zebra/
+test_video_Live/
+mvs_workspace/
+OpenMVS_Windows_x64/
+Fake_wound_image/
+Fake_wound_image_n/
+test_image/captured_images_lego_1_output/
+wound_detection_model/model/assets/
+
+# =========================
+# Large model/media/3D/medical files
+# =========================
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.onnx
+*.pt
+*.pth
+*.engine
+*.dng
+*.nii
+*.nii.gz
+*.obj
+*.ply
+*.xyz
+*.dmap
+*.7z
+*.zip
+*.rar
+
+# =========================
+# Large binary dependency artifacts
+# =========================
+*.dll
+*.pyd
+*.lib

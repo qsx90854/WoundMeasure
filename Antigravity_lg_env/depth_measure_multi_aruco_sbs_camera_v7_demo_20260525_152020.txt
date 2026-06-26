@@ -1,0 +1,95 @@
+修改時間：2026-05-25T15:20:20
+被修改檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+
+--- 減少的部份 (原第 177-192 行) ---
+177:         use_guess = False
+178:         rv_init, tv_init = None, None
+179:         if prev_marker_poses is not None and mid in prev_marker_poses:
+180:             rv_init = prev_marker_poses[mid][0].copy().astype(np.float32)
+181:             tv_init = prev_marker_poses[mid][1].copy().astype(np.float32)
+182:             use_guess = True
+183:             
+184:         if use_guess:
+185:             ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), rvec=rv_init, tvec=tv_init, useExtrinsicGuess=True)
+186:         else:
+187:             ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))
+188:             
+189:         if ok:
+190:             curr_marker_poses[mid] = (rv, tv)
+191:             R, _ = cv2.Rodrigues(rv)
+192:             objA.append((R @ canon.T).T + tv.T); imgB.append(cB[idxB][0])
+
+--- 新增的部份 (現第 177-208 行) ---
+177:         # 使用 solvePnPGeneric 與 IPPE 求解標籤平面的可能姿態候選解以解決二義性問題
+178:         ok, rvecs, tvecs, errs = cv2.solvePnPGeneric(
+179:             canon, cA[idxA][0], K_L, np.zeros(5),
+180:             flags=cv2.SOLVEPNP_IPPE
+181:         )
+182:         
+183:         if ok and len(rvecs) > 0:
+184:             best_idx = 0
+185:             if len(rvecs) == 2:
+186:                 # 1. 優先使用時序連續性約束進行二義性消解
+187:                 if prev_marker_poses is not None and mid in prev_marker_poses:
+188:                     rv_prev, tv_prev = prev_marker_poses[mid]
+189:                     R_prev, _ = cv2.Rodrigues(rv_prev)
+190:                     n_prev = R_prev[:, 2] # 前一幀法向量
+191:                     
+192:                     score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+193:                     score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+194:                     best_idx = 0 if score0 > score1 else 1
+195:                 else:
+196:                     # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+197:                     R0, _ = cv2.Rodrigues(rvecs[0])
+198:                     R1, _ = cv2.Rodrigues(rvecs[1])
+199:                     n0, n1 = R0[:, 2], R1[:, 2]
+200:                     
+201:                     dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+202:                     dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+203:                     
+204:                     tilt0 = abs(np.dot(n0, dir0))
+205:                     tilt1 = abs(np.dot(n1, dir1))
+206:                     best_idx = 0 if tilt0 > tilt1 else 1
+207:             
+208:             rv = rvecs[best_idx]
+209:             tv = tvecs[best_idx]
+210:             curr_marker_poses[mid] = (rv, tv)
+211:             R, _ = cv2.Rodrigues(rv)
+212:             objA.append((R @ canon.T).T + tv.T)
+213:             imgB.append(cB[idxB][0])
+
+=========================================
+
+--- 減少的部份 (原第 218-222 行) ---
+218:     if use_guess_rel:
+219:         ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True)
+220:     else:
+221:         ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+
+--- 新增的部份 (現第 234-257 行) ---
+234:     # 解算相對位姿
+235:     ok_rel = False
+236:     if len(shared) == 1:
+237:         # 單個標籤，使用 IPPE 並選擇相對旋轉最小（Trace 最大）的解
+238:         ok_rel, rvecs_rel, tvecs_rel, _ = cv2.solvePnPGeneric(
+239:             objA, imgB, K_R, np.zeros(5),
+240:             flags=cv2.SOLVEPNP_IPPE
+241:         )
+242:         if ok_rel and len(rvecs_rel) > 0:
+243:             best_idx = 0
+244:             if len(rvecs_rel) == 2:
+245:                 R0, _ = cv2.Rodrigues(rvecs_rel[0])
+246:                 R1, _ = cv2.Rodrigues(rvecs_rel[1])
+247:                 best_idx = 0 if np.trace(R0) > np.trace(R1) else 1
+248:             rv_rel = rvecs_rel[best_idx]
+249:             tv_rel = tvecs_rel[best_idx]
+250:             ok_rel = True
+251:     else:
+252:         # 多標籤聯合，使用常規 solvePnP
+253:         if use_guess_rel:
+254:             ok_rel, rv_rel, tv_rel = cv2.solvePnP(
+255:                 objA, imgB, K_R, np.zeros(5),
+256:                 rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True
+257:             )
+258:         else:
+259:             ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))

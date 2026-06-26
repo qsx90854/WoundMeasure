@@ -1,0 +1,14 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-29-04
+
+[減少的部分]
+行 506:
+            main_text = f"深度(Z): {res['d']:.1f}mm{p_dist_str}"
+
+[新增的部分]
+行 506-509:
+            if res['d'] is not None:
+                main_text = f"深度(Z): {res['d']:.1f}mm{p_dist_str}"
+            else:
+                main_text = f"深度(Z): 無效(無法三角測距){p_dist_str}"

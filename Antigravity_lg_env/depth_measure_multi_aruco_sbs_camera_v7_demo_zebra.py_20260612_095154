@@ -1,0 +1,170 @@
+修改時間: 2026-06-12 09:51:54
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+此文件記錄本次 SIFT 點輔助相對外參解算的減少與新增部分，供日後恢復代碼使用。
+
+--------------------------------------------------
+變更 1:
+原行號: L70 - L71
+減少部分:
+DISABLE_EXTRA_CANDS_ECC_PRECISE = True            # 預設是否在多影格融合的次要影格中停用 ECC 與 Precise 精修 (設為 True 可大幅提升點選反應速度)
+
+# ----------------- 交互特徵點匹配搜索設定 -----------------
+
+新增部分:
+DISABLE_EXTRA_CANDS_ECC_PRECISE = True            # 預設是否在多影格融合的次要影格中停用 ECC 與 Precise 精修 (設為 True 可大幅提升點選反應速度)
+
+ENABLE_SIFT_PNP_ASSIST = True                      # 當僅有 1 個 ArUco 標籤時，是否啟用 SIFT 特徵點輔助 RT 與 baseline 解算
+
+# ----------------- 交互特徵點匹配搜索設定 -----------------
+
+--------------------------------------------------
+變更 2:
+原行號: L1261 - L1268
+減少部分:
+    if len(shared) == 1:
+        ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+    else:
+        if use_guess_rel:
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True)
+        else:
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+
+新增部分:
+    ok_rel = False
+    rv_rel = None
+    tv_rel = None
+
+    if len(shared) == 1:
+        if ENABLE_SIFT_PNP_ASSIST:
+            # 1. 首先解出一個粗略的相對姿態做為初值與極線、單應性參考
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+            if ok_rel:
+                R_rel_init, _ = cv2.Rodrigues(rv_rel)
+                
+                # 計算該單個標籤的世界平面法向量 n 與中心 c
+                v1 = objA[1] - objA[0]
+                v2 = objA[3] - objA[0]
+                n_plane = np.cross(v1, v2)
+                n_norm = np.linalg.norm(n_plane)
+                if n_norm > 1e-6:
+                    n_plane = n_plane / n_norm
+                    if n_plane[2] > 0:
+                        n_plane = -n_plane
+                    c_plane = np.mean(objA, axis=0)
+                    d_plane = np.dot(n_plane, c_plane)
+                    
+                    H, W = imgA_gray.shape
+                    mid_label = shared[0]
+                    corners_A = cA_dict[mid_label]
+                    center_2d = np.mean(corners_A, axis=0)
+                    
+                    # 定義左圖 ROI (1/3 影片大小) 與右圖較大的檢測區 (1/2 影片大小)
+                    roi_w, roi_h = int(W / 3), int(H / 3)
+                    x_min = max(0, int(center_2d[0] - roi_w / 2))
+                    x_max = min(W, int(center_2d[0] + roi_w / 2))
+                    y_min = max(0, int(center_2d[1] - roi_h / 2))
+                    y_max = min(H, int(center_2d[1] + roi_h / 2))
+                    
+                    roi_w_R, roi_h_R = int(W / 2), int(H / 2)
+                    x_min_R = max(0, int(center_2d[0] - roi_w_R / 2))
+                    x_max_R = min(W, int(center_2d[0] + roi_w_R / 2))
+                    y_min_R = max(0, int(center_2d[1] - roi_h_R / 2))
+                    y_max_R = min(H, int(center_2d[1] + roi_h_R / 2))
+                    
+                    # 提取 SIFT
+                    sift_pnp = cv2.SIFT_create(contrastThreshold=0.005)
+                    roi_imgA = imgA_gray[y_min:y_max, x_min:x_max]
+                    kps_A_sub, des_A = sift_pnp.detectAndCompute(roi_imgA, None)
+                    
+                    roi_imgB = imgB_gray[y_min_R:y_max_R, x_min_R:x_max_R]
+                    kps_B_sub, des_B = sift_pnp.detectAndCompute(roi_imgB, None)
+                    
+                    if (kps_A_sub is not None and len(kps_A_sub) > 0 and 
+                        kps_B_sub is not None and len(kps_B_sub) > 0 and 
+                        des_A is not None and des_B is not None):
+                        
+                        kps_A = [cv2.KeyPoint(kp.pt[0] + x_min, kp.pt[1] + y_min, kp.size) for kp in kps_A_sub]
+                        kps_B = [cv2.KeyPoint(kp.pt[0] + x_min_R, kp.pt[1] + y_min_R, kp.size) for kp in kps_B_sub]
+                        
+                        K_L_inv = np.linalg.inv(K_L.astype(np.float64))
+                        H_AB_init = K_R @ (R_rel_init + (tv_rel @ n_plane.reshape(1, 3)) / d_plane) @ K_L_inv
+                        
+                        t = tv_rel.flatten()
+                        tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]], dtype=np.float64)
+                        E = tx @ R_rel_init
+                        K_R_inv = np.linalg.inv(K_R.astype(np.float64))
+                        F_init = K_R_inv.T @ E @ K_L_inv
+                        
+                        bf = cv2.BFMatcher()
+                        matches = bf.knnMatch(des_A, des_B, k=2)
+                        
+                        extra_objA = []
+                        extra_imgB = []
+                        
+                        for m, n_match in matches:
+                            # 第一重：Lowe's Ratio Test (<0.6)
+                            if m.distance < 0.6 * n_match.distance:
+                                pt_L = np.array(kps_A[m.queryIdx].pt)
+                                pt_R = np.array(kps_B[m.trainIdx].pt)
+                                
+                                # 第二重：平面單應性距離約束 (< 40px)
+                                pt_L_h = np.array([pt_L[0], pt_L[1], 1.0])
+                                pt_R_proj_h = H_AB_init @ pt_L_h
+                                if abs(pt_R_proj_h[2]) > 1e-6:
+                                    pt_R_proj = np.array([pt_R_proj_h[0]/pt_R_proj_h[2], pt_R_proj_h[1]/pt_R_proj_h[2]])
+                                    if np.linalg.norm(pt_R - pt_R_proj) < 40.0:
+                                        
+                                        # 第三重：極線距離約束 (< 2.0px)
+                                        l_R = F_init @ pt_L_h
+                                        denom_epi = l_R[0]**2 + l_R[1]**2
+                                        if denom_epi > 1e-9:
+                                            dist_epi = abs(l_R[0]*pt_R[0] + l_R[1]*pt_R[1] + l_R[2]) / np.sqrt(denom_epi)
+                                            if dist_epi < 2.0:
+                                                
+                                                # 第四重：共面反投影得到 3D 點
+                                                ray = K_L_inv @ pt_L_h
+                                                denom_ray = np.dot(n_plane, ray)
+                                                if abs(denom_ray) > 1e-6:
+                                                    lambda_val = d_plane / denom_ray
+                                                    if lambda_val > 0:
+                                                        pt_3D = ray * lambda_val
+                                                        extra_objA.append(pt_3D)
+                                                        extra_imgB.append(pt_R)
+                        
+                        # 第五重：RANSAC 與二次精修
+                        if len(extra_objA) >= 8:
+                            total_objA = np.vstack([objA, np.array(extra_objA, dtype=np.float32)])
+                            total_imgB = np.vstack([imgB, np.array(extra_imgB, dtype=np.float32)])
+                            
+                            ok_ransac, rv_ransac, tv_ransac, inliers = cv2.solvePnPRansac(
+                                total_objA, total_imgB, K_R, np.zeros(5),
+                                reprojectionError=2.0, iterationsCount=150, flags=cv2.SOLVEPNP_ITERATIVE
+                            )
+                            
+                            if ok_ransac and inliers is not None and len(inliers) >= 6:
+                                inliers = inliers.flatten()
+                                objA_inliers = total_objA[inliers]
+                                imgB_inliers = total_imgB[inliers]
+                                
+                                ok_refine, rv_refine, tv_refine = cv2.solvePnP(
+                                    objA_inliers, imgB_inliers, K_R, np.zeros(5),
+                                    rvec=rv_ransac, tvec=tv_ransac, useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE
+                                )
+                                if ok_refine:
+                                    rv_rel, tv_rel = rv_refine, tv_refine
+                                    ok_rel = True
+                                    print(f"🚀 [SIFT-PnP 輔助成功] 使用 {len(inliers)} 個內點二次精修相對外參，Baseline: {np.linalg.norm(tv_rel):.2f} mm")
+            
+            # 安全降級：如果 SIFT 輔助解算未成功，則保留最初解出的粗估位姿
+            if not ok_rel:
+                print("⚠️ [SIFT-PnP 輔助未成功或點數不足] 降級使用純 ArUco 角點的初始 PnP 解")
+        else:
+            # 初始 solvePnP 也失敗，直接降級
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+    else:
+        # 共享標籤大於 1 個時
+        if use_guess_rel:
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), rvec=rv_rel_init, tvec=tv_rel_init, useExtrinsicGuess=True)
+        else:
+            ok_rel, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)

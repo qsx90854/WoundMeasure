@@ -1,0 +1,11 @@
+時間: 2026-05-08T13:26:46
+使用者請求:
+請改成不更新圖片的時候 baseline也要使用當前frameA和舊圖B算出來的baseline
+
+回答訊息:
+再次確認並說明目前的程式碼「已經是」這樣運作的：
+1. 程式碼中，`get_joint_relative_pose(imgA_gray, imgB_gray, ...)` 是在判斷 15 mm 之前就執行完畢。
+2. 計算出的 `R_r` 和 `t_r`（包含 Baseline）不論是否小於 15 mm，都會在隨後的 `if pose_ok:` 區塊中被寫入 `current_cand`。
+3. 因此，即使因為小於 15 mm 導致 Frame B 的圖片「不更新」，隨後的三角測距也「已經在用」這組最新算出來的 Baseline 與外參了。
+
+此對話已紀錄，無程式碼修改。

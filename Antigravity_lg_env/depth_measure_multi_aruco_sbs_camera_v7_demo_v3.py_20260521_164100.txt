@@ -1,0 +1,21 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_v3.py
+修改時間: 2026-05-21T16:41:00
+
+--- 減少的部份 ---
+第 353 行:
+```python
+            t = ax.text(pts[0,0], pts[0,1]-5, f"ID:{mid}", color='cyan', fontsize=8); ax.art.extend([l, t])
+```
+
+--- 新增的部份 ---
+第 353-361 行:
+```python
+            t = ax.text(pts[0,0], pts[0,1]-5, f"ID:{mid}", color='cyan', fontsize=8)
+            ax.art.extend([l, t])
+            
+            # 用四種不同顏色標示四個角點：紅(0)、綠(1)、藍(2)、黃(3)，以協助確認平面方向是否正確
+            c_colors = ['ro', 'go', 'bo', 'yo']
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+```

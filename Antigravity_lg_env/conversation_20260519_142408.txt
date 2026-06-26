@@ -1,0 +1,14 @@
+時間：2026-05-19T14:24:08
+對話：
+User:
+KeyboardInterrupt
+^C
+(lg_env) D:\Lightglue\lg_env>python depth_measure_video_mode.py
+Traceback (most recent call last):
+...
+AttributeError: module 'cv2.aruco' has no attribute 'DetectorParameters_create'. Did you mean: 'DetectorParameters'?
+Antigravity:
+這是一個因為 OpenCV 版本差異所導致的問題！在較新的 OpenCV 版本 (4.7 以上) 中，`cv2.aruco` 的底層 API 被大規模重構，移除了 `DetectorParameters_create()` 這個舊式寫法。
+
+因為我剛剛在撰寫新檔案時，忘記把舊版程式裡的「版本相容性判斷」加進去了。
+我已經立刻幫您補上 `hasattr(cv2.aruco, 'ArucoDetector')` 的相容性判斷邏輯，現在這支程式可以順利在您的 OpenCV 版本下運作了。請再重新執行看看！

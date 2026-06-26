@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T14-20-40
+
+[減少的部分]
+行 658:
+                R_r, t_r, baseline_val, _, _, _, _ = res_pose
+
+行 672-674:
+            else:
+                # 找不到共享 ArUco 時，照常更新，避免永遠卡住
+                stored_raw_B = frame_buffer[0]
+
+[新增的部分]
+行 658:
+                R_r, t_r, baseline_val, _, _, cA_dict, cB_dict = res_pose
+
+行 662-663:
+                draw_aruco(ax_A, cA_dict)
+                draw_aruco(ax_B, cB_dict)
+
+行 674-676:
+                stored_raw_B = frame_buffer[0]
+                draw_aruco(ax_A, {})
+                draw_aruco(ax_B, {})

@@ -1,0 +1,20 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T09-35-35
+
+[減少的部分]
+行 630:
+-                p_dist_str = f" | 距平面: {p_dist:.1f}mm"
+
+[新增的部分]
+行 577-578:
++    plane_dist_history = collections.deque(maxlen=15)
+
+行 630-638:
++                if auto_calc_active:
++                    plane_dist_history.append(p_dist)
++                    p_dist_str = f" | 距平面(15幀均): {np.mean(plane_dist_history):.1f}mm"
++                else:
++                    if len(plane_dist_history) > 0:
++                        plane_dist_history.clear()
++                    p_dist_str = f" | 距平面: {p_dist:.1f}mm"

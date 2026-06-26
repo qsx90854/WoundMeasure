@@ -1,0 +1,117 @@
+時間點: 2026-06-05T14:50:15+08:00
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+【減少部分】
+1. 約原第 1532 至 1537 行（`view_state` 宣告）：
+```python
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+```
+
+2. 約原第 2344 至 2400 行（標準按鈕初始化與樣式）：
+```python
+    ax_btn_custom_plane = fig.add_axes([0.88, 0.86, 0.08, 0.04])
+    btn_custom_plane = Button(ax_btn_custom_plane, "自訂平面擬合", **btn_style)
+    
+    # 建立 TextBox 用於傷口高度補償
+...
+    # 統一設定字型、文字顏色與邊框寬度
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane]:
+...
+    # 3. 功能切換類：使用中性的深灰 (#555555)
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane]:
+        b.ax.patch.set_edgecolor('#555555')
+        
+    btn_grad_toggle.label.set_fontsize(7) # 特長文字微調
+    
+    def on_grad_toggle(event):
+...
+    def on_norm_toggle(event):
+        view_state['use_hamming'] = not view_state['use_hamming']
+        btn_norm_toggle.label.set_text('使用 L2' if view_state['use_hamming'] else '切換 HAMMING')
+        request_blit_refresh()
+```
+
+3. 約原第 2592 至 2594 行（點擊綁定）：
+```python
+    btn_norm_toggle.on_clicked(on_norm_toggle)
+    btn_custom_plane.on_clicked(on_custom_plane)
+```
+
+4. 約原第 2693 至 2697 行（`main` 進入與結束）：
+```python
+        _time.sleep(0.01)
+
+if __name__ == "__main__":
+    main()
+```
+
+【新增部分】
+1. 約第 1532 至 1537 行（`view_state` 加上 `restart`）：
+```python
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+                  'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+```
+
+2. 約第 2344 至 2408 行（加入 `btn_return_menu` 按鈕、綠色細邊框與 `on_return_menu` 回調）：
+```python
+    ax_btn_custom_plane = fig.add_axes([0.88, 0.86, 0.08, 0.04])
+    btn_custom_plane = Button(ax_btn_custom_plane, "自訂平面擬合", **btn_style)
+    
+    ax_btn_return_menu = fig.add_axes([0.88, 0.80, 0.08, 0.04])
+    btn_return_menu = Button(ax_btn_return_menu, "返回主選單", **btn_style)
+    
+    # 建立 TextBox 用於傷口高度補償
+...
+    # 統一設定字型、文字顏色與邊框寬度
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_return_menu]:
+...
+    # 3. 功能切換類：使用中性的深灰 (#555555)
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane]:
+        b.ax.patch.set_edgecolor('#555555')
+        
+    # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
+    btn_return_menu.ax.patch.set_edgecolor('#28A745')
+        
+    btn_grad_toggle.label.set_fontsize(7) # 特長文字微調
+    
+    def on_grad_toggle(event):
+...
+    def on_norm_toggle(event):
+        view_state['use_hamming'] = not view_state['use_hamming']
+        btn_norm_toggle.label.set_text('使用 L2' if view_state['use_hamming'] else '切換 HAMMING')
+        request_blit_refresh()
+        
+    def on_return_menu(event):
+        view_state['restart'] = True
+        plt.close(fig)
+        print("🔄 正在關閉目前量測介面並返回影片來源選單...")
+```
+
+3. 約第 2594 至 2597 行（綁定新按鈕點擊）：
+```python
+    btn_norm_toggle.on_clicked(on_norm_toggle)
+    btn_custom_plane.on_clicked(on_custom_plane)
+    btn_return_menu.on_clicked(on_return_menu)
+```
+
+4. 約第 2693 至 2704 行（`main` 回傳重啟標記，且 `__main__` 在迴圈中重複呼叫 `main`）：
+```python
+        _time.sleep(0.01)
+
+    return view_state.get('restart', False)
+
+if __name__ == "__main__":
+    while True:
+        should_restart = main()
+        if not should_restart:
+            break
+        import matplotlib.pyplot as plt
+        plt.close('all')
+```

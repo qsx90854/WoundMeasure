@@ -1,0 +1,22 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-09T13:12:38+08:00
+
+說明：
+優化多右圖融合測量點擊時的耗時問題。在 `do_measure` 迴圈中，針對次要右圖（`extra_candidates_list`）進行匹配計算時，強製跳過耗時的 ECC 亞像素精修與精細匹配（`precise`），僅保留主影格進行高精度亞像素優化。
+
+--------------------------------------------------
+[修改] 行 2335 - 2345 (限制次要影格匹配的選項)
+--------------------------------------------------
+         all_cands = [current_cand] + extra_candidates_list
+         res_list = []
+         for cand in all_cands:
+-            res_c = compute_measure(u, v, cand, left_img_gray, snap_vs, manual_match_pt)
+-            res_c['cand_idx'] = cand['idx']
++            # 性能優化：只有主影格 (current_cand) 需要進行耗時的 ECC 亞像素精修與精細匹配
++            # 其他次要右圖只進行高速特徵匹配以估計 3D 點用於均攤深度，避免點選時卡頓數秒
++            cand_vs = dict(snap_vs)
++            if cand['idx'] != current_cand['idx']:
++                cand_vs['ecc'] = False
++                cand_vs['precise'] = False
++            res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt)
++            res_c['cand_idx'] = cand['idx']

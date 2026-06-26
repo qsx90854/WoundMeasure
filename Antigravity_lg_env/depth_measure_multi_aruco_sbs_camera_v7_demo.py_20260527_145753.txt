@@ -1,0 +1,16 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-27 14:57:53 (20260527_145753)
+
+=========================================
+新增與減少的部份（附帶行數）：
+=========================================
+新增部分:
+1. (Line 838 - 842):
+   在 HUD 文字渲染中，改為計算有向距離 (signed distance) `np.dot(custom_plane_n, p3d_c - custom_plane_c)`。
+   根據法向量朝向相機的特性，若點到平面的投影有向值大於 0 代表高於平面 (更接近相機)；小於 0 則代表低於平面 (遠離相機)。
+   顯示文字調整為：`\n距自訂平面: 高於/低於 XX.Xmm`。
+
+減少部分:
+1. (Line 840 - 841):
+   -proj_dist = abs(np.dot(custom_plane_n, p3d_c - custom_plane_c))
+   -custom_plane_str = f"\n距自訂平面: {proj_dist:.1f}mm"

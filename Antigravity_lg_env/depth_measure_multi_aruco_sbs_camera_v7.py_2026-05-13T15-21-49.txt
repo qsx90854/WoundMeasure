@@ -1,0 +1,21 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:21:49
+
+[減少的部分]
+行 351-360 附近 (舊版 CheckButtons 內部屬性訪問):
+-        c.rectangles[0].set_edgecolor('white')
+-        c.rectangles[0].set_facecolor('#1E1E1E')
+-        for l in c.lines[0]:
+-            l.set_color('white')
+
+[新增的部分]
+行 351 附近 (改用 Axes 尋找物件以相容不同版本):
++    # 高亮與深色背景適配（透過 Axes 尋找物件以相容不同 Matplotlib 版本）
++    for ax in [ax_c1, ax_c2, ax_c3, ax_c4, ax_c5]:
++        for patch in ax.patches:
++            patch.set_edgecolor('white')
++            patch.set_facecolor('#1E1E1E')
++        for line in ax.lines:
++            line.set_color('white')
++            line.set_linewidth(1.5)

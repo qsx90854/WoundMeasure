@@ -1,0 +1,5 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 89-94 行: 修改 `undistort_points_for_triangulation`。取消傳入 `P=K` 參數，使其直接回傳不受內參縮放影響的「相機正規化座標 (Normalized Coordinates)」。
+- [修改] 205-208 行: 將歷史儲存的 `current_P` 變更為純外參矩陣 `[R | t]`，去除原本的 $K$ 矩陣，以匹配正規化座標的投影。
+- [修改] 282-297 行: 在 `on_calc_btn` 執行 SVD 求解前，將儲存的平移矩陣 `tvec` 縮小 1000 倍 (從 mm 轉換為 m)。這個關鍵操作能使 DLT 矩陣 $A$ 內部的所有元素 (旋轉分量與平移分量) 都落在 $\sim 1.0$ 的量級，完美解決 SVD 在計算巨大座標差異時導致的數值崩潰 (Ill-conditioned) 問題。計算出的 3D 座標求出後再放大 1000 倍轉回 mm。

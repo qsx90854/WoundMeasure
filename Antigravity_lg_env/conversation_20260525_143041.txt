@@ -1,0 +1,13 @@
+時間：2026-05-25T14:30:41
+對話：
+User: depth_measure_multi_aruco_sbs_camera_v7_demo.py現在這支程式計算baseline的部分是畫面上所有Aruco pattern都會用到? 還是只用ID比較小的那個
+Antigravity:
+分析與解答：
+在 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中，計算雙目相對位姿（及 Baseline）的 `get_joint_relative_pose` 函式會使用畫面上**所有在左右圖中同時被偵測到的（共享）ArUco pattern**，而**不是**只用 ID 最小的那一個。
+
+具體流程如下：
+1. 系統先找出左右兩圖中皆存在的共享標籤集合 `shared`。
+2. 對於 `shared` 中的每一個 ArUco ID（`mid`），皆呼叫 `cv2.solvePnP` 來解算該標籤在左相機下的 3D 空間角點坐標，並將其全部附加至 `objA` 列表中，同時將對應的右圖 2D 角點坐標附加至 `imgB` 列表中。
+3. 最終，系統會將所有共享標籤拼合而成的 3D 點雲 `objA` 與 2D 點雲 `imgB` 一起傳入 `cv2.solvePnP`，以此求解出左相機到右相機的相對位姿 $(R, t)$，並據此計算出 Baseline。
+
+因此，畫面上只要有複數個 ArUco 標籤被雙目同時偵測到，它們都會共同參與 Baseline 的計算，這有助於提升位姿與距離解算的精確度與穩健性。

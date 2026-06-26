@@ -1,0 +1,5 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py
+修改紀錄:
+- [新增] 1201-1204 行: 在主程式背景重繪迴圈中，新增 `ax_A.draw_artist(scatter_A2)`、`ax_A.draw_artist(dist_line_A)` 以及 `ax_A.draw_artist(p2p_text)`。
+- [新增] 1208-1210 行: 新增 `ax_B.draw_artist(scatter_B2)`、`ax_B.draw_artist(dist_line_B)` 以及 `ax_B.draw_artist(epi_line2)`。
+原因：此專案為了追求高效能 (維持 60 FPS 且降低 CPU 耗用)，使用了 matplotlib 的 `blit` 技術。`blit` 每次在重新整理畫面時，會先直接貼上背景影像，如果後來新增的點線沒有利用 `draw_artist()` 強制告訴系統「要在圖片之上畫出這個元件」，這些元件就會被更新的相機畫面給無情覆蓋掉。因此將雙點與連線強制加入重繪序列中即可修復。

@@ -1,0 +1,20 @@
+時間：2026-05-21T16:41:00
+對話：
+User: 目前偵測到的Aruco pattern會畫rect, 能否在四個角點各用不同顏色的circle畫圓, 讓我知道目前pattern平面是否有找對
+Antigravity:
+已為您在以下主要 Python 量測程式中實作了「四色 ArUco 角點標註」功能：
+* `depth_measure_multi_aruco_sbs_camera_v7_demo.py`
+* `depth_measure_multi_aruco_sbs_camera_v7_demo_v3.py`
+* `depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py`
+* `depth_measure_multi_aruco_sbs_camera_v7_demo_nb.py`
+
+### 標註細節：
+在 ArUco 檢測繪圖模組 `draw_aruco` 函數中，我們分別對每個 Pattern 的 4 個角點繪製不同顏色的圓點：
+1. **左上角 (Corner 0)**：🔴 紅色 (`ro`)
+2. **右上角 (Corner 1)**：🟢 綠色 (`go`)
+3. **右下角 (Corner 2)**：🔵 藍色 (`bo`)
+4. **左下角 (Corner 3)**：🟡 黃色 (`yo`)
+
+這能讓您在視窗畫面中直觀地透過「紅、綠、藍、黃」順時針方向排序，立刻判讀各個 ArUco 標籤的旋轉姿態與偵測順序是否正確，以確認平面重投影的對齊方向。
+
+依據您的指示，此 Python 檔案修改完成後，我並未嘗試自己執行，請您在您的環境下運行並進行測試驗證。

@@ -1,0 +1,14 @@
+時間: 2026-05-12T11:04:36
+使用者請求:
+ 目前偵測Aruco之後拿角點去計算RT時, 有用subCorner的function再找準一點嗎
+
+回答訊息:
+有的！目前的程式碼中已經有使用 `cv2.cornerSubPix` 來進行次像素（Sub-pixel）級別的角點精修。
+
+在 `compute_global_plane` 與 `get_joint_relative_pose` 這兩個處理 ArUco 角點的函式中，偵測完標籤後，都會馬上執行以下這段邏輯：
+```python
+term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+if cA is not None:
+    for c in cA: cv2.cornerSubPix(imgA_gray, c, (5, 5), (-1, -1), term)
+```
+它使用了 `(5, 5)` 的搜尋視窗大小，並設定了最大迭代 30 次或誤差小於 0.001 的終止條件。因此目前餵給 `solvePnP` 的角點座標，都已經是精修過的次像素精確位置了。

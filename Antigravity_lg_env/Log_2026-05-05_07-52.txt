@@ -1,0 +1,14 @@
+時間點: 2026-05-05 07:52
+
+對話摘要:
+修改 camera_capture_forvideo.py，將原本按 's' 存圖功能改為切換錄影（開始/停止），並以時間戳記命名。
+
+修改檔案: camera_capture_forvideo.py
+
+檔案變更統計:
+- 新增: datetime 模組導入
+- 修改: 's' 按鍵邏輯由存圖改為 cv2.VideoWriter 錄影控制
+- 新增: 預覽畫面左下角紅點與 "REC" 字樣提示錄影中
+- 修改: 啟動說明文字
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

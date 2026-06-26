@@ -1,0 +1,18 @@
+修改時間: 2026-06-01T16:14:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (約原 L1496 - L1501):
+-    locked_L = None
+-    locked_R = None
+-    live_L = True
+-    live_R = True
+-    has_set_L = False
+-    has_set_R = False
+
+新增的部份 (約新 L1496 - L1501):
++    locked_L = imgA_bgr.copy()
++    locked_R = imgB_bgr.copy()
++    live_L = False
++    live_R = False
++    has_set_L = True
++    has_set_R = True

@@ -1,0 +1,39 @@
+修改時間: 2026-06-01T16:33:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L372 - L373):
+-        R_rel = R_end_avg @ R_start_avg.T
+-        t_rel = t_end_avg - R_rel @ t_start_avg
+(約原 L398 - L399):
+-                R_rel_cand = R_e @ R_s.T
+-                t_rel_cand = t_e - R_rel_cand @ t_s
+(約原 L412 - L413):
+-            R_rel = best_end['R'] @ best_start['R'].T
+-            t_rel = best_end['t'] - R_rel @ best_start['t']
+(約原 L1396 - L1400):
+-                    rad = 30
+-                    sift_rect.set_bounds(u_exp - rad, v_exp - rad, rad*2, rad*2)
+-                    sift_rect.set_visible(True)
+-                    sift_rect_center.set_data([u_exp], [v_exp])
+-                    sift_rect_center.set_visible(True)
+
+新增的部份:
+(約新 L372 - L373):
++        R_rel = R_start_avg @ R_end_avg.T
++        t_rel = t_start_avg - R_rel @ t_end_avg
+(約新 L398 - L399):
++                R_rel_cand = R_s @ R_e.T
++                t_rel_cand = t_s - R_rel_cand @ t_e
+(約新 L412 - L413):
++            R_rel = best_start['R'] @ best_end['R'].T
++            t_rel = best_start['t'] - R_rel @ best_end['t']
+(約新 L1396 - L1406):
++                    if 0 <= u_exp < w and 0 <= v_exp < h:
++                        rad = 30
++                        sift_rect.set_bounds(u_exp - rad, v_exp - rad, rad*2, rad*2)
++                        sift_rect.set_visible(True)
++                        sift_rect_center.set_data([u_exp], [v_exp])
++                        sift_rect_center.set_visible(True)
++                    else:
++                        print(f"⚠️ [預估搜尋框繪製失敗] 單應性投影預測點 ({u_exp:.1f}, {v_exp:.1f}) 超出影像邊界。")

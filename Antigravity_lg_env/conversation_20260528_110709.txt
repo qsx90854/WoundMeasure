@@ -1,0 +1,50 @@
+時間：2026-05-28 11:07:09
+
+使用者提問：
+可以從改程式碼的方式來改良, 我只是說先給建議別直接修改我的code, 還有新的建議嗎
+
+Antigravity回答：
+如果可以透過修改程式碼來進行改良，以下是針對 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 提出的具體程式碼修改與優化建議（目前先不變更您的程式碼檔案）：
+
+### 1. 修正 IPPE 二義性消解邏輯中的 Logic Bug（關鍵問題）
+在 `get_joint_relative_pose` 函數中（大約第 185 行開始），程式碼在進行單個標籤的二義性消解時，存在邏輯覆蓋問題：
+```python
+if len(rvecs) == 2:
+    # 1. 優先使用時序連續性約束進行二義性消解
+    if prev_marker_poses is not None and mid in prev_marker_poses:
+        # ... 略 ...
+        best_idx = 0 if score0 > score1 else 1
+    
+    # ⚠️ 這裡缺少 else！導致下面的代碼會無條件執行，並直接覆蓋上面的 best_idx！
+    # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+    # ... 略 ...
+    best_idx = 0 if tilt0 > tilt1 else 1  # 👈 這一行無條件覆蓋了時序約束的結果
+```
+**建議改進**：將其改為 `if-else` 結構。如果存在前一幀歷史（`prev_marker_poses`），則**嚴格**使用時序連續性約束；只有在首幀或無歷史資訊時，才採用傾斜角最小的約束。這樣能極大增強時序狀態的穩定性。
+
+### 2. 引入物理 Baseline 閥值約束與異常值剔除（Outlier Rejection）
+由於相機的物理基線在硬體上是固定的（例如約 10~15 mm），當估算出的基準線長度嚴重偏離預期時，可以直接判定該幀外參失效。
+* **建議改進**：
+  ```python
+  EXPECTED_BASELINE_MM = 12.0  # 填入您相機的物理設計基線
+  BASELINE_TOLERANCE_MM = 5.0  # 容許的波動範圍
+  
+  # 在 get_joint_relative_pose 計算出 baseline 後進行檢查：
+  if pose_valid:
+      if not (EXPECTED_BASELINE_MM - BASELINE_TOLERANCE_MM <= baseline_val <= EXPECTED_BASELINE_MM + BASELINE_TOLERANCE_MM):
+          pose_valid = False
+          pose_info = f"外參異常 (Bsl: {baseline_val:.1f}mm 偏離預期)"
+  ```
+  這樣做可以立刻將 200 多 mm 這種荒謬的突波過濾掉，系統會自動在該幀沿用前一幀穩定的外參，而不會污染整個測量流程。
+
+### 3. 使用「中位數濾波」代替簡單的 EMA 濾波
+目前程式碼採用一階低通濾波（EMA）平滑相對位姿。當出現 200 多 mm 的極端突波時，EMA 的輸出仍會被嚴重拉偏。
+* **建議改進**：建立一個長度為 $N$（例如 $N=5$）的滑動視窗，對 `tv_rel`（以及 `rv_rel`）進行**中位數濾波（Median Filter）**。中位數濾波對於偶發的極端脈衝噪訊有著 100% 的抑制效果。
+
+### 4. 在多標籤聯合定位時啟用 RANSAC 求解
+在 `get_joint_relative_pose` 中，若有複數個標籤被偵測到（`len(shared) > 1`），目前使用的是標準的 `cv2.solvePnP`。
+* **建議改進**：改用 `cv2.solvePnPRansac`。如果有某個極小的標籤因為噪訊產生了嚴重的定位偏差，RANSAC 可以自動將其識別為離群點（Outlier）並予以剔除，從而保證整體求解的魯棒性。
+
+### 5. 局部插值放大偵測（Super-Resolution Detection）
+對於畫面上極小的 ArUco 標籤，可以直接在程式碼中進行局部放大：
+* **建議改進**：先以粗略參數檢測到 ArUco 標籤的位置，將標籤所在的 ROI 區域切出來，利用 `cv2.resize`（配合雙立方插值 `cv2.INTER_CUBIC`）放大 2~3 倍，然後在此放大後的影像上重新執行精細的亞像素角點檢測，最後再把檢測到的坐標折算回原始影像尺寸。這能有效彌補小標籤像素解析度不足的缺陷。

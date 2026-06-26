@@ -1,0 +1,16 @@
+時間點: 2026-04-17T16:42:44+08:00
+
+【減少的部份】
+無，均以條件取代。
+
+【新增的部份】
+1. 在 UI 介面新增一組控制按鈕：
+    ax_options = fig.add_axes([0.15, 0.75, 0.12, 0.1])
+    opt_labels = ["啟用 LK 優化", "手動匹配模式"]
+    ... 以及對應的回呼事件，更新狀態變數 `view_state`。
+2. 修改 `on_release` 加入手動模式狀態機：
+    如果 `manual_mode` 成立，當點擊左圖時，只畫出特徵點與對應於右圖的極線，並將點擊座標記錄為 `view_state['manual_pt_A']`，暫不觸發深度量測。
+    當點擊右圖時，檢測若存在 `manual_pt_A`，則提取出來，連同本次右圖之點擊呼叫 `do_measure(..., manual_match_pt=...)`。
+3. 修改 `do_measure` 函式接受 `manual_match_pt`：
+    若該參數有值，則直接把演算法找特徵點的那三大段落：吸附、搜圓、範本匹配全部跳過 (`if match_pt is not None: break`)。
+4. 將原本的 LK 光流演算包覆於 `if view_state.get('use_lk', True):` 條件內，賦予使用者啟閉的自由。

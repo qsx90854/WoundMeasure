@@ -1,0 +1,14 @@
+時間點: 2026-05-05 08:29
+
+對話摘要:
+將原先 `depth_measure_multi_aruco_sbs.py` 中的進階特徵匹配功能（LightGlue 與 Grad-SIFT 局部注入）恢復至影片版本的 `depth_measure_multi_aruco_sbs_camera.py` 中。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: LightGlue 全域匹配與 Grad-SIFT 局部梯度注入匹配邏輯。
+- 修改: 在初始化階段為每一個候選幀預計算 LightGlue/SIFT 特徵池。
+- 修改: do_measure 函式現在會依序嘗試 ArUco Snap、Grad-SIFT、Precise Match 與 LightGlue Radius Search 來尋找最精確的匹配點。
+- 修改: 恢復 UI 中的「嚴格精細匹配」與「梯度 SIFT 匹配」切換選項。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

@@ -1,0 +1,14 @@
+時間點: 2026-06-03T14:41:46+08:00
+
+使用者提問:
+目前depth_measure_multi_aruco_sbs_camera_v7_demo_live和depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py會選符合條件且投影誤差最小的圖片組合來用, 請加一個debug功能, 把最佳和最差的圖片組合都存成png檔, 再畫了Aruco Pattern的Rect之後再存
+
+助手回答:
+已在離線影片分析與自標定模組 (`depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py`) 中，為您實現了最優與最差對圖片的疊加標記繪製與自動存檔功能：
+1. 在 reproj_min 模式的雙層搜尋循環中，額外追蹤在滿足 Baseline 下限條件下重投影誤差最大的那組配對作為最差候選對 (`worst_pair`)。
+2. 新增嵌套函數 `save_debug_pair_images`。當完成分析後，系統會複製這兩對影格的影像，並在上面使用 `cv2.polylines` 繪製：
+   - 青色實線：實際檢測到的 ArUco 角點邊框 (Obs:ID)。
+   - 紅色實線：透過相對外參轉移雙向投影過來的重投影邊框 (Proj:ID)，藉此在視覺上直觀呈現重合度。
+3. 檔案會分別儲存於 `test_video_Zebra/debug_pairs/` 與 `test_video_Live/debug_pairs/` 底下，檔名為 `frame_A_best.png`, `frame_B_best.png`, `frame_A_worst.png`, `frame_B_worst.png`。
+4. 檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_20260603_144146.txt` 與 `..._live.py_20260603_144146.txt` 中。
+請您手動執行程式以驗證修改結果是否符合預期。

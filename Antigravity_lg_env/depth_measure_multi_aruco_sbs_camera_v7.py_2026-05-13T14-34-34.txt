@@ -1,0 +1,40 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T14:34:34
+
+[減少的部分]
+行 273 附近 (建立 Figure):
+-    fig, axes = plt.subplots(1, 2, figsize=(15, 7))
+
+行 366 附近 (梯度 SIFT 按鈕):
+-    ax_btn_grad = fig.add_axes([0.3, 0.02, 0.15, 0.05])
+
+行 375 附近 (HAMMING 按鈕):
+-    ax_btn_norm = fig.add_axes([0.02, 0.92, 0.10, 0.04]) # 放左上角，避免重疊
+
+行 762-777 附近 (其餘按鈕):
+-    # 建立按鈕
+-    ax_btn_lock_L = fig.add_axes([0.25, 0.92, 0.15, 0.04])
+-    ax_btn_calc = fig.add_axes([0.35, 0.92, 0.12, 0.04])
+-    ax_btn_auto_calc = fig.add_axes([0.52, 0.92, 0.15, 0.04])
+-    ax_btn_lock_R = fig.add_axes([0.72, 0.92, 0.15, 0.04])
+-    ax_btn_hide_R = fig.add_axes([0.88, 0.92, 0.10, 0.04])
+
+[新增的部分]
+行 273 附近 (建立 Figure):
++    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
++    fig.subplots_adjust(top=0.82, right=0.98, left=0.05)
+
+行 366 附近 (梯度 SIFT 按鈕):
++    ax_btn_grad = fig.add_axes([0.81, 0.86, 0.17, 0.04])
+
+行 375 附近 (HAMMING 按鈕):
++    ax_btn_norm = fig.add_axes([0.88, 0.92, 0.10, 0.04])
+
+行 762-777 附近 (其餘按鈕):
++    # 建立按鈕 (已重新排列至右上角)
++    ax_btn_lock_L = fig.add_axes([0.55, 0.92, 0.10, 0.04])
++    ax_btn_lock_R = fig.add_axes([0.66, 0.92, 0.10, 0.04])
++    ax_btn_hide_R = fig.add_axes([0.77, 0.92, 0.10, 0.04])
++    ax_btn_calc = fig.add_axes([0.55, 0.86, 0.10, 0.04])
++    ax_btn_auto_calc = fig.add_axes([0.66, 0.86, 0.14, 0.04])

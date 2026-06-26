@@ -1,0 +1,46 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_16-13-16
+
+減少的部份:
+行號 990-995:
+                    R_r, t_r, baseline_val, _, shared, cA_dict, cB_dict = res_pose
+                    pose_valid = True
+                    direction = "向左" if t_r[0] > 0 else "向右"
+                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+
+行號 1029-1033:
+                if pose_valid:
+                    snap_cand.update({
+                        'R_rel': R_r, 't_rel': t_r,
+                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+                    })
+
+新增的部份:
+行號 990-1007 (約略範圍):
+                    R_r, t_r, baseline_val, _, shared, cA_dict, cB_dict = res_pose
+                    pose_valid = True
+                    direction = "向左" if t_r[0] > 0 else "向右"
+                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+                    
+                    # 🌟 動態雙目對齊 (Dynamic Stereo Rectification)
+                    h, w = snap_imgA_gray.shape
+                    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(KL, np.zeros(5), KL, np.zeros(5), (w, h), R_r, t_r)
+                    map1_L, map2_L = cv2.initUndistortRectifyMap(KL, np.zeros(5), R1, P1, (w, h), cv2.CV_16SC2)
+                    map1_R, map2_R = cv2.initUndistortRectifyMap(KL, np.zeros(5), R2, P2, (w, h), cv2.CV_16SC2)
+                    
+                    # 對齊影像
+                    snap_imgA_gray = cv2.remap(snap_imgA_gray, map1_L, map2_L, cv2.INTER_LINEAR)
+                    imgB_gray_ = cv2.remap(imgB_gray_, map1_R, map2_R, cv2.INTER_LINEAR)
+
+行號 1039-1047 (約略範圍):
+                if pose_valid:
+                    snap_cand.update({
+                        'R_rel': R_r, 't_rel': t_r,
+                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
+                        'P1_rect': P1, 'P2_rect': P2,
+                        'map1_L': map1_L, 'map2_L': map2_L,
+                        'map1_R': map1_R, 'map2_R': map2_R,
+                        'is_rectified': True
+                    })

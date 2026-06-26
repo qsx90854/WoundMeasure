@@ -1,0 +1,18 @@
+修改時間: 2026-06-01T17:48:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L252):
+-def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, marker_size_mm, select_mode="average"):
+(約原 L298):
+-                c_undist = cv2.undistortPoints(c, mtxL_o, dist_L, P=K_L)
+(約原 L742):
+-    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE)
+
+新增的部份:
+(約新 L252):
++def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average"):
+(約新 L298):
++                c_undist = cv2.undistortPoints(c, mtx_L, dist_L, P=K_L)
+(約新 L742):
++    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE)

@@ -1,0 +1,13 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T16-23-14
+
+[減少的部分]
+行 481-482:
+-                                g_kptsB = [kp.pt for kp in kpts_r]
+-                                g_rect = (u0, v0, u1-u0, v1-v0)
+
+[新增的部分]
+行 431-432:
++                        g_kptsB = [kp.pt for kp in kpts_r]
++                        g_rect = (u0, v0, u1-u0, v1-v0)

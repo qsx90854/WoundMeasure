@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T11-01-40
+
+[減少的部分]
+行 130:
+-        ok, rv, tv = cv2.solvePnP(canon, c[0], K_L, np.zeros(5))
+行 170:
+-        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5))
+行 192:
+-    ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5))
+
+[新增的部分]
+行 130:
++        ok, rv, tv = cv2.solvePnP(canon, c[0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_SQPNP)
+行 170:
++        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_SQPNP)
+行 192:
++    ok, rv_rel, tv_rel = cv2.solvePnP(objA, imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_SQPNP)

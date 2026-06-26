@@ -1,0 +1,8 @@
+時間：2026-05-18T14:54:34
+對話：
+User: 請幫忙把depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py也改成用全畫面來作, 不是用畫面左半邊, 且相機解析度為1920x1080, 60FPS, 預設畸變參數是0(沒畸變)
+Antigravity:
+已經為您一併把 `depth_measure_multi_aruco_sbs_camera_v7_demo_v2.py` 的設定全部升級完畢：
+1. 取消了針對 SBS 的影像左半裁切邏輯，現在全域都使用原圖進行存取。
+2. 解析度設為 1920x1080 並加入 60 FPS 的底層驅動請求。
+3. `load_json_camera_params` 強制宣告為 0 畸變矩陣。

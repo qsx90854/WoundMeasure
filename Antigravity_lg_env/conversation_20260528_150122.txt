@@ -1,0 +1,62 @@
+時間：2026-05-28 15:01:22
+
+使用者提問：
+depth_measure_multi_aruco_sbs_camera_v7_demo關於baseline的計算有做過修改嗎, 感覺現在很不準
+
+Antigravity回答：
+經過對 `depth_measure_multi_aruco_sbs_camera_v7_demo.py`（當前版本）與 `depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_backup.py`（備份版本）的詳細代碼比對，發現關於 ArUco 姿態二義性消解（影響 Baseline 計算精度）的程式碼確實被無意中修改了。
+
+這是一個由於**「縮進錯誤」與「漏掉 `else:` 關鍵字」**導致的嚴重邏輯退化（Logic Bug）。
+
+### 具體差異代碼比對：
+
+#### 1. 備份版本 (20260527_backup) 的正確邏輯 (194-206行)：
+```python
+                    score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+                    score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+                    best_idx = 0 if score0 > score1 else 1
+                else: # 👈 有 else，區分了「有歷史」與「無歷史」
+                    # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+                    R0, _ = cv2.Rodrigues(rvecs[0])
+                    R1, _ = cv2.Rodrigues(rvecs[1])
+                    n0, n1 = R0[:, 2], R1[:, 2]
+                    
+                    dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+                    dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+                    
+                    tilt0 = abs(np.dot(n0, dir0))
+                    tilt1 = abs(np.dot(n1, dir1))
+                    best_idx = 0 if tilt0 > tilt1 else 1
+```
+
+#### 2. 當前版本 (demo) 的錯誤邏輯 (194-205行)：
+```python
+                    score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+                    score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+                    best_idx = 0 if score0 > score1 else 1
+                    # ❌ else 遺失，且下方代碼被錯誤地縮進在 if prev_marker_poses is not None: 分支內！
+                    # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+                    R0, _ = cv2.Rodrigues(rvecs[0])
+                    R1, _ = cv2.Rodrigues(rvecs[1])
+                    n0, n1 = R0[:, 2], R1[:, 2]
+                    
+                    dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+                    dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+                    
+                    tilt0 = abs(np.dot(n0, dir0))
+                    tilt1 = abs(np.dot(n1, dir1))
+                    best_idx = 0 if tilt0 > tilt1 else 1
+```
+
+---
+
+### 這個修改造成的致命後果：
+
+1. **無歷史時（如第一幀，或重置後第一幀）**：
+   由於 `prev_marker_poses` 為空，程式不會進入 `if` 區塊。但因為 `else:` 被刪除了，原先的「傾斜角最小消解邏輯」也被縮進在 `if` 內而無法被執行。這會導致首幀的 `best_idx` **直接擺爛使用預設的 0**，極易選中錯誤的姿態，造成第一幀 Baseline 爆表。
+   
+2. **有歷史時**：
+   即使進入了 `if` 區塊並計算出基於時序連續性的 `best_idx`（行 194），緊接著也會因為「傾斜角最小消解邏輯」放在同一個 `if` 區塊中，導致前一步的時序計算結果被後面的傾斜角計算**無條件覆蓋**（行 205）。時序平滑與約束因此形同虛設。
+
+### 總結：
+當前的修改導致 **「無歷史時無法做傾斜角消解（恆選解0）」**，且 **「有歷史時時序約束會被傾斜角覆蓋而失效」**。這是導致目前 baseline 計算極度不準且頻繁跳變的主要代碼變更。

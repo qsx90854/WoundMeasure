@@ -1,0 +1,7 @@
+NewMeasure_v1.py 修改紀錄：
+[刪除] 行數: 約 171-194
+移除了原本單純依賴 ZNCC 高門檻 (0.65) 與 Uniqueness Ratio (1.2) 的檢驗邏輯。
+
+[新增] 行數: 約 171-236
+導入左右一致性檢測 (L-R Check)：將 ZNCC 門檻降至 0.3。在找到右圖匹配點後，於右圖擷取 PatchB 往左圖進行反向搜尋，若反向找回的座標與原座標誤差小於等於 2 pixel 即視為通過檢驗。
+導入 ECC 亞像素精化：擷取稍大的區塊 (預設 patch_size + 10)，使用 cv2.findTransformECC 搭配 MOTION_AFFINE 計算出高精度亞像素座標。若 ECC 不收斂，則平滑退回原本的拋物線 (Parabola) 擬合。

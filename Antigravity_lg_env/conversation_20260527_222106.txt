@@ -1,0 +1,10 @@
+時間點: 2026-05-27T22:21:06+08:00
+
+使用者問題:
+能否在畫面上在畫Aruco角點circle時, 把目前cornerSubPix用的範圍也畫個rect, 目前depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py內是用3x3, 請將這個3的數值用一個變數取代, 畫rect的時候也比較方便
+
+Antigravity 回覆:
+開始進行程式碼修改：
+1. 於全局設定區新增 ARUCO_SUBPIX_WIN_SIZE = 3 變數。
+2. 修改 get_joint_relative_pose 函數，使用該變數取代原本 hardcoded 的 (3, 3)。
+3. 在 draw_aruco 繪圖函數中，針對每個標籤的每個角點，以 (ARUCO_SUBPIX_WIN_SIZE*2) 為寬高繪製 Rectangle 搜尋範圍框。

@@ -1,0 +1,8 @@
+時間點: 2026-06-03T17:07:25+08:00
+
+使用者提問:
+Frame A1~3和 Reference Left Frame不要用相機當圖案 之前的影像示意圖就不錯, 另外下面不需要再放baseline的示意圖
+
+助手回答:
+已重新設計生成提示詞，使用虛擬影像平面（Image Plane）來替代實體相機模型，並且移除了下方單獨的 baseline 示意線段，以保持概念圖整體的乾淨與幾何意涵的專注。最新生成的示意圖已更新至 [multi_view_depth_fusion_concept.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/multi_view_depth_fusion_concept.md) 說明文中。
+檔案變更行數對照已儲存於專案目錄下的 `Antigravity_lg_env\conversation_20260603_170725.txt` 中。

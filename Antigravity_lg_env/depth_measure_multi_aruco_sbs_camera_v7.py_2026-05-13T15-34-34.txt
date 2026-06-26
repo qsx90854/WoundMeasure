@@ -1,0 +1,21 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:34:34
+
+[減少的部分]
+行 332-378 附近 (舊 CheckButtons 區塊):
+-    c1 = CheckButtons(ax_c1, ["嚴格精細匹配"], [True])
+-    ...
+-    for c in [...]:
+-        rects = getattr(...)
+
+[新增的部分]
+行 332 附近 (改用 Button 模擬勾選框):
++    # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
++    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
++    ...
++    for c in [c1, c2, c3, c4, c5]:
++        c.label.set_color('white')
++        c.ax.patch.set_edgecolor('white')
++        c.ax.patch.set_linewidth(1.0)
++    # 點擊時切換 [X] 與 [ ] 文字

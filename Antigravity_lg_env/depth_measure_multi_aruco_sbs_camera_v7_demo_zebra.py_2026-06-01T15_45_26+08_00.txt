@@ -1,0 +1,665 @@
+--- copy
++++ mod
+@@ -26,22 +26,29 @@
+ 
+ # ==================== 全局設定區 ====================
+-CAMERA_INDEX          = 0                          # 相機索引
+-FRAME_GAP             = 30                         # Frame B 與 Frame A 的幀數間隔
+-UPDATE_INTERVAL       = 0.3                     # 畫面更新與計算間隔 (秒)
++VIDEO_PATH            = "video_20260505_155449.mp4"        # 影片檔案路徑
++START_FRAME_COUNT     = 30                         # 前段評估幀數 (N)
++END_FRAME_COUNT       = 30                         # 後段評估幀數 (M)
++POSE_SELECT_MODE      = "average"                  # "average" (平均姿態去噪) 或 "best_pair"
++MEASURE_MODE          = "dual_direct"              # "dual_direct", "multi_dedrift", "multi_pure"
++FLOW_FB_THRESHOLD     = 0.8                        # 雙向光流一致性誤差閾值 (pixels)
++EPIPOLAR_DIST_THRESHOLD = 0.8                      # 極線幾何約束距離閾值 (pixels)
++LOOP_CLOSURE_DRIFT_THRESHOLD = 1.5                 # 閉環誤差校正門檻值 (pixels)
++LOOP_CLOSURE_FAIL_THRESHOLD = 5.0                  # 閉環失敗退回雙目門檻值 (pixels)
++
+ CAMERA_WIDTH          = 1920                       # 相機解析度寬
+-CAMERA_HEIGHT         = 1080                        # 相機解析度高
+-
++CAMERA_HEIGHT         = 1080                       # 相機解析度高
+ 
+ PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
+-ACTUAL_MARKER_SIZE_MM = 8.25#16.5                       # ArUco 標籤真實邊長 (mm)
++ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
+ TARGET_W              = 1024                       # 統一縮放寬度
+ MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+-MIN_BASELINE_MM       = 8.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
++MIN_BASELINE_MM       = 8.0                        # 最小基準線限制 (mm)
+ AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
+-ENFORCE_COPLANAR      = False                       # 強制共面對齊優化
++ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
+ SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+-ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+-POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+-ENABLE_CLAHE_DEFAULT  = True                        # 預設是否啟用 CLAHE 直方圖均衡化前處理以改善匹配 (True/False)
++ENABLE_POSE_SMOOTHING  = True                      # 是否啟用時序平滑濾波 (EMA)
++POSE_SMOOTHING_ALPHA   = 0.3                       # 平滑係數
++ENABLE_CLAHE_DEFAULT  = True                       # 預設是否啟用 CLAHE
++
+ 
+ 
+@@ -117,5 +124,321 @@
+     return (float(pt_B_h[0]/pt_B_h[2]), float(pt_B_h[1]/pt_B_h[2]))
+ 
++
++def average_rotations_svd(R_list):
++    """
++    對多個 3x3 旋轉矩陣進行 SVD 平均，獲得在 SO(3) 群上的正交最小二乘平均矩陣
++    """
++    if len(R_list) == 0:
++        return np.eye(3, dtype=np.float32)
++    M = np.zeros((3, 3), dtype=np.float64)
++    for R in R_list:
++        M += R.astype(np.float64)
++    U, _, Vt = np.linalg.svd(M)
++    R_avg = U @ Vt
++    if np.linalg.det(R_avg) < 0:
++        U[:, -1] *= -1
++        R_avg = U @ Vt
++    return R_avg.astype(np.float32)
++
++def multi_view_triangulation(P_matrices, points_2d):
++    """
++    N-View 三角化 (DLT 算法)
++    P_matrices: list of 3x4 projection matrices [R | t] (單位：米)
++    points_2d: list of (x, y) normalized coordinates
++    """
++    if len(P_matrices) < 2:
++        return None
++    A = []
++    for P, (x, y) in zip(P_matrices, points_2d):
++        A.append(x * P[2, :] - P[0, :])
++        A.append(y * P[2, :] - P[1, :])
++    A = np.array(A)
++    _, _, Vt = np.linalg.svd(A)
++    X = Vt[-1]
++    if abs(X[3]) < 1e-6:
++        return None
++    return (X[:3] / X[3])
++
++def apply_dedrift_correction(trajectory, p_end_match):
++    """
++    對光流軌跡進行閉環去漂移修正
++    trajectory: list of (f_idx, [u, v])
++    p_end_match: [u, v] 終點影格的最優匹配點真值
++    """
++    if len(trajectory) < 2:
++        return trajectory
++    p_end_flow = np.array(trajectory[-1][1])
++    total_drift = np.array(p_end_match) - p_end_flow
++    corrected_trajectory = []
++    n = len(trajectory) - 1
++    for i, (f_idx, pt) in enumerate(trajectory):
++        factor = i / n
++        corr_pt = np.array(pt) + factor * total_drift
++        corrected_trajectory.append((f_idx, corr_pt.tolist()))
++    return corrected_trajectory
++
++def track_feature_and_verify(all_frames, start_f_idx, end_f_idx, p_start, valid_poses, K_L, dist_L):
++    """
++    使用雙向光流 (KLT) 與極線幾何硬約束對特徵點進行時序追蹤，並進行極線正交投影校正。
++    """
++    step = -1 if start_f_idx > end_f_idx else 1
++    curr_f_idx = start_f_idx
++    curr_pt = np.array(p_start, dtype=np.float32).reshape(-1, 2)
++    
++    trajectory = [(curr_f_idx, curr_pt[0].tolist())]
++    lk_params = dict(winSize=(21, 21), maxLevel=3,
++                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
++                     
++    while curr_f_idx != end_f_idx:
++        next_f_idx = curr_f_idx + step
++        
++        img_prev = cv2.cvtColor(all_frames[curr_f_idx], cv2.COLOR_BGR2GRAY)
++        img_next = cv2.cvtColor(all_frames[next_f_idx], cv2.COLOR_BGR2GRAY)
++        
++        img_prev = preprocess_gray(img_prev, True)
++        img_next = preprocess_gray(img_next, True)
++        
++        # 1. Forward 追蹤
++        p1, st, err = cv2.calcOpticalFlowPyrLK(img_prev, img_next, curr_pt, None, **lk_params)
++        if st is None or st[0][0] == 0:
++            print(f"⚠️ 光流追蹤在影格 {curr_f_idx} -> {next_f_idx} 斷線")
++            break
++            
++        # 2. Backward 追蹤
++        p0_re, st_re, _ = cv2.calcOpticalFlowPyrLK(img_next, img_prev, p1, None, **lk_params)
++        if st_re is None or st_re[0][0] == 0:
++            print(f"⚠️ 雙向光流在影格 {next_f_idx} -> {curr_f_idx} 斷線")
++            break
++            
++        # FB-Consistency 檢查
++        fb_err = np.linalg.norm(curr_pt[0] - p0_re[0])
++        if fb_err > FLOW_FB_THRESHOLD:
++            print(f"⚠️ 雙向光流偏差過大 ({fb_err:.2f} px > {FLOW_FB_THRESHOLD} px)，拒絕影格 {next_f_idx}")
++            curr_pt = p1
++            curr_f_idx = next_f_idx
++            continue
++            
++        # 3. 極線幾何約束檢查與正交投影校正
++        pt_verified = p1[0].copy()
++        if curr_f_idx in valid_poses and next_f_idx in valid_poses:
++            R_prev, t_prev = valid_poses[curr_f_idx]
++            R_next, t_next = valid_poses[next_f_idx]
++            
++            R_f = R_next @ R_prev.T
++            t_f = t_next - R_f @ t_prev
++            
++            F = compute_fundamental_matrix(K_L, K_L, R_f, t_f)
++            l = F @ np.array([curr_pt[0][0], curr_pt[0][1], 1.0])
++            a, b, c = l
++            denom = a**2 + b**2
++            if denom > 1e-9:
++                dist_epi = abs(a * pt_verified[0] + b * pt_verified[1] + c) / np.sqrt(denom)
++                if dist_epi > EPIPOLAR_DIST_THRESHOLD:
++                    print(f"⚠️ 幾何極線檢查失敗 ({dist_epi:.2f} px > {EPIPOLAR_DIST_THRESHOLD} px)，拒絕影格 {next_f_idx}")
++                    curr_pt = p1
++                    curr_f_idx = next_f_idx
++                    continue
++                else:
++                    # 正交投影校正
++                    pt_verified[0] = pt_verified[0] - a * (a * pt_verified[0] + b * pt_verified[1] + c) / denom
++                    pt_verified[1] = pt_verified[1] - b * (a * pt_verified[0] + b * pt_verified[1] + c) / denom
++                    
++        curr_pt = pt_verified.reshape(-1, 2)
++        trajectory.append((next_f_idx, curr_pt[0].tolist()))
++        curr_f_idx = next_f_idx
++        
++    return trajectory
++
++def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, marker_size_mm, select_mode="average"):
++    cap = cv2.VideoCapture(video_path)
++    if not cap.isOpened():
++        print(f"❌ 無法開啟影片: {video_path}")
++        return None
++    
++    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
++    print(f"🎬 載入影片: {video_path}，總影格數: {total_frames}")
++    
++    frames = []
++    while True:
++        ret, frame = cap.read()
++        if not ret:
++            break
++        frames.append(frame)
++    cap.release()
++    
++    if len(frames) == 0:
++        print("❌ 影片無有效影格")
++        return None
++        
++    N = min(start_n, len(frames))
++    M = min(end_n, len(frames))
++    
++    dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
++    if hasattr(cv2.aruco, 'ArucoDetector'):
++        detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
++    else:
++        params = cv2.aruco.DetectorParameters_create()
++        
++    def detect_frame_markers(frame):
++        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
++        gray = preprocess_gray(gray, True)
++        if hasattr(cv2.aruco, 'ArucoDetector'):
++            corners, ids, _ = detector.detectMarkers(gray)
++        else:
++            corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
++        if ids is not None and len(ids) > 0:
++            ids_list = [i[0] for i in ids]
++            term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
++            for c in corners:
++                cv2.cornerSubPix(gray, c, (3, 3), (-1, -1), term)
++            return dict(zip(ids_list, [c[0] for c in corners]))
++        return {}
++
++    start_info = []
++    for i in range(N):
++        cd = detect_frame_markers(frames[i])
++        if cd: start_info.append({'idx': i, 'corners': cd})
++        
++    end_info = []
++    for j in range(len(frames) - M, len(frames)):
++        cd = detect_frame_markers(frames[j])
++        if cd: end_info.append({'idx': j, 'corners': cd})
++        
++    if not start_info or not end_info:
++        print("❌ 影片開頭段或結尾段無有效 ArUco 標籤")
++        return None
++        
++    start_ids = set()
++    for item in start_info: start_ids.update(item['corners'].keys())
++    end_ids = set()
++    for item in end_info: end_ids.update(item['corners'].keys())
++    
++    shared_ids = list(start_ids.intersection(end_ids))
++    if not shared_ids:
++        print("❌ 影片開頭段與結尾段無共享的 ArUco 標籤，無法建立統一世界座標系")
++        return None
++        
++    ref_id = min(shared_ids)
++    print(f"📌 選定共享參考標籤 ID: {ref_id} 作為世界坐標系原點")
++    
++    half = marker_size_mm / 2.0
++    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
++    
++    def get_pose_for_ref(corners_dict):
++        if ref_id not in corners_dict: return None, None
++        ok_generic, rvecs, tvecs, _ = cv2.solvePnPGeneric(
++            canon, corners_dict[ref_id], K_L, dist_L, flags=cv2.SOLVEPNP_IPPE
++        )
++        if not ok_generic or len(rvecs) == 0: return None, None
++        best_idx = 0
++        if len(rvecs) == 2:
++            R0, _ = cv2.Rodrigues(rvecs[0])
++            R1, _ = cv2.Rodrigues(rvecs[1])
++            n0, n1 = R0[:, 2], R1[:, 2]
++            dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
++            dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
++            best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
++        R, _ = cv2.Rodrigues(rvecs[best_idx])
++        t = tvecs[best_idx].reshape(3, 1)
++        return R, t
++
++    valid_start = []
++    for item in start_info:
++        R, t = get_pose_for_ref(item['corners'])
++        if R is not None:
++            valid_start.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
++            
++    valid_end = []
++    for item in end_info:
++        R, t = get_pose_for_ref(item['corners'])
++        if R is not None:
++            valid_end.append({'idx': item['idx'], 'R': R, 't': t, 'corners': item['corners']})
++            
++    if not valid_start or not valid_end:
++        print("❌ 無法計算出有效的起點或終點 Pose")
++        return None
++
++    if select_mode == "average":
++        R_start_list = [item['R'] for item in valid_start]
++        t_start_list = [item['t'] for item in valid_start]
++        R_start_avg = average_rotations_svd(R_start_list)
++        t_start_avg = np.mean(t_start_list, axis=0)
++        
++        R_end_list = [item['R'] for item in valid_end]
++        t_end_list = [item['t'] for item in valid_end]
++        R_end_avg = average_rotations_svd(R_end_list)
++        t_end_avg = np.mean(t_end_list, axis=0)
++        
++        R_rel = R_end_avg @ R_start_avg.T
++        t_rel = t_end_avg - R_rel @ t_start_avg
++        baseline = float(np.linalg.norm(t_rel))
++        
++        def find_closest(valid_list, R_avg, t_avg):
++            best_idx = 0
++            min_dist = float('inf')
++            for i, item in enumerate(valid_list):
++                dist_R = np.linalg.norm(item['R'] - R_avg, 'fro')
++                dist_t = np.linalg.norm(item['t'] - t_avg)
++                dist = dist_R + dist_t / 10.0
++                if dist < min_dist:
++                    min_dist = dist
++                    best_idx = i
++            return valid_list[best_idx]
++            
++        best_start = find_closest(valid_start, R_start_avg, t_start_avg)
++        best_end = find_closest(valid_end, R_end_avg, t_end_avg)
++        
++    else:
++        best_pair = None
++        best_score = -1.0
++        for item_s in valid_start:
++            for item_e in valid_end:
++                R_s, t_s = item_s['R'], item_s['t']
++                R_e, t_e = item_e['R'], item_e['t']
++                R_rel_cand = R_e @ R_s.T
++                t_rel_cand = t_e - R_rel_cand @ t_s
++                bsl = float(np.linalg.norm(t_rel_cand))
++                if 5.0 <= bsl <= 35.0:
++                    shared_mids = set(item_s['corners'].keys()).intersection(set(item_e['corners'].keys()))
++                    score = len(shared_mids) * 10.0 - abs(bsl - 15.0)/10.0
++                    if score > best_score:
++                        best_score = score
++                        best_pair = (item_s, item_e, R_rel_cand, t_rel_cand, bsl)
++                        
++        if best_pair is None:
++            print("⚠️ 未找到合法的 Best Pair，降級使用首幀與尾幀")
++            best_start = valid_start[0]
++            best_end = valid_end[-1]
++            R_rel = best_end['R'] @ best_start['R'].T
++            t_rel = best_end['t'] - R_rel @ best_start['t']
++            baseline = float(np.linalg.norm(t_rel))
++        else:
++            best_start, best_end, R_rel, t_rel, baseline = best_pair
++
++    print(f"✅ 挑選結果：")
++    print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
++    print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
++    print(f"  - 計算 Baseline: {baseline:.2f} mm")
++    
++    valid_poses = {}
++    for item in valid_start + valid_end:
++        valid_poses[item['idx']] = (item['R'], item['t'])
++        
++    return {
++        'frame_A': frames[best_start['idx']],
++        'frame_B': frames[best_end['idx']],
++        'idx_A': best_start['idx'],
++        'idx_B': best_end['idx'],
++        'R_rel': R_rel,
++        't_rel': t_rel,
++        'baseline': baseline,
++        'cornersA': best_start['corners'],
++        'cornersB': best_end['corners'],
++        'all_frames': frames,
++        'valid_poses': valid_poses
++    }
++
+ def preprocess_gray(gray_img, enable_clahe=True):
++
+     if enable_clahe:
+         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+@@ -357,7 +680,4 @@
+ 
+ 
+-
+-
+-
+ def get_patch(img, pt, size):
+     h, w = img.shape; x, y = int(round(pt[0])), int(round(pt[1]))
+@@ -378,25 +698,27 @@
+     import collections, time
+     
+-    cap = cv2.VideoCapture(CAMERA_INDEX)
+-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
+-    if not cap.isOpened(): print(f"❌ 無法開啟相機"); sys.exit(1)
+-    
+-    # 讀取第一幀獲取尺寸
+-    ret, first_frame = cap.read()
+-    if not ret: print("❌ 無法讀取相機畫面"); sys.exit(1)
+-    
++    # 1. 讀取相機內參
++    mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
++    
++    # 由於去畸變時需要影像尺寸，我們先用 VideoCapture 打開影片讀取第一影格取得原影像寬高
++    cap_temp = cv2.VideoCapture(VIDEO_PATH)
++    if not cap_temp.isOpened():
++        print(f"❌ 無法開啟影片檔: {VIDEO_PATH}")
++        sys.exit(1)
++    ret, first_frame = cap_temp.read()
++    cap_temp.release()
++    if not ret:
++        print("❌ 無法讀取影片首影格")
++        sys.exit(1)
++        
+     h_raw, w_raw = first_frame.shape[:2]
+-    w_alg = w_raw # 使用完整相機畫面
++    w_alg = w_raw
+     active_u = w_alg // 2
+     active_v = h_raw // 2
+     
+-    mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
+     newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtxL_o, distL, (w_alg, h_raw), 1, (w_alg, h_raw))
+-    
+-    # 假設右圖參照左圖參數 (同一相機)
+-    newKR_o = newKL_o.copy()
+-    
+-    # 預先建立去畸變查找表（只算一次，之後每幀用 remap 即可）
++    KL = newKL_o.copy().astype(np.float64)
++    
++    # 預先建立去畸變查找表
+     _map1, _map2 = cv2.initUndistortRectifyMap(
+         mtxL_o, distL, None, newKL_o, (w_alg, h_raw), cv2.CV_16SC2
+@@ -404,18 +726,23 @@
+ 
+     def process_view(img, K=None, dist=None, nK=None):
+-        """去畸變。K/dist/nK 保留以維持呼叫介面相容，實際使用預建查找表。"""
+         undist = cv2.remap(img, _map1, _map2, cv2.INTER_LINEAR)
+         return undist, 1.0
+-        
+-    imgA_bgr, scale = process_view(first_frame[:, :w_alg], mtxL_o, distL, newKL_o)
++    print("🔄 正在分析影片中開頭與結尾影格的 ArUco 標籤與最優姿態對...")
++    video_data = analyze_video_frames(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE)
++    if video_data is None:
++        print("❌ 影片 Pose 分析失敗，無法啟動測量工具")
++        sys.exit(1)
++        
++    # 去畸變處理挑選出的最優左右圖
++    imgA_bgr, _ = process_view(video_data['frame_B']) # 結尾最優影格作為左圖 (B)
++    imgB_bgr, _ = process_view(video_data['frame_A']) # 開頭最優影格作為右圖 (A)
++    
+     imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
+     imgA_gray = preprocess_gray(imgA_gray, ENABLE_CLAHE_DEFAULT)
+     h, w = imgA_gray.shape
+-    KL = newKL_o.copy().astype(np.float64)
+-    KL[0,0]*=scale; KL[1,1]*=scale; KL[0,2]*=scale; KL[1,2]*=scale
+-    
+-    # 使用 JSON 中的外參，讓深度計算有基準
+-    R_r = np.array(extrinsic.get('R', np.eye(3)))
+-    t_r = np.array(extrinsic.get('T', np.zeros(3))).reshape(3, 1)
++    
++    # 使用分析得到的相對 R, t 和 baseline
++    R_r = video_data['R_rel']
++    t_r = video_data['t_rel']
+     
+     sift = cv2.SIFT_create(contrastThreshold=0.005)
+@@ -424,12 +751,35 @@
+     global_plane_n, global_plane_c = compute_global_plane(imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+     
+-    frame_buffer = collections.deque(maxlen=FRAME_GAP + 1)
++    # 預設直接鎖定
++    locked_L = imgA_bgr.copy()
++    locked_R = imgB_bgr.copy()
++    live_L = False
++    live_R = False
++    has_set_L = True
++    has_set_R = True
+     
+     current_cand = {
+-        'idx': 0, 'rgb': cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB), 'gray': imgA_gray,
+-        'K_R': KL, 'R_rel': R_r, 't_rel': t_r, 'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
+-        'cornersA': {}, 'cornersB': {}, 'kpB': [], 'desB': None,
+-        'plane_n': global_plane_n, 'plane_c': global_plane_c
++        'idx': video_data['idx_B'], # 左圖（量測起點圖）索引
++        'rgb': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB), 
++        'gray': cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY),
++        'K_R': KL, 
++        'R_rel': R_r, 
++        't_rel': t_r, 
++        'F': compute_fundamental_matrix(KL, KL, R_r, t_r),
++        'cornersA': video_data['cornersB'], # 對應左圖 (B)
++        'cornersB': video_data['cornersA'], # 對應右圖 (A)
++        'kpB': [], 
++        'desB': None,
++        'plane_n': global_plane_n, 
++        'plane_c': global_plane_c,
++        'pose_valid': True,
++        'baseline': video_data['baseline'],
++        'pose_info': f"ArUco 多影格平均 (Bsl: {video_data['baseline']:.1f}mm)" if POSE_SELECT_MODE=="average" else f"ArUco 最優對 (Bsl: {video_data['baseline']:.1f}mm)"
+     }
++    
++    # 計算右圖的 SIFT 特徵
++    kb, db = sift.detectAndCompute(current_cand['gray'], None)
++    current_cand.update({'kpB': kb, 'desB': db})
++    
+     candidates = [current_cand]
+ 
+@@ -804,6 +1154,23 @@
+                 'fail_reason': fail_reason, 'u': u, 'v': v}
+ 
++    flow_line_artists = []
++
++    def clear_flow_lines():
++        nonlocal flow_line_artists
++        for art in flow_line_artists:
++            try: art.remove()
++            except: pass
++        flow_line_artists.clear()
++
++    def draw_trajectory_on_ui(trajectory):
++        nonlocal flow_line_artists
++        if len(trajectory) < 2: return
++        pts = np.array([pt for f_idx, pt in trajectory])
++        l_A, = ax_A.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
++        l_B, = ax_B.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
++        flow_line_artists.extend([l_A, l_B])
++
+     def do_measure(u, v, manual_match_pt=None):
+-        """同步計算並立即更新 UI（用於手動點選的即時響應）。"""
++        """同步計算並立即更新 UI"""
+         nonlocal last_click; last_click = (u, v)
+         if len(plane_dist_history) > 0:
+@@ -815,21 +1182,124 @@
+         sift_rect.set_visible(False)
+         sift_rect_center.set_visible(False)
++        clear_flow_lines()
++        
+         snap_vs = dict(view_state)
+-        if not live_L and locked_L is not None:
+-            imgA_bgr_snap, _ = process_view(locked_L, mtxL_o, distL, newKL_o)
+-            left_img_gray = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+-            left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
+-        else:
+-            left_img_gray = imgA_gray
+-            
+-        res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
+-        
+-        # 🌟 自訂平面選點攔截邏輯 🌟
++        left_img_gray = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
++        left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
++        
++        res = None
++        if MEASURE_MODE == "dual_direct":
++            res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
++        elif MEASURE_MODE == "multi_dedrift":
++            res_dual = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
++            p_R_match = res_dual.get('pt')
++            
++            if p_R_match is None:
++                print("⚠️ [閉環光流] 雙幀直接匹配失敗，無法取得閉環真值點，退回雙幀直接模式。")
++                res = res_dual
++            else:
++                trajectory = track_feature_and_verify(
++                    video_data['all_frames'], video_data['idx_B'], video_data['idx_A'],
++                    (u, v), video_data['valid_poses'], KL, distL
++                )
++                p_end_flow = np.array(trajectory[-1][1])
++                drift = np.linalg.norm(p_end_flow - np.array(p_R_match))
++                print(f"📊 [閉環光流] 光流追蹤終點: {p_end_flow} | 閉環真值: {p_R_match} | 累積漂移: {drift:.2f} px")
++                
++                if drift > LOOP_CLOSURE_FAIL_THRESHOLD or len(trajectory) < 3:
++                    print(f"⚠️ [閉環光流] 累積漂移過大 ({drift:.2f} px) 或有效幀數不足，安全退回雙幀匹配模式！")
++                    res = res_dual
++                else:
++                    if drift >= LOOP_CLOSURE_DRIFT_THRESHOLD:
++                        print(f"🔧 [閉環光流] 漂移 ({drift:.2f} px) 超過門檻值 ({LOOP_CLOSURE_DRIFT_THRESHOLD} px)，執行軌跡去漂移線性均攤校正...")
++                        trajectory = apply_dedrift_correction(trajectory, p_R_match)
++                    else:
++                        print("✅ [閉環光流] 累積漂移在容許範圍內，無需進行去漂移補償。")
++                        
++                    P_matrices = []
++                    points_2d = []
++                    for f_idx, pt in trajectory:
++                        if f_idx in video_data['valid_poses']:
++                            R, t = video_data['valid_poses'][f_idx]
++                            P = np.hstack([R, t / 1000.0]) # 轉米
++                            P_matrices.append(P)
++                            pt_hom = np.linalg.inv(KL) @ np.array([pt[0], pt[1], 1.0])
++                            points_2d.append((pt_hom[0]/pt_hom[2], pt_hom[1]/pt_hom[2]))
++                            
++                    p3d_m = multi_view_triangulation(P_matrices, points_2d)
++                    if p3d_m is not None:
++                        p3d_val_mm = p3d_m * 1000.0
++                        d_val = float(np.linalg.norm(p3d_val_mm))
++                        R_L, t_L = video_data['valid_poses'][video_data['idx_B']]
++                        p3d_w_val = (R_L.T @ (p3d_val_mm.reshape(3, 1) - t_L)).flatten()
++                        
++                        res = {
++                            'pt': p_R_match,
++                            'p3d': p3d_val_mm,
++                            'p3d_w': p3d_w_val,
++                            'd': d_val,
++                            'method': f"閉環光流多影格 ({len(trajectory)}幀)",
++                            'neighbors': [],
++                            'g_ptsA': res_dual.get('g_ptsA'),
++                            'g_ptsB': res_dual.get('g_ptsB'),
++                            'g_kptsB': res_dual.get('g_kptsB'),
++                            'g_rect': res_dual.get('g_rect'),
++                            'fail_reason': None,
++                            'u': u, 'v': v
++                        }
++                        draw_trajectory_on_ui(trajectory)
++                    else:
++                        print("❌ [閉環光流] 多幀三角化失敗，退回雙幀匹配結果")
++                        res = res_dual
++        elif MEASURE_MODE == "multi_pure":
++            trajectory = track_feature_and_verify(
++                video_data['all_frames'], video_data['idx_B'], video_data['idx_A'],
++                (u, v), video_data['valid_poses'], KL, distL
++            )
++            if len(trajectory) < 3:
++                print("⚠️ [純光流] 有效追蹤影格數不足 3，無法進行多視角三角化。")
++                res = {'pt': None, 'p3d': None, 'p3d_w': None, 'd': None, 'method': '純光流', 'neighbors': [],
++                       'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                       'fail_reason': '追蹤影格數不足', 'u': u, 'v': v}
++            else:
++                P_matrices = []
++                points_2d = []
++                for f_idx, pt in trajectory:
++                    if f_idx in video_data['valid_poses']:
++                        R, t = video_data['valid_poses'][f_idx]
++                        P = np.hstack([R, t / 1000.0]) # 轉米
++                        P_matrices.append(P)
++                        pt_hom = np.linalg.inv(KL) @ np.array([pt[0], pt[1], 1.0])
++                        points_2d.append((pt_hom[0]/pt_hom[2], pt_hom[1]/pt_hom[2]))
++                        
++                p3d_m = multi_view_triangulation(P_matrices, points_2d)
++                if p3d_m is not None:
++                    p3d_val_mm = p3d_m * 1000.0
++                    d_val = float(np.linalg.norm(p3d_val_mm))
++                    R_L, t_L = video_data['valid_poses'][video_data['idx_B']]
++                    p3d_w_val = (R_L.T @ (p3d_val_mm.reshape(3, 1) - t_L)).flatten()
++                    
++                    p_end_flow = trajectory[-1][1]
++                    res = {
++                        'pt': p_end_flow,
++                        'p3d': p3d_val_mm,
++                        'p3d_w': p3d_w_val,
++                        'd': d_val,
++                        'method': f"純光流多影格 ({len(trajectory)}幀)",
++                        'neighbors': [],
++                        'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                        'fail_reason': None,
++                        'u': u, 'v': v
++                    }
++                    draw_trajectory_on_ui(trajectory)
++                else:
++                    res = {'pt': None, 'p3d': None, 'p3d_w': None, 'd': None, 'method': '純光流', 'neighbors': [],
++                           'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                           'fail_reason': '三角化失敗', 'u': u, 'v': v}
++        
+         if custom_plane_mode:
+             if res.get('p3d') is not None:
+                 custom_plane_pts_3d.append(res['p3d'])
+                 custom_plane_pts_2d.append((res['u'], res['v']))
+-                
+-                # 繪製洋紅色標記與序號
+                 c_pt, = ax_A.plot(res['u'], res['v'], 'mo', markersize=6, zorder=5)
+                 t_lbl = ax_A.text(res['u'] + 5, res['v'] - 5, f"P{len(custom_plane_pts_3d)}", 
+@@ -837,5 +1307,4 @@
+                 custom_plane_artists.extend([c_pt, t_lbl])
+                 redraw_custom_plane_poly()
+-                
+                 btn_custom_plane.label.set_text(f"完成擬合 ({len(custom_plane_pts_3d)})")
+                 print(f"🎯 自訂平面已新增點 P{len(custom_plane_pts_3d)}: (u, v)=({res['u']:.1f}, {res['v']:.1f}), 3D={res['p3d']}")
+@@ -847,4 +1316,5 @@
+         summary = [f"F{current_cand['idx']}: {res['d']:.1f}" if res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+         apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
++
+ 
+     def apply_measure_result(res, avg, summary):

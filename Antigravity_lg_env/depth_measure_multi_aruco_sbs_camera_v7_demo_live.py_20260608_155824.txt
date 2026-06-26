@@ -1,0 +1,61 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-08T15:58:24+08:00
+
+說明：
+新增改良版特徵匹配流程 (高光遮罩 + Harris Corner 響應選點 + 收緊視差與 RANSAC 門檻 + 金字塔 Coarse-to-Fine ECC)，並於 UI 新增切換按鈕 `c7` 對應 `'use_improved_matching'`。
+
+--------------------------------------------------
+[新增] 行 64 - 66 (頂部全域參數定義)
+--------------------------------------------------
++ENABLE_IMPROVED_MATCHING_DEFAULT = False          # 預設是否啟用改良版特徵匹配流程 (高光遮罩 + Harris Corner + 收緊幾何門檻 + 金字塔 ECC)
+
+--------------------------------------------------
+[新增] 行 140 - 325 (實作 run_improved_matching_flow 與 pyramid_ecc_refinement 輔助函數)
+--------------------------------------------------
++def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift):
++    ... (完整實現包含高光遮罩, Harris角點響應排序, 收緊視差過濾至 2.5 像素及 RANSAC 至 2.0 像素)
++
++def pyramid_ecc_refinement(imgA_gray, imgB_gray, pt_A, pt_B, patch_size_tmpl=45, patch_size_roi=91):
++    ... (完整實現二層 Gaussian 金字塔降採樣 Coarse-to-Fine ECC 匹配)
+
+--------------------------------------------------
+[新增/修改] 行 1600 - 1620 (UI 按鈕與變數狀態宣告)
+--------------------------------------------------
+     ax_c6 = fig.add_axes([0.29, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
++    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+     
+     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
+     ...
+     c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
++    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+     
+     view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+                   'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
++                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                   'manual_pt_A': None, ...}
+
+--------------------------------------------------
+[新增] 行 1675 - 1677 (按鈕事件處理綁定)
+--------------------------------------------------
+     c6.on_clicked(make_on_opt(c6, 'enable_clahe', "啟用 CLAHE 增強"))
++    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+
+--------------------------------------------------
+[修改] 行 1930 - 2010 (精確匹配與 ECC 精修分支判斷)
+--------------------------------------------------
+                 if m_pt is None and snap_view_state['grad_sift']:
+-                    ui, vi = int(round(u)), int(round(v))
+-                    ... (舊版特徵點提取與 BF 匹配)
++                    if snap_view_state.get('use_improved_matching', False):
++                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(...)
++                    else:
++                        ... (原本舊版特徵點提取與 BF 匹配邏輯)
+...
+             if m_pt is not None and snap_view_state['ecc']:
+-                tmpl = get_patch(snap_imgA_gray, (u, v), 31)
+-                ... (舊版 ECC 亞像素精修)
++                if snap_view_state.get('use_improved_matching', False):
++                    m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 31, 61)
++                    method += ecc_method
++                else:
++                    ... (原本舊版 ECC 亞像素精修)

@@ -1,0 +1,17 @@
+時間點: 2026-06-02T16:54:41+08:00
+
+使用者提問:
+好 請開始修改
+
+助手回答:
+已完成 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py` 的再次修改：
+1. 提取全局變數 `RECORD_SAVE_DIR = "test_video_Zebra"` 配置錄影儲存目錄。
+2. 實作並整合了 `save_measurement_to_txt` 函數。當使用者在互動式量測 UI 中點擊新的測量點時，程式會自動將點選座標、右圖匹配座標、相機 3D 座標、世界 3D 座標（含高度補償）、歐式距離、標記平面距離、自訂平面狀態與距離、基準線、外參 (R, T) 矩陣與相機內參等詳細資訊，以格式化文字與單行 JSON 追加存入與影片同名的 `.txt` 檔案中。
+
+程式碼變更對比記錄檔已建立於：
+- [depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py_20260602_165441.txt](file:///d:/Lightglue/lg_env/Antigravity_lg_env/depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py_20260602_165441.txt)
+
+詳細的修改說明已記錄於：
+- [walkthrough.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/walkthrough.md)
+
+請您自行啟動程式進行測試與數據驗證。

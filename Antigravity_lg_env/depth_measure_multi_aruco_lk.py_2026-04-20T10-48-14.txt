@@ -1,0 +1,12 @@
+時間點: 2026-04-20T10:48:14+08:00
+
+【減少的部份】
+1. 刪除使用者貼上的未完成函式：`find_correspondence_on_epipolar_line` 與充滿錯誤的 `find_precise_match` (約百餘行)。
+
+【新增的部份】
+1. 重寫了一版完美的 `find_precise_match(imgA_gray, imgB_gray, pt_A, F)`：
+   - 整合 `template_match_epipolar` 取得粗匹配極點。
+   - 利用 `cv2.matchTemplate` 在半徑 5px 的 ROI 內實現 2D 局部精細定位。
+   - 收尾呼叫 `cv2.cornerSubPix` 達成亞像素級別精度返回。
+2. 在 UI CheckButtons 新增 `"嚴格精細匹配"` 選項按鈕。
+3. 在 `do_measure` 函式中插入條件 `if match_pt is None and view_state.get('precise_match', False):` 以接管匹配流程，並輸出 `"Precise Match (三段式精校)"` 之提示與方法名稱。

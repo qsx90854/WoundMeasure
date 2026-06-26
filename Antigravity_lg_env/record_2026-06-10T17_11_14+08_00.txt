@@ -1,0 +1,19 @@
+對話時間：2026-06-10T17:11:14+08:00
+
+使用者要求：
+1. 實作 Opponent-SIFT 特徵提取與匹配演算法。
+2. 新增 UI 按鈕以控制是否啟用此功能（與 RGB-SIFT 互斥）。
+3. 調整顯示圖片與文字之坐標，將圖片頂部調整至 0.70，避免按鈕區域與圖片區域重疊，並調降 depth_text 的垂直位置。
+
+回覆與修改概要：
+1. 實作 compute_opponent_sift_descriptors 函數：
+   - 將輸入的 BGR 影像轉換為 Opponent 色彩空間的 O1、O2、O3 通道。
+   - O1、O2 分別反映色差，已剔除亮度影響，對水分反光與光源變化有較佳抵抗力；O3 代表亮度。
+   - 對三個通道分別計算 SIFT 描述子，並串接為 384 維特徵。
+   - 因維度增加至 3 倍，極限搜索匹配的 L2 距離閾值設為 780。
+2. 將 Opponent-SIFT 描述子提取與特徵匹配流程接入 run_improved_matching_flow 與 compute_measure。
+3. UI 佈局調整：
+   - 將 fig.subplots_adjust(top=0.82, ... bottom=0.15) 調整為 top=0.70, bottom=0.08，使圖片區塊下移。
+   - 建立 ax_c11 與 c11 按鈕 "[ ] Opponent-SIFT"，與 c10 按鈕並列於 Y = 0.74。
+   - 實作 c10 (RGB-SIFT) 與 c11 (Opponent-SIFT) 之互斥點擊邏輯：啟用其中一方時自動將另一方設為 False。
+   - 將 depth_text 的初始位置 Y 調降至 0.35，並在隱藏與顯示右圖時分別調降至 0.35 與 0.02，避免與下移後的圖片重合。

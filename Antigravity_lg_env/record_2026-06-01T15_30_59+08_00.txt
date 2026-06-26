@@ -1,0 +1,18 @@
+對話時間：2026-06-01T15:30:59+08:00
+
+使用者提問：
+還有其他建議嗎, 先把過往其他產品或論文可能採用的方式都先列出來分析一下再決定要怎麼做
+
+回答內容：
+針對單目影片 3D 重建與量測，撰寫了一份詳細的技術調研與文獻分析報告 `research_notes.md`。報告中梳理並對比了五種核心技術方案：
+1. 單視角基準平面相交法 (Single-View Metrology with Plane Constraint)
+2. 雙視角立體匹配三角化 (Two-View Triangulation)
+3. 多視角光流追蹤與三角測量 (Multi-View Tracking & Triangulation / SFM)
+4. 聯合束調整圖優化 (SfM Bundle Adjustment)
+5. 單目深度估計神經網路 (Monocular AI Depth)
+
+根據調研結果，在精度與實現複雜度之間做出決策：推薦採用「多視角光流追蹤與多幀三角測量 (Multi-View DLT)」作為核心架構，並融入了兩項來自學術論文的進階工程優化手段：
+- 雙向光流一致性校驗 (Forward-Backward Flow Consistency Check)：以 0.8 像素為閾值過濾漂移幀。
+- SVD 旋轉矩陣平均法 (L2 Rotation Averaging)：在 SO(3) 群上以奇異值分解做正交去噪平均。
+- 自適應退回機制：當中間幀追蹤失敗時，自動退回雙幀精細匹配。
+已將這些優化要點更新入 `implementation_plan.md` 中，並等待使用者核准。

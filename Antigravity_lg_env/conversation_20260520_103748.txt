@@ -1,0 +1,21 @@
+時間：2026-05-20T10:37:48
+對話：
+User: 能把這個門檻改成一個參數放在程式的最開頭嗎, 這樣比較好調整
+Antigravity:
+好的，我已經成功將該視差限制門檻（基準線閾值）包裝成全域常數，並移至程式最前方的全域設定區了。
+
+我在程式開頭（約第 39 行）新增了以下參數：
+```python
+MIN_BASELINE_MM       = 15.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
+```
+
+並在 `compute_measure` 函式中（第 443 行），將原本寫死的數值與提示訊息替換為動態變數：
+```python
+        if cand.get('baseline', 0.0) < MIN_BASELINE_MM:
+            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
+                    'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
+                    'fail_reason': f'視差不足(<{MIN_BASELINE_MM}mm)', 'u': u, 'v': v}
+```
+
+這樣一來，您只要在程式最上方調整 `MIN_BASELINE_MM` 變數的值，就可以非常方便地調整或完全放寬視差限制了！
+*(備份檔案已建立於專案下的 `Antigravity_lg_env` 資料夾中)*

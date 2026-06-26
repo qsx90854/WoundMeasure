@@ -1,0 +1,5 @@
+時間：2026-05-18T10:31:23
+對話：
+User: 目前ZNCC如何實作的
+Antigravity:
+解釋了目前在 NewMeasure_v1.py 中 ZNCC 的實作方式，主要使用 OpenCV 的 cv2.matchTemplate 搭配 cv2.TM_CCOEFF_NORMED 來進行極線上的滑動視窗比對，並輔以拋物線亞像素精化。

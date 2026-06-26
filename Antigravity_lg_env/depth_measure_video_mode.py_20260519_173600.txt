@@ -1,0 +1,7 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [新增] 204 行: 在 `app_state` 中加入 `'auto_calc': False` 狀態。
+- [新增] 296-302 行: 建立 `ax_auto_calc` 按鈕及其回調函數 `on_auto_calc`，負責切換 `auto_calc` 的布林值並更新按鈕上的 `ON/OFF` 標籤。
+- [修改] 372-441 行: 將原本綁定在 `b_calc` 裡面的龐大深度計算與文字輸出邏輯，抽離成獨立函數 `calculate_and_display_depth()`。
+- [修改] 327-329 行: 在 `update_frame` 函式處理完光流追蹤後加入一段判斷邏輯：如果 `app_state['auto_calc']` 為 `True`，且歷史紀錄達到可以計算的要求 (>=2 幀)，則在每一次 `update_frame` 時都主動呼叫 `calculate_and_display_depth()` 進行連續重新解算與 UI 文字更新。
+- [修改] 434-435 行: 調整 Log 輸出邏輯，只有在非自動計算 (`not auto_calc`) 的情況下才把 `Calculated using X frames...` 印在控制台，避免連續計算時洗版。

@@ -1,0 +1,13 @@
+時間點: 2026-06-02T17:16:35+08:00
+
+使用者提問:
+我把剛剛的depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py改名成depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py了 之後修改這支, 存txt時一開始存出 錄影就緒，準備載入: test_video_Zebra\video_20260602_171038.mp4 ... 這些相關資訊, 另外先前有提到, 會取baseline足夠大的幀兩兩計算投影誤差並採用最佳的那組, 那把所有有計算baseline的組合和有計算投影誤差的組合都記錄在txt一開始
+
+助手回答:
+已為您更新了實施計劃 [implementation_plan.md](file:///C:/Users/88880445/.gemini/antigravity/brain/072aa733-ab30-4109-8eec-23abca6ce376/implementation_plan.md)。請您審查。
+該計劃將針對改名後的 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 進行修改：
+1. 定義 `ANALYSIS_LOG` 與 `COMBINATION_LOG` 收集分析日誌與全部 Baseline 組合誤差。
+2. 將分析與校正相關的 `print` 全部重定向至日誌收集函數 `log_and_print`。
+3. 在互動量測 UI 開啟前，一次性將收集到的日誌與所有兩兩組合的 Baseline 寫入同名 `.txt` 檔案首部。
+4. 恢復並對接 `save_measurement_to_txt` 量測數據寫入功能，確保後續點選數據以追加模式寫入同名 `.txt` 末尾。
+請確認此計劃，如同意請回覆以利開始修改程式。

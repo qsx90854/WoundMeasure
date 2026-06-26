@@ -1,0 +1,10 @@
+NewMeasure_v1.py 修改紀錄：
+[新增] 行數: 9-10
+plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'PingFang HK', 'SimHei', 'Arial Unicode MS', 'sans-serif']
+plt.rcParams['axes.unicode_minus'] = False
+
+[新增] 行數: 228
+print(f"❌ [匹配失敗] {msg} (梯度:{grad:.1f})")
+
+[新增] 行數: 253
+print(f"👉 [測量成功] 距離光心: {dist_cam:.1f}mm, 距平面: {dist_plane:.1f}mm, ZNCC: {score:.3f}")

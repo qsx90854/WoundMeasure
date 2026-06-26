@@ -1,0 +1,30 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T13:53:49
+
+[減少的部分]
+行 833 附近 (on_calc):
+-        imgA_bgr_snap, _ = process_view(current_L_snap, mtxL_o, distL, newKL_o)
+-        imgA_gray_snap   = cv2.cvtColor(imgA_bgr_snap, cv2.COLOR_BGR2GRAY)
+-        imgB_bgr_snap, _ = process_view(locked_R, mtxL_o, distL, newKL_o)
+-            'imgA_bgr':   imgA_bgr_snap,
+-            'imgA_gray':  imgA_gray_snap,
+-            'imgB_bgr':   imgB_bgr_snap,
+
+行 862 附近 (calc_worker):
+-                snap_imgA_gray = req['imgA_gray']
+-                imgA_bgr_ = req['imgA_bgr']
+-                imgB_bgr_ = req['imgB_bgr']
+
+[新增的部分]
+行 833 附近 (on_calc):
++            'raw_imgA':   current_L_snap,
++            'raw_imgB':   locked_R,
+
+行 862 附近 (calc_worker):
++                # ---------- 在背景執行緒進行耗時的反畸變與灰階轉換 ----------
++                imgA_bgr_, _ = process_view(req['raw_imgA'], mtxL_o, distL, newKL_o)
++                snap_imgA_gray = cv2.cvtColor(imgA_bgr_, cv2.COLOR_BGR2GRAY)
++                
++                imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
++                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)

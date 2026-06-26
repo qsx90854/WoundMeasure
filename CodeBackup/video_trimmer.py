@@ -1,0 +1,225 @@
+import cv2
+import os
+import sys
+import tkinter as tk
+from tkinter import filedialog, messagebox
+
+def main():
+    # 隱藏 tkinter 主視窗
+    root = tk.Tk()
+    root.withdraw()
+
+    # 1. 選擇影片檔案
+    print("🎬 正在開啟檔案選擇器...")
+    video_path = filedialog.askopenfilename(
+        title="請選擇要載入的影片檔案",
+        filetypes=[
+            ("影片檔案", "*.mp4 *.avi *.mov *.mkv *.mpv"),
+            ("所有檔案", "*.*")
+        ]
+    )
+
+    if not video_path:
+        print("⚠️ 未選擇影片檔案，程式結束。")
+        return
+
+    print(f"✅ 已載入影片: {video_path}")
+
+    # 2. 開啟影片並讀取資訊
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        messagebox.showerror("錯誤", "無法開啟該影片檔案！")
+        return
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+
+    if total_frames <= 0:
+        messagebox.showerror("錯誤", "無法獲取影片的影格總數。")
+        return
+
+    print(f"📊 影片資訊:")
+    print(f"   - 總影格數: {total_frames}")
+    print(f"   - FPS: {fps:.2f}")
+    print(f"   - 解析度: {width} x {height}")
+
+    # 3. 建立視窗與滑桿
+    window_name = "Video Trimmer (剪輯工具)"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, 1024, 768)
+
+    # 用來記錄當前狀態的字典
+    state = {
+        'current_frame': 0,
+        'cut_start': 0,
+        'cut_end': 0,
+        'update_needed': True
+    }
+
+    # 滑桿回呼函數
+    def on_trackbar_frame(val):
+        state['current_frame'] = val
+        state['update_needed'] = True
+
+    def on_trackbar_start(val):
+        state['cut_start'] = val
+        # 當調整剪切起點時，畫面自動跳轉到起點以便預覽
+        state['current_frame'] = val
+        cv2.setTrackbarPos('Current Frame', window_name, val)
+        state['update_needed'] = True
+
+    def on_trackbar_end(val):
+        state['cut_end'] = val
+        # 當調整剪切終點時，畫面自動跳轉到終點以便預覽
+        state['current_frame'] = val
+        cv2.setTrackbarPos('Current Frame', window_name, val)
+        state['update_needed'] = True
+
+    # 創建滑桿
+    cv2.createTrackbar('Current Frame', window_name, 0, total_frames - 1, on_trackbar_frame)
+    cv2.createTrackbar('Cut Start (起點)', window_name, 0, total_frames - 1, on_trackbar_start)
+    cv2.createTrackbar('Cut End (終點)', window_name, 0, total_frames - 1, on_trackbar_end)
+
+    # 預設將剪切起點與終點設在中間的某個小區域 (例如 10% ~ 20% 處)
+    default_start = int(total_frames * 0.1)
+    default_end = int(total_frames * 0.2)
+    cv2.setTrackbarPos('Cut Start (起點)', window_name, default_start)
+    cv2.setTrackbarPos('Cut End (終點)', window_name, default_end)
+    state['cut_start'] = default_start
+    state['cut_end'] = default_end
+
+    frame = None
+
+    print("\n💡 操作指引:")
+    print("   1. 拖動 [Current Frame] 滑桿來瀏覽影片。")
+    print("   2. 拖動 [Cut Start (起點)] 與 [Cut End (終點)] 滑桿，選定您想要【剪掉（捨棄）】的中間區間。")
+    print("   3. 影片畫面上會以紅色標記將被剪掉的影格，綠色標記保留的影格。")
+    print("   4. 確認無誤後，按 [空白鍵] 或 [Enter] 鍵儲存新影片。")
+    print("   5. 按 [Esc] 或 [Q] 鍵結束並不儲存。")
+
+    while True:
+        if state['update_needed']:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, state['current_frame'])
+            ret, frame_raw = cap.read()
+            if ret:
+                frame = frame_raw.copy()
+                
+                # 繪製半透明資訊黑底橫幅 (高度 85 像素)
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (width, 85), (15, 15, 15), -1)
+                cv2.addWeighted(overlay, 0.75, frame, 0.25, 0, frame)
+
+                current = state['current_frame']
+                c_start = state['cut_start']
+                c_end = state['cut_end']
+
+                # 判斷當前影格是否處於剪切區間內
+                is_cut = (c_start <= current <= c_end) and (c_start <= c_end)
+                
+                if is_cut:
+                    status_text = "[⚠️ WILL BE REMOVED / 將被剪掉]"
+                    status_color = (0, 0, 255) # 紅色
+                else:
+                    status_text = "[✅ KEEP / 將保留]"
+                    status_color = (0, 255, 0) # 綠色
+
+                # 文字繪製
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                # 影格進度與保留狀態
+                cv2.putText(frame, f"Frame: {current} / {total_frames-1}  {status_text}", 
+                            (20, 30), font, 0.7, status_color, 2, cv2.LINE_AA)
+                
+                # 剪切區間資訊
+                if c_start <= c_end:
+                    range_info = f"Cut Range: {c_start} ~ {c_end} (Total {c_end - c_start + 1} frames removed)"
+                else:
+                    range_info = "Cut Range: Invalid (Start > End, no frames will be cut)"
+                cv2.putText(frame, range_info, (20, 55), font, 0.6, (200, 200, 200), 1, cv2.LINE_AA)
+
+                # 按鍵說明
+                cv2.putText(frame, "Press [SPACE] or [ENTER] to save output video | [Q] to quit", 
+                            (20, 75), font, 0.5, (150, 150, 150), 1, cv2.LINE_AA)
+
+                cv2.imshow(window_name, frame)
+            state['update_needed'] = False
+
+        # 讀取按鍵輸入
+        key = cv2.waitKey(10) & 0xFF
+        
+        # Q 或 Esc 退出
+        if key == ord('q') or key == ord('Q') or key == 27:
+            print("👋 結束程式，未儲存任何修改。")
+            break
+
+        # Enter (13) 或 空白鍵 (32) 進行輸出
+        if key == 13 or key == 32:
+            c_start = state['cut_start']
+            c_end = state['cut_end']
+
+            if c_start > c_end:
+                messagebox.showwarning("警告", "剪切起點必須小於或等於終點！")
+                continue
+
+            # 彈出存檔對話框
+            output_path = filedialog.asksaveasfilename(
+                title="請選擇剪輯後影片的儲存路徑與名稱",
+                defaultextension=".mp4",
+                filetypes=[("MP4 影片檔", "*.mp4"), ("所有檔案", "*.*")]
+            )
+
+            if not output_path:
+                print("⚠️ 已取消儲存。")
+                continue
+
+            print(f"💾 開始導出影片至: {output_path}")
+            
+            # 使用 H264 或 MP4V 編碼器
+            out_fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, out_fourcc, fps, (width, height))
+
+            if not out.isOpened():
+                messagebox.showerror("錯誤", "無法建立輸出影片檔案，請換個名稱或格式再試。")
+                continue
+
+            # 重設讀取點
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            
+            # 顯示進度提示
+            progress_win = tk.Toplevel(root)
+            progress_win.title("導出進度")
+            progress_win.geometry("300x100")
+            progress_label = tk.Label(progress_win, text="正在處理影格，請稍候...", pady=20)
+            progress_label.pack()
+            root.update()
+
+            written_count = 0
+            for idx in range(total_frames):
+                ret, img = cap.read()
+                if not ret:
+                    break
+                
+                # 如果不在剪切區間內，就寫入新影片
+                if not (c_start <= idx <= c_end):
+                    out.write(img)
+                    written_count += 1
+
+                if idx % 20 == 0:
+                    progress_label.config(text=f"處理進度: {idx} / {total_frames} 影格...")
+                    root.update()
+
+            out.release()
+            progress_win.destroy()
+            
+            success_msg = f"🎉 影片導出成功！\n- 原影格數: {total_frames}\n- 剪掉影格: {c_end - c_start + 1}\n- 導出影格: {written_count}\n- 檔案儲存於: {output_path}"
+            print(success_msg)
+            messagebox.showinfo("成功", success_msg)
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

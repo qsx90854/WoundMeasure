@@ -1,0 +1,39 @@
+時間：2026-05-28 15:03:25
+
+使用者提問：
+請修復
+
+Antigravity回答：
+已成功將二義性消解邏輯修復。
+
+修正的關鍵點在於將 `get_joint_relative_pose` 中的 `if prev_marker_poses is not None and mid in prev_marker_poses:` 分支與無歷史時的「傾斜角最小消解邏輯」重新使用 `else:` 區隔，並修正了縮排。
+
+修復後的程式碼如下：
+```python
+            if len(rvecs) == 2:
+                # 1. 優先使用時序連續性約束進行二義性消解
+                if prev_marker_poses is not None and mid in prev_marker_poses:
+                    rv_prev, tv_prev = prev_marker_poses[mid]
+                    R_prev, _ = cv2.Rodrigues(rv_prev)
+                    n_prev = R_prev[:, 2] # 前一幀法向量
+                    
+                    score0 = np.dot(cv2.Rodrigues(rvecs[0])[0][:, 2], n_prev)
+                    score1 = np.dot(cv2.Rodrigues(rvecs[1])[0][:, 2], n_prev)
+                    best_idx = 0 if score0 > score1 else 1
+                else:
+                    # 2. 首幀或無歷史時，選擇正面面向相機（傾斜角最小）的解
+                    R0, _ = cv2.Rodrigues(rvecs[0])
+                    R1, _ = cv2.Rodrigues(rvecs[1])
+                    n0, n1 = R0[:, 2], R1[:, 2]
+                    
+                    dir0 = tvecs[0].flatten() / np.linalg.norm(tvecs[0])
+                    dir1 = tvecs[1].flatten() / np.linalg.norm(tvecs[1])
+                    
+                    tilt0 = abs(np.dot(n0, dir0))
+                    tilt1 = abs(np.dot(n1, dir1))
+                    best_idx = 0 if tilt0 > tilt1 else 1
+```
+
+這項修改可以保證首幀估計時，能正確使用傾斜角約束消解二義性；同時在後續畫面中，能正確應用時序連續性約束進行位姿平滑，恢復 Baseline 計算的準確度。
+
+遵循全球規則，由於此修改為 Python 檔案，我並未自行執行，請您重新執行此程式碼以驗證修復效果。

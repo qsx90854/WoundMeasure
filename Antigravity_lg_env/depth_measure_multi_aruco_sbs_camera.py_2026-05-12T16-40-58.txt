@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T16:40:58
+
+[減少的部分]
+行 317-331:
+-    ax_opts = fig.add_axes([0.13, 0.78, 0.16, 0.20])
+-    opt_labels = ["嚴格精細匹配", "梯度 SIFT 匹配", "強制極線對齊", "啟用 ECC 精修", "手動匹配模式"]
+... 舊有 5 個選項的 CheckButtons 與 view_state 初始化
+
+行 416-538:
+-            if m_pt is None and snap_view_state['grad_sift']:
+-                h_raw, w_alg = snap_imgA_gray.shape
+... 舊有僅支援 Grad-SIFT 的立體校正區塊
+
+[新增的部分]
+行 317-331:
++    ax_opts = fig.add_axes([0.13, 0.74, 0.16, 0.24])
++    opt_labels = ["嚴格精細匹配", "梯度 SIFT 匹配", "強制極線對齊", "啟用 ECC 精修", "手動匹配模式", "Farneback匹配"]
+... 擴充為 6 個選項，加入 'use_farneback' 狀態
+
+行 416-538 (重構後):
++            if m_pt is None and (snap_view_state.get('grad_sift') or snap_view_state.get('use_farneback', False)):
+... 將立體校正 (stereoRectify) 拉到外層，供 Grad-SIFT 與 Farneback 共用。
+... 新增 Farneback 密集光流區塊，使用 cv2.calcOpticalFlowFarneback 計算 ROI 中心點位移，並透過 P1, P2 三角測量解算深度。

@@ -1,0 +1,13 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-19-22
+
+減少的部份:
+行號 1105-1107 附近:
+                    'baseline': baseline_val,
+                    'cornersA': cA_dict, 'cornersB': cB_dict
+
+新增的部份:
+行號 1105-1108 附近 (新增 pose_valid 判斷以使用對齊後的角點):
+                    'baseline': baseline_val,
+                    'cornersA': cA_dict_rect if pose_valid else cA_dict,
+                    'cornersB': cB_dict_rect if pose_valid else cB_dict

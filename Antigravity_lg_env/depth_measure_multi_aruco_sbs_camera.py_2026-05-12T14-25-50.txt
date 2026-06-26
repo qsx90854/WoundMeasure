@@ -1,0 +1,11 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T14-25-50
+
+[新增的部分]
+行 465-469:
++                        print(f"--- 診斷 LOG ---")
++                        print(f"左圖實際提取的特徵點數量: {len(kpts_inj)}")
++                        print(f"右圖實際提取的特徵點數量: {len(kpts_r)}")
++                        print(f"Ratio Test 過濾後剩餘的匹配點數量: {len(good)}")
++                        print(f"----------------")

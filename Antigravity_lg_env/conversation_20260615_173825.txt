@@ -1,0 +1,10 @@
+時間: 2026-06-15 17:38:25
+
+使用者反饋:
+執行出現 TclError: bad option "-width"，此參數不能傳入 .pack() 佈局管理器中。
+
+工程師回覆與修改:
+1. 分析原因：Tkinter 的 .pack() 佈局管理器沒有 -width 選項。應將 width 改為建立 ttk.Scale 時的 length 參數。
+2. 已修改 video_specular_removal_app.py 中 v_scale、s_scale、sigma_scale 的建立與佈局。
+3. 已將變更紀錄寫入 video_specular_removal_app.py_20260615_173825。
+4. 遵守規則：未在本地端執行此 Python 檔案。

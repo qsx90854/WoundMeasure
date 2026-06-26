@@ -1,0 +1,60 @@
+修改時間: 2026-06-01T16:10:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (約原 L1231 - L1283):
+-                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res}      fail_reason = "超過最大深度"
+-                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+-            else:
+-                d_val = np.linalg.norm(p3d); p3d_val = p3d
+-                p_dist_str = "N/A"
+-                if cand['plane_n'] is not None:
+-                    p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
+-                    p_dist_str = f"{p_dist:.2f} mm"
+-                print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+-                
+-                # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
+-                if cand.get('cornersA'):
+-                    min_id = min(cand['cornersA'].keys())
+-                    
+-                    ok_origin = False
+-                    # 1. 優先使用背景執行緒中已經過 IPPE 且消解二義性的穩定標籤位姿
+-                    if 'curr_marker_poses' in cand and min_id in cand['curr_marker_poses']:
+-                        rv_o, tv_o = cand['curr_marker_poses'][min_id]
+-                        ok_origin = True
+-                    else:
+-                        # 2. 備用方案：使用 IPPE 獨立解算並消解二義性
+-                        half = ACTUAL_MARKER_SIZE_MM / 2.0
+-                        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+-                        ok_generic, rvecs_o, tvecs_o, _ = cv2.solvePnPGeneric(
+-                            canon, cand['cornersA'][min_id], KL, np.zeros(5),
+-                            flags=cv2.SOLVEPNP_IPPE
+-                        )
+-                        if ok_generic and len(rvecs_o) > 0:
+-                            best_idx = 0
+-                            if len(rvecs_o) == 2:
+-                                # 選擇最正面面向相機的解
+-                                R0, _ = cv2.Rodrigues(rvecs_o[0])
+-                                R1, _ = cv2.Rodrigues(rvecs_o[1])
+-                                n0, n1 = R0[:, 2], R1[:, 2]
+-                                dir0 = tvecs_o[0].flatten() / np.linalg.norm(tvecs_o[0])
+-                                dir1 = tvecs_o[1].flatten() / np.linalg.norm(tvecs_o[1])
+-                                best_idx = 0 if abs(np.dot(n0, dir0)) > abs(np.dot(n1, dir1)) else 1
+-                            rv_o = rvecs_o[best_idx]
+-                            tv_o = tvecs_o[best_idx]
+-                            ok_origin = True
+-                            
+-                    if ok_origin:
+-                        R_o, _ = cv2.Rodrigues(rv_o)
+-                        p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
+-                        p3d_w_val = p3d_w.flatten()
+-        else:
+-            fail_reason = "無匹配點"
+-            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
+-            print(f"   [計算失敗] 原因: {fail_reason}")
+-
+-        return {'pt': m_pt, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+-                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+-                'fail_reason': fail_reason, 'u': u, 'v': v}
+
+新增的部份 (約新 L1231):
++                'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res}

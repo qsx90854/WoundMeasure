@@ -1,0 +1,14 @@
+對話時間: 2026-06-02T11:33:30+08:00
+
+本次對話與回答摘要：
+1. 參考了 WoundDetect_Codex/aruco_triangulate_point.py 關於相機外參和定位的計算方式：
+   - 發現其並未對影像和角點做去畸變，而是直接使用原始檢測角點、原始內參與畸變參數進行 PnP 位姿解算，之後再直接計算外參。
+   - 其對於單個正方形標籤解算，採用了針對平面四邊形專門優化的 cv2.SOLVEPNP_IPPE_SQUARE 算法，而非通用的迭代迭代法 (ITERATIVE)。
+   - 其對於多標籤 Joint PnP，亦採用了 seed 標籤初始位姿作為迭代初值引導的 useExtrinsicGuess 優化。
+2. 進行程式架構重構以達成「物理空間精確求解 + UI 去畸變顯示與重投影驗證」的解耦：
+   - 將影片分析中的檢測角點由「去畸變角點」改回「原始影像角點」。
+   - 將影片分析中的 solvePnP 改為使用原始內參 (mtx_L) 和原始畸變 (dist_L) 作為解算參數，並將單個標籤解算改為 cv2.SOLVEPNP_IPPE_SQUARE 算法。
+   - 將所有多標籤 Joint PnP 迭代都引入了 Seed 標籤 (基於 IPPE_SQUARE 解算) 做為 Extrinsic Guess 的初值引導，消除迭代局部極小值。
+   - 在最終返回給 UI 顯示和重投影誤差計算時，使用 undistortPoints 把起點段/結尾段的 ArUco 角點轉換到無畸變空間，確保 UI 的反投影框和圖像完全貼合。
+   - 對 do_measure, draw_reprojected_aruco 的單標籤 PnP 解算亦同步更換為更精準的 SOLVEPNP_IPPE_SQUARE 算法。
+3. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_31_00+08_00.txt。

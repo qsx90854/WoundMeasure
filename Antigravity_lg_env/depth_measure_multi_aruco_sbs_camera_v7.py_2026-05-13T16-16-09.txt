@@ -1,0 +1,23 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T16:16:09
+
+[減少的部分]
+行 698-705 附近 (舊事件處理):
+-    pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False}
+-    def on_press(event):
+-        if event.inaxes not in (ax_A, ax_B) or event.button != 1: return
+
+[新增的部分]
+行 698 附近 (加入 HUD 拖曳邏輯):
++    pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False, 'dragging_hud': False}
++    def on_press(event):
++        ...
++        # 檢查是否點擊在深度數值 HUD 區域內
++        try:
++            bbox = depth_text.get_window_extent(fig.canvas.get_renderer())
++            if bbox.contains(event.x, event.y):
++                pan_state['dragging_hud'] = True
++                return
++        ...
++    # on_motion 與 on_release 也同步加入了 dragging_hud 的判斷與座標更新

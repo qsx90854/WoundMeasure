@@ -1,0 +1,19 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T17:09:57
+
+[減少的部分]
+行 523:
+-                                pt3D_cam2 = cand['R_rel'] @ pts3D + cand['t_rel'].flatten()
+
+行 569:
+-                        pt3D_cam2 = cand['R_rel'] @ pts3D + cand['t_rel'].flatten()
+
+[新增的部分]
+行 523-524:
++                                pts3D_unrect1 = R1.T @ pts3D
++                                pt3D_cam2 = cand['R_rel'] @ pts3D_unrect1 + cand['t_rel'].flatten()
+
+行 569-570:
++                        pts3D_unrect1 = R1.T @ pts3D
++                        pt3D_cam2 = cand['R_rel'] @ pts3D_unrect1 + cand['t_rel'].flatten()

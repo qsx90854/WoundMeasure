@@ -1,0 +1,15 @@
+對話記錄與回答訊息
+時間點: 2026-05-27 17:59:39 (Local Time)
+
+=========================================
+對話背景與問題分析：
+=========================================
+使用者反應前一次新增的角點近距離 Baseline 最小化消歧與保護機制導致 RT 估計結果不準確，要求將該次修改全部還原。
+
+解決方案：
+1. **還原代碼變更**：
+   - 於 `depth_measure_multi_aruco_sbs_camera_v7_demo.py` 中，將 `get_joint_relative_pose` 中的無歷史二義性判斷還原回原本純 tilt 角度比較的邏輯。
+   - 移除 `get_joint_relative_pose` 返回前對於角點位移與 Baseline 比例的過濾邏輯。
+   - 將 `calc_worker` 中 `pose_info` 的預設字串還原為 `"未偵測到 ArUco"`。
+2. **歸檔備份**：
+   - 已建立還原對照日誌 `depth_measure_multi_aruco_sbs_camera_v7_demo.py_20260527_175939.txt` 與此對話紀錄檔。

@@ -1,0 +1,3 @@
+NewMeasure_v1.py 新增紀錄：
+新增：共 329 行。
+此檔案為基於立體視覺設計規劃 (NewDesign.md) 的全新模組實作，包含即時影像擷取、ArUco相對位姿估算、立體校正 (Stereo Rectification)、ZNCC Patch 一維搜尋、亞像素精細化以及 3D DLT 三角測距。

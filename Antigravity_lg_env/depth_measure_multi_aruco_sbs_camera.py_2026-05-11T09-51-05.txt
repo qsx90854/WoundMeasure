@@ -1,0 +1,40 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T09-51-05
+
+[減少的部分]
+行 676:     ax_btn_lock_R = fig.add_axes([0.55, 0.92, 0.15, 0.04])
+行 679:     ax_btn_calc = fig.add_axes([0.45, 0.92, 0.1, 0.04])
+行 680:     btn_calc = Button(ax_btn_calc, "計算深度")
+
+[新增的部分]
+行 676 附近:
++    ax_btn_calc = fig.add_axes([0.35, 0.92, 0.12, 0.04])
++    btn_calc = Button(ax_btn_calc, "單次計算深度")
++    
++    ax_btn_auto_calc = fig.add_axes([0.52, 0.92, 0.15, 0.04])
++    btn_auto_calc = Button(ax_btn_auto_calc, "連續計算: 關")
++    
++    ax_btn_lock_R = fig.add_axes([0.72, 0.92, 0.15, 0.04])
++    btn_lock_R = Button(ax_btn_lock_R, "鎖定右圖")
++    
++    auto_calc_active = False
++    
++    def on_auto_calc(event):
++        nonlocal auto_calc_active
++        auto_calc_active = not auto_calc_active
++        if auto_calc_active:
++            btn_auto_calc.label.set_text("連續計算: 開")
++            print("▶️ 開啟連續計算模式")
++        else:
++            btn_auto_calc.label.set_text("連續計算: 關")
++            print("⏸️ 關閉連續計算模式")
++        fig.canvas.draw_idle()
+
+行 793 附近:
++    btn_auto_calc.on_clicked(on_auto_calc)
+
+行 802 附近:
++        # 如果處於連續計算模式，自動觸發計算
++        if auto_calc_active and has_set_L:
++            on_calc(None)

@@ -1,0 +1,26 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+修改時間: 2026-05-14_17-16-41
+
+減少的部份:
+行號 544-550 附近:
+                            l_B = F @ np.array([pL[0], pL[1], 1.0])
+                            denom = l_B[0]**2 + l_B[1]**2
+                            if denom > 1e-9:
+                                dist_e = abs(l_B[0]*pR[0] + l_B[1]*pR[1] + l_B[2]) / np.sqrt(denom)
+                                if dist_e > 4.0: # 閾值設為 5 像素
+                                    deleted_count += 1
+                                    continue
+
+新增的部份:
+行號 544-553 附近 (新增 is_rectified 判斷與 Y 軸差檢查):
+                            if cand.get('is_rectified', False):
+                                # 對齊影像的極線約束非常簡單：Y 座標必須相近
+                                dist_e = abs(pL[1] - pR[1])
+                            else:
+                                l_B = F @ np.array([pL[0], pL[1], 1.0])
+                                denom = l_B[0]**2 + l_B[1]**2
+                                dist_e = abs(l_B[0]*pR[0] + l_B[1]*pR[1] + l_B[2]) / np.sqrt(denom) if denom > 1e-9 else 999.0
+                                
+                            if dist_e > 4.0: # 閾值設為 4 像素
+                                deleted_count += 1
+                                continue

@@ -1,0 +1,46 @@
+修改時間: 2026-06-02T11:35:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L427 - L448):
+-        R_rel = R_start_avg @ R_end_avg.T
+-        t_rel = t_start_avg - R_rel @ t_end_avg
+-        baseline = float(np.linalg.norm(t_rel))
+-        
+-        def find_closest(valid_list, R_avg, t_avg):
+-            best_idx = 0
+-            min_dist = float('inf')
+-            for i, item in enumerate(valid_list):
+-                dist_R = np.linalg.norm(item['R'] - R_avg, 'fro')
+-                dist_t = np.linalg.norm(item['t'] - t_avg)
+-                dist = dist_R + dist_t / 10.0
+-                if dist < min_dist:
+-                    min_dist = dist
+-                    best_idx = i
+-            return valid_list[best_idx]
+-            
+-        best_start = find_closest(valid_start, R_start_avg, t_start_avg)
+-        best_end = find_closest(valid_end, R_end_avg, t_end_avg)
+
+新增的部份:
+(約新 L427 - L448):
++        def find_closest(valid_list, R_avg, t_avg):
++            best_idx = 0
++            min_dist = float('inf')
++            for i, item in enumerate(valid_list):
++                dist_R = np.linalg.norm(item['R'] - R_avg, 'fro')
++                dist_t = np.linalg.norm(item['t'] - t_avg)
++                dist = dist_R + dist_t / 10.0
++                if dist < min_dist:
++                    min_dist = dist
++                    best_idx = i
++            return valid_list[best_idx]
++            
++        best_start = find_closest(valid_start, R_start_avg, t_start_avg)
++        best_end = find_closest(valid_end, R_end_avg, t_end_avg)
++        
++        # 為了使雙幀直接測量與重投影在幾何上完全自洽，
++        # 我們使用選定代表影格的實際物理位姿來計算相對外參
++        R_rel = best_start['R'] @ best_end['R'].T
++        t_rel = best_start['t'] - R_rel @ best_end['t']
++        baseline = float(np.linalg.norm(t_rel))

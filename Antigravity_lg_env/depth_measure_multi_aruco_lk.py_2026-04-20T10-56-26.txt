@@ -1,0 +1,10 @@
+時間點: 2026-04-20T10:56:26+08:00
+
+【減少的部份】
+1. 刪除了 `find_precise_match` 內呼叫 `template_match_epipolar` 盲目尋找全極線導致的 Aperture Problem (約 5 句話)。
+
+【新增的部份】
+1. 在 `find_precise_match` 頂部加入利用相機內參 `K`、外參 `R_rel, t_rel`、以及全局參數 `plane_normal, plane_center` 綜合計算的「**3D 雷射投影光線交點模型 (Ray-casting)**」。
+2. 將此交點映射至 Camera B 後，作為 `pt_right_coarse`，完全拋棄 1D 盲目搜索。
+3. 將 2D Local Template Matching 的搜尋窗加大到 `search_range = 30` (因為有投影加持，不需精細縮減)。
+4. `do_measure` 呼叫時加入傳遞 `K, R_rel, t_rel, plane_normal, plane_center`。

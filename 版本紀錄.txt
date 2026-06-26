@@ -1,0 +1,19 @@
+0506:
+修正一些bug
+sbs_camera_v3:在梯度sift匹配開啟時,可點右圖畫面特徵點可畫紅線
+
+sbs_camera_v4(backup):目前純採用傳統算法, 算是一個穩定版本可量測距離
+sbs_camera_v5(backup):加了一個即時計算的按鈕, 現在要改成thread版本,先備份
+sbs_camera_v6(backup):已加入thread, 並將undistortion流程先預先建表, 但FPS還是很低, 
+接著嘗試將matplotlib介面改成用opencv imshow試試看,所以先備份
+
+sbs_camera_v7(backup):加上稠密光流前的備份
+sbs_camera_v8(backup):加入稠密光流, 但效果一樣不夠穩定,準備加入雙目流程
+
+
+sbs_camera_v7_demo20260520: 20260515時, 給大陸CTO看的版本的備份
+sbs_camera_v7_demo_20260520_v2: 0520小修改後的備份
+
+持續更新: sbs_camera_v7_demo.py這個檔案
+
+depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_backup: 尚算穩定版本, 備份用

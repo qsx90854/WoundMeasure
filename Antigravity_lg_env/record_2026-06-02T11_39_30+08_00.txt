@@ -1,0 +1,9 @@
+對話時間: 2026-06-02T11:39:30+08:00
+
+本次對話與回答摘要：
+1. 根據使用者需求，新增支援了「重投影誤差最小」的影格對挑選模式 (reproj_min)：
+   - 實現了 compute_pair_reprojection_error 函數。該函數會使用物理原始畸變角點與相機物理內參，結合 cv2.SOLVEPNP_IPPE_SQUARE 算法解算當前標籤的 Pose，再用相對 Pose 把標籤雙向投影到對側影格，計算雙向重投影的平均 L2 像素誤差。
+   - 在遍歷所有的 valid_start 和 valid_end 影格配對時，只要滿足 Baseline 物理約束 (5.0 mm 至 35.0 mm)，就計算其雙向重投影誤差。
+   - 挑選出雙向重投影誤差最小的配對作為最終的代表影格 (best_start 與 best_end)，以此作為點擊測量與重投影顯示的影像對。
+2. 修改了全局設定，將預設的 POSE_SELECT_MODE 設定改為 "reproj_min"，讓使用者可以直接以最優重投影誤差模式執行程式。
+3. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_38_00+08_00.txt。

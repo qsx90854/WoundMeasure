@@ -1,0 +1,34 @@
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-01T14:51:35+08:00
+
+--- 減少的部份 ---
+行號 1620-1625:
+        imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+        imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)
+        _t5 = _time.perf_counter(); _t_proc += (_t5 - _t4) * 1000
+        
+        im_A.set_data(cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB))
+        im_B.set_data(cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB))
+
+--- 新增的部份 ---
+行號 1620-1639:
+        imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+        imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)
+        
+        # 依前處理開關，動態切換顯示畫面（使肉眼可見差異）
+        if view_state['enable_clahe']:
+            gray_A = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
+            gray_A_enh = preprocess_gray(gray_A, True)
+            disp_A = cv2.cvtColor(gray_A_enh, cv2.COLOR_GRAY2RGB)
+            
+            gray_B = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY)
+            gray_B_enh = preprocess_gray(gray_B, True)
+            disp_B = cv2.cvtColor(gray_B_enh, cv2.COLOR_GRAY2RGB)
+        else:
+            disp_A = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB)
+            disp_B = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2RGB)
+            
+        _t5 = _time.perf_counter(); _t_proc += (_t5 - _t4) * 1000
+        
+        im_A.set_data(disp_A)
+        im_B.set_data(disp_B)

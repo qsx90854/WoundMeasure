@@ -1,0 +1,20 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T15:26:57
+
+[減少的部分]
+行 351-364 附近 (透過 Axes 訪問 patches 與 lines):
+-    for ax in [ax_c1, ax_c2, ax_c3, ax_c4, ax_c5]:
+-        for patch in ax.patches:
+-            patch.set_edgecolor('white')
+-            ...
+
+[新增的部分]
+行 351 附近 (使用 getattr 兼容新舊版私有屬性):
++    # 高亮與深色背景適配（相容新舊版 Matplotlib 的屬性名稱）
++    for c in [c1, c2, c3, c4, c5]:
++        # 取得方框物件 (新版為 rectangles, 舊版為 _rectangles)
++        rects = getattr(c, 'rectangles', getattr(c, '_rectangles', []))
++        # 取得打勾線條物件 (新版為 lines, 舊版為 _lines)
++        lines = getattr(c, 'lines', getattr(c, '_lines', []))
++        ...

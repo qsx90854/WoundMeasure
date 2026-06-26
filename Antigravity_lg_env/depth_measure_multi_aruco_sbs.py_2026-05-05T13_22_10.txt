@@ -1,0 +1,65 @@
+修改檔案: depth_measure_multi_aruco_sbs.py
+時間點: 2026-05-05T13:22:10+08:00
+
+--- 減少部分 (原行數 713-734) ---
+-                    if des_inject is not None and des_r is not None:
+-                        bf_m = cv2.BFMatcher(cv2.NORM_L2)
+-                        raw_matches = bf_m.match(des_inject, des_r)
+-                        
+-                        # 過濾：僅保留距離 < 450 的匹配
+-                        good_all = [m for m in raw_matches if m.distance < 450]
+-                        
+-                        # (1) 多對一過濾：確保每個右圖點只對應到最合適的左圖點
+-                        best_matches_dict = {}
+-                        for m in good_all:
+-                            if m.trainIdx not in best_matches_dict or m.distance < best_matches_dict[m.trainIdx].distance:
+-                                best_matches_dict[m.trainIdx] = m
+-                        good_all = list(best_matches_dict.values())
+-                        
+-                        # (2) 區域一致性過濾 (位移向量中位數過濾)
+-                        pts_info = []
+-                        click_pt = np.array([click_u, click_v])
+-                        for m in good_all:
+-                            pL = np.array(kpts_inject[m.queryIdx].pt)
+-                            pR = np.array(kpts_r[m.trainIdx].pt)
+-                            if np.linalg.norm(pL - click_pt) < 50:
+-                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+
+--- 新增部分 (新行數 713 起) ---
++                    # 合併全局與局部特徵池進行混合匹配
++                    des_mix_L = np.vstack([desA_glob, des_inject]) if desA_glob is not None else des_inject
++                    des_mix_R = np.vstack([desB_glob, des_r]) if desB_glob is not None else des_r
++                    kpts_mix_L = list(kpA_glob) + list(kpts_inject) if kpA_glob else list(kpts_inject)
++                    kpts_mix_R = list(kpB_glob) + list(kpts_r) if kpB_glob else list(kpts_r)
++                    offset_A = len(kpA_glob) if kpA_glob else 0
++
++                    if des_mix_L is not None and des_mix_R is not None:
++                        bf_m = cv2.BFMatcher(cv2.NORM_L2)
++                        # 改用 knnMatch 以進行 Lowe's Ratio Test
++                        knn_results = bf_m.knnMatch(des_mix_L, des_mix_R, k=2)
++                        
++                        good_mixed = []
++                        for m_pair in knn_results:
++                            if len(m_pair) == 2:
++                                m, n = m_pair
++                                if m.distance < 0.75 * n.distance:
++                                    good_mixed.append(m)
++                        
++                        # 篩選出屬於「點擊注入點」的匹配結果
++                        good_all_injected = [m for m in good_mixed if m.queryIdx >= offset_A]
++                        
++                        # (1) 多對一過濾：確保每個右圖點只對應到最合適的左圖點
++                        best_matches_dict = {}
++                        for m in good_all_injected:
++                            if m.trainIdx not in best_matches_dict or m.distance < best_matches_dict[m.trainIdx].distance:
++                                best_matches_dict[m.trainIdx] = m
++                        good_all = list(best_matches_dict.values())
++                        
++                        # (2) 區域一致性過濾 (位移向量中位數過濾)
++                        pts_info = []
++                        click_pt = np.array([click_u, click_v])
++                        for m in good_all:
++                            pL = np.array(kpts_mix_L[m.queryIdx].pt)
++                            pR = np.array(kpts_mix_R[m.trainIdx].pt)
++                            if np.linalg.norm(pL - click_pt) < 50:
++                                pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})

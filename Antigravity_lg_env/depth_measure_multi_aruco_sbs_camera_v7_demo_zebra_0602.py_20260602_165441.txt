@@ -1,0 +1,178 @@
+被修改的檔名: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py
+修改的時間: 20260602_165441
+
+----------------- 減少的部份 (行數: 27 - 29) -----------------
+27: # ==================== 全局設定區 ====================
+28: VIDEO_PATH            = r"test_video_Zebra//video_20260601_172436.mp4"        # 影片檔案路徑
+29: START_FRAME_COUNT     = 30                         # 前段評估幀數 (N)
+
+----------------- 新增的部份 (行數: 27 - 31) -----------------
+27: # ==================== 全局設定區 ====================
+28: VIDEO_PATH            = r"test_video_Zebra//video_20260601_172436.mp4"        # 影片檔案路徑
+29: RECORD_SAVE_DIR       = "test_video_Zebra"                                    # 錄影儲存資料夾路徑
+30: START_FRAME_COUNT     = 30                         # 前段評估幀數 (N)
+
+----------------- 減少的部份 (行數: 812 - 818) -----------------
+812: def record_video_from_camera():
+813:     import datetime
+814:     # 建立影片儲存資料夾（如果不存在的話）
+815:     save_path = "test_video_Zebra"
+816:     if not os.path.exists(save_path):
+817:         os.makedirs(save_path)
+
+----------------- 新增的部份 (行數: 813 - 819) -----------------
+813: def record_video_from_camera():
+814:     import datetime
+815:     # 建立影片儲存資料夾（如果不存在的話）
+816:     save_path = RECORD_SAVE_DIR
+817:     if not os.path.exists(save_path):
+818:         os.makedirs(save_path)
+
+----------------- 減少的部份 (行數: 900 - 905) -----------------
+900:     cap.release()
+901:     cv2.destroyAllWindows()
+902:     return video_name
+903: 
+904: def main():
+
+----------------- 新增的部份 (行數: 901 - 1023) -----------------
+901:     cap.release()
+902:     cv2.destroyAllWindows()
+903:     return video_name
+904: 
+905: def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_n, custom_plane_c, custom_plane_fitted, measure_mode):
+906:     import datetime
+907:     if video_path is None:
+908:         return
+909:     txt_path = os.path.splitext(video_path)[0] + ".txt"
+910:     
+911:     # 取得現在時間
+912:     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+913:     
+914:     u, v = res['u'], res['v']
+915:     m_pt = res['pt']
+916:     m_pt_raw = res.get('pt_raw')
+917:     p3d = res['p3d']
+918:     p3d_w = res.get('p3d_w')
+919:     d_val = res['d']
+920:     method = res['method']
+921:     fail_reason = res.get('fail_reason', '')
+922:     
+923:     m_pt_str = f"({m_pt[0]:.2f}, {m_pt[1]:.2f})" if m_pt is not None else "None"
+924:     m_pt_raw_str = f"({m_pt_raw[0]:.2f}, {m_pt_raw[1]:.2f})" if m_pt_raw is not None else "None"
+925:     p3d_str = f"[{p3d[0]:.2f}, {p3d[1]:.2f}, {p3d[2]:.2f}]" if p3d is not None else "None"
+926:     p3d_w_str = f"[{p3d_w[0]:.2f}, {p3d_w[1]:.2f}, {p3d_w[2]:.2f}]" if p3d_w is not None else "None"
+927:     p3d_w_offset_str = f"[{p3d_w[0]:.2f}, {p3d_w[1]:.2f}, {p3d_w[2] + wound_z_offset:.2f}]" if p3d_w is not None else "None"
+928:     d_str = f"{d_val:.2f} mm" if d_val is not None else "None"
+929:     
+930:     # 距標記平面深度
+931:     p_dist_str = "None"
+932:     if p3d is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None:
+933:         p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
+934:         p_dist_str = f"{p_dist:.2f} mm"
+935:         
+936:     # 距自訂平面深度
+937:     cp_dist_str = "None"
+938:     proj_dist_signed = 0.0
+939:     if custom_plane_fitted and p3d is not None and custom_plane_n is not None and custom_plane_c is not None:
+940:         proj_dist_signed = np.dot(custom_plane_n, p3d - custom_plane_c)
+941:         status = "Above" if proj_dist_signed > 0 else "Below"
+942:         cp_dist_str = f"{status} {abs(proj_dist_signed):.2f} mm"
+943:         
+944:     # 幾何外參
+945:     R_rel = cand.get('R_rel')
+946:     t_rel = cand.get('t_rel')
+947:     baseline = cand.get('baseline')
+948:     idx_B = cand.get('idx')
+949:     
+950:     R_rel_str = np.array2string(R_rel, precision=6, separator=', ', suppress_small=True) if R_rel is not None else "None"
+951:     t_rel_str = np.array2string(t_rel.flatten(), precision=6, separator=', ', suppress_small=True) if t_rel is not None else "None"
+952:     
+953:     # 內參
+954:     K_R = cand.get('K_R')
+955:     K_R_str = np.array2string(K_R, precision=6, separator=', ', suppress_small=True) if K_R is not None else "None"
+956:     
+957:     # 格式化人讀文字
+958:     text_lines = []
+959:     text_lines.append("==================================================")
+960:     text_lines.append(f"時間戳記: {now_str}")
+961:     text_lines.append(f"量測狀態: {'成功' if d_val is not None else '失敗'}")
+962:     if d_val is None:
+963:         text_lines.append(f"失敗原因: {fail_reason}")
+964:     text_lines.append(f"左圖點擊座標 (u, v): ({u:.2f}, {v:.2f})")
+965:     text_lines.append(f"右圖匹配座標 (u_R, v_R): {m_pt_str}")
+966:     text_lines.append(f"右圖原始匹配座標 (u_R_raw, v_R_raw): {m_pt_raw_str}")
+967:     text_lines.append(f"匹配演算法: {method}")
+968:     text_lines.append(f"量測模式: {measure_mode}")
+969:     text_lines.append(f"歐式距離 (d): {d_str}")
+970:     text_lines.append(f"相機 3D 座標 (X_c, Y_c, Z_c): {p3d_str}")
+971:     text_lines.append(f"世界 3D 座標 (X_w, Y_w, Z_w): {p3d_w_str}")
+972:     text_lines.append(f"世界 3D 座標 (含傷口高度補償 {wound_z_offset:.2f} mm): {p3d_w_offset_str}")
+973:     text_lines.append(f"距標記平面深度: {p_dist_str}")
+974:     text_lines.append(f"自訂平面擬合狀態: {'已擬合' if custom_plane_fitted else '未擬合'}")
+975:     text_lines.append(f"距自訂平面深度: {cp_dist_str}")
+976:     text_lines.append(f"左圖影格索引: {idx_B}")
+977:     text_lines.append(f"基準線 (Baseline): {baseline:.2f} mm" if baseline is not None else "基準線 (Baseline): None")
+978:     text_lines.append(f"相對平移向量 (T_rel): {t_rel_str}")
+979:     text_lines.append(f"相對旋轉矩陣 (R_rel):\n{R_rel_str}")
+980:     text_lines.append(f"相機內參 (KL):\n{K_R_str}")
+981:     text_lines.append("==================================================")
+982:     
+983:     # 格式化機讀 JSON
+984:     import json
+985:     json_data = {
+986:         "timestamp": now_str,
+987:         "status": "success" if d_val is not None else "failed",
+988:         "fail_reason": fail_reason,
+989:         "u": float(u),
+990:         "v": float(v),
+991:         "u_R": float(m_pt[0]) if m_pt is not None else None,
+992:         "v_R": float(m_pt[1]) if m_pt is not None else None,
+993:         "u_R_raw": float(m_pt_raw[0]) if m_pt_raw is not None else None,
+994:         "v_R_raw": float(m_pt_raw[1]) if m_pt_raw is not None else None,
+995:         "method": method,
+996:         "measure_mode": measure_mode,
+997:         "d_mm": float(d_val) if d_val is not None else None,
+998:         "p3d_camera": p3d.tolist() if p3d is not None else None,
+999:         "p3d_world": p3d_w.tolist() if p3d_w is not None else None,
+1000:        "p3d_world_compensated": [float(p3d_w[0]), float(p3d_w[1]), float(p3d_w[2] + wound_z_offset)] if p3d_w is not None else None,
+1001:        "wound_z_offset_mm": float(wound_z_offset),
+1002:        "dist_to_marker_plane_mm": float(p_dist) if (p3d is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None) else None,
+1003:        "custom_plane_fitted": bool(custom_plane_fitted),
+1004:        "dist_to_custom_plane_mm": float(abs(proj_dist_signed)) if (custom_plane_fitted and p3d is not None and custom_plane_n is not None and custom_plane_c is not None) else None,
+1005:        "idx_left_frame": int(idx_B) if idx_B is not None else None,
+1006:        "baseline_mm": float(baseline) if baseline is not None else None,
+1007:        "t_rel": t_rel.flatten().tolist() if t_rel is not None else None,
+1008:        "R_rel": R_rel.tolist() if R_rel is not None else None,
+1009:        "KL": K_R.tolist() if K_R is not None else None
+1010:    }
+1011:    
+1012:    # 寫入檔案
+1013:    try:
+1014:        with open(txt_path, 'a', encoding='utf-8') as f:
+1015:            f.write("\n".join(text_lines) + "\n")
+1016:            f.write("JSON: " + json.dumps(json_data, ensure_ascii=False) + "\n\n")
+1017:        print(f"💾 量測數據已儲存至: {txt_path}")
+1018:    except Exception as e:
+1019:        print(f"❌ 儲存量測數據失敗: {e}")
+1020:
+1021:def main():
+
+----------------- 減少的部份 (行數: 1695 - 1700) -----------------
+1695:         measure_results[current_cand['idx']] = res
+1696:         all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+1697:         summary = [f"F{current_cand['idx']}: {res['d']:.1f}" if res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+1698:         apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
+
+----------------- 新增的部份 (行數: 1700 - 1715) -----------------
+1700:         measure_results[current_cand['idx']] = res
+1701:         all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+1702:         summary = [f"F{current_cand['idx']}: {res['d']:.1f}" if res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+1703:         
+1704:         # 存出數據至 txt 檔案
+1705:         save_measurement_to_txt(
+1706:             VIDEO_PATH, res, current_cand, wound_z_offset, 
+1707:             custom_plane_n, custom_plane_c, custom_plane_fitted, MEASURE_MODE
+1708:         )
+1709:         
+1710:         apply_measure_result(res, np.mean(all_d) if all_d else None, summary)

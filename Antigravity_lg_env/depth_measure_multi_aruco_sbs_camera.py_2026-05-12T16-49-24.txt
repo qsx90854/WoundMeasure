@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T16:49:24
+
+[減少的部分]
+行 518:
+-                                pts4D = cv2.triangulatePoints(P1, P2, np.array([[u_rect]], dtype=np.float32), np.array([[mapped_rectB[0]]], dtype=np.float32))
+
+行 563:
+-                        pts4D = cv2.triangulatePoints(P1, P2, np.array([[u_rect]], dtype=np.float32), np.array([[mapped_rectB[0]]], dtype=np.float32))
+
+[新增的部分]
+行 518:
++                                pts4D = cv2.triangulatePoints(P1, P2, np.array([[u_rect], [v_rect]], dtype=np.float32), np.array([[mapped_rectB[0]], [mapped_rectB[1]]], dtype=np.float32))
+
+行 563:
++                        pts4D = cv2.triangulatePoints(P1, P2, np.array([[u_rect], [v_rect]], dtype=np.float32), np.array([[mapped_rectB[0]], [mapped_rectB[1]]], dtype=np.float32))

@@ -1,0 +1,12 @@
+時間點: 2026-05-06 10:39
+
+對話摘要:
+修復切換不同候選幀時，梯度 SIFT 的範圍框與連線無法動態更新的視覺 Bug。確認深度與距離的運算數據為各自獨立且正確，僅視覺更新遺漏。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 修改: `do_measure` 函式。將原本在測量迴圈中直接繪製視覺元素 (scatter, rectangle, connection) 的寫法，改為將每幀專屬的視覺變數 (`g_ptsA`, `g_ptsB`, `g_kptsB`, `g_rect`) 儲存至 `measure_results[cand['idx']]` 中。
+- 修改: `update_display` 函式。將所有視覺重繪邏輯統一集中於此，當切換不同的 `current_cand` 時，能夠正確讀取該幀專屬的預留變數，並動態重繪對應的範圍框與連線。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

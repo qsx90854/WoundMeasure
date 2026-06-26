@@ -1,0 +1,13 @@
+時間點: 2026-05-06 10:26
+
+對話摘要:
+新增了梯度 SIFT 匹配時的預設匹配範圍視覺化框 (Rectangle)。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: 從 `matplotlib.patches` 引入 `Rectangle`。
+- 修改: 在 UI 初始化階段 (`ax_B`) 新增了一個洋紅色的虛線方框 `sift_rect`，預設為隱藏。
+- 修改: 在 `do_measure` 函式的 `grad_sift` 判斷邏輯內，當成功使用梯度 SIFT 進行匹配時，自動更新 `sift_rect` 的範圍 (對應程式碼中 `rad=20` 所形成的 40x40 像素區域)，並顯示在右圖對應的位置上，方便確認實際的搜尋範圍。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

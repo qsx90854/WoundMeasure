@@ -1,0 +1,40 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T09:34:45
+
+[減少的部分]
+行 944 附近 (on_calc):
+-            'u': active_u, 'v': active_v
+
+行 1018 附近 (calc_worker):
+-                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs)
+
+行 392 附近 (compute_measure 簽名):
+-    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
+
+行 417 附近:
+-            if m_pt is None and (snap_view_state.get('grad_sift') or ...):
+
+[新增的部分]
+行 944 附近 (on_calc):
++            'u': active_u, 'v': active_v,
++            'is_single_calc': not auto_calc_active
+
+行 1018 附近 (calc_worker):
++                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs, is_single_calc=req.get('is_single_calc', False))
+
+行 392 附近 (compute_measure 簽名):
++    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, is_single_calc=False):
+
+行 417 附近 (SGBM 整合):
++            if is_single_calc or (m_pt is None and (snap_view_state.get('grad_sift') or snap_view_state.get('use_farneback', False))):
++                # ... (立體校正) ...
++                # 計算 SGBM 作為 Ground Truth
++                if is_single_calc:
++                    stereo = cv2.StereoSGBM_create(numDisparities=128...)
++                    # ... (計算深度) ...
+
+行 660 附近 (Log 輸出):
++                if sgbm_z is not None:
++                    err = abs(d_val - sgbm_z) if d_val is not None else 0.0
++                    print(f"   [SGBM 基準] 深度(Z): {sgbm_z:.2f} mm | 與當前流程誤差: {err:.2f} mm")

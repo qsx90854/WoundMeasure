@@ -1,0 +1,38 @@
+時間點: 2026-04-17T13:45:44+08:00
+
+【減少的部份】
+    print("\n✅ UI 已開啟，在左圖任意點擊以量測深度。關閉視窗結束程式。")
+
+【新增的部份】
+    # ====== 新增：滑鼠滾輪縮放 ======
+    def on_scroll(event):
+        if event.inaxes is None:
+            return
+        ax = event.inaxes
+        xdata, ydata = event.xdata, event.ydata
+        if xdata is None or ydata is None:
+            return
+
+        base_scale = 1.2
+        if event.button == 'up':
+            scale_factor = 1 / base_scale # 向上滾動：放大
+        elif event.button == 'down':
+            scale_factor = base_scale     # 向下滾動：縮小
+        else:
+            return
+
+        cur_xlim = ax.get_xlim()
+        cur_ylim = ax.get_ylim()
+
+        left = xdata - cur_xlim[0]
+        right = cur_xlim[1] - xdata
+        bottom = ydata - cur_ylim[0]
+        top = cur_ylim[1] - ydata
+
+        ax.set_xlim([xdata - left * scale_factor, xdata + right * scale_factor])
+        ax.set_ylim([ydata - bottom * scale_factor, ydata + top * scale_factor])
+        fig.canvas.draw_idle()
+
+    fig.canvas.mpl_connect('scroll_event', on_scroll)
+
+    print("\n✅ UI 已開啟，在左圖任意點擊以量測深度。滑鼠滾輪可進行縮放。關閉視窗結束程式。")

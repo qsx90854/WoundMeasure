@@ -1,0 +1,19 @@
+時間: 2026-05-08T10-17-23
+使用者請求:
+請將depth_measure_multi_aruco_sbs_camera改為以下流程
+1.將程式載入影片的功能改為開啟相機
+2.開啟相機後, 將畫面左半邊做為主要算法使用畫面, 並記錄當前frame A和前30幀的那個frame B
+假設當前frame index是100, 就紀錄 frame index 70為 frame B, 這個間隔用一個變數控制
+3.用當前frame A當右圖, frame B當左圖, 並預設用畫面中心作為左圖的點擊座標, 再做梯度sift計算並顯示深度值
+4.將以上流程每1秒做一次, 避免畫面更新太快, 1秒這個數值用一個變數控制
+以上目標是將程式改成live測試板
+
+回答訊息:
+已將 `depth_measure_multi_aruco_sbs_camera.py` 改造成 Live 測試板。主要異動如下：
+1. 影片讀取改為相機讀取（預設 `CAMERA_INDEX = 0`）。
+2. 畫面僅取左半邊（`w_raw // 2`）進行算法處理。
+3. 透過 `collections.deque` 維持一個長度為 30 的畫面佇列，以取得「前 30 幀」的畫面（Frame B）與「當前幀」（Frame A）。
+4. 於 `plt.show(block=False)` 後加入 `while` 迴圈，定時（預設每 1.0 秒）自動以畫面中心點呼叫 `do_measure` 進行「梯度 SIFT 匹配」與深度計算。
+5. 專業提示：由於此模式是比對「同一相機在不同時間」的畫面，原先建構於「左右雙相機空間位移」的 3D 三角測距（Triangulation）在物理意義上會轉變為「時間位移（Motion Stereo）」。計算出的深度值將取決於相機移動速度與原 JSON 標定參數中 Baseline 的比例關係。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

@@ -1,0 +1,51 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T10:38:00
+
+[減少的部分]
+行 1029 附近 (on_calc):
+-        if not has_set_L:
+-            print("⚠️ 請先設定左圖！")
+-            return
+
+行 1235 附近 (主迴圈顯示邏輯):
+-        # 決定顯示內容
+-        if live_L:
+-            display_L = frame_left.copy()
+-        else:
+-            display_L = locked_L
+-            
+-        if live_R:
+-            display_R = frame_left.copy()
+-        else:
+-            display_R = locked_R
+-            
+-        imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
+-        imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)
+
+[新增的部分]
+行 1029 附近 (on_calc):
++        if not spatial_mode_active and not has_set_L:
++            print("⚠️ 請先設定左圖！")
++            return
+
+行 1235 附近 (主迴圈顯示邏輯):
++        # 決定顯示內容
++        if spatial_mode_active:
++            display_L = frame_left.copy()
++            display_R = frame_right.copy()
++            imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
++            imgB_bgr = cv2.remap(display_R, _map1_R, _map2_R, cv2.INTER_LINEAR)
++        else:
++            if live_L:
++                display_L = frame_left.copy()
++            else:
++                display_L = locked_L
++                
++            if live_R:
++                display_R = frame_left.copy()
++            else:
++                display_R = locked_R
++                
++            imgA_bgr, _ = process_view(display_L, mtxL_o, distL, newKL_o)
++            imgB_bgr, _ = process_view(display_R, mtxL_o, distL, newKL_o)

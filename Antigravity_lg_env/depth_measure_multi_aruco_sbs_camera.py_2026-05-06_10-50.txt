@@ -1,0 +1,10 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-06 10:50
+
+[修復的部分]
+- 移除了原本錯誤的加權平均位移向量內插法：`m_pt = (u, v) + weighted_avg(ptsB_m - ptsA_m)`
+  原本的邏輯假設「查詢點的位移等於周圍點的平均位移」，這在存在透視/視差變化時是幾何上不正確的。
+- 新增了正確的局部幾何變換推算：
+  1. 優先嘗試 Homography (findHomography, RANSAC, 需 ≥6 個匹配對)：直接建立局部 3x3 投影矩陣，用其把 (u, v) 投影到右圖座標。
+  2. 次優嘗試 Affine (estimateAffinePartial2D, RANSAC, 需 ≥3 個匹配對)：建立旋轉+縮放的仿射矩陣，再對查詢點進行推算。
+  3. Fallback：仍保留加權平均位移，但僅在匹配點不足以建立幾何模型時才使用。

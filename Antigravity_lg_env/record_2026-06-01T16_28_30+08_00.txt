@@ -1,0 +1,8 @@
+對話時間: 2026-06-01T16:28:30+08:00
+
+本次對話與回答摘要：
+1. 針對使用者的回饋，釐清了「相對外參 R,t (以及 Baseline) 能夠算出來」與「世界平面 plane_n 擬合成功」兩者的本質區別。
+2. 只要左右圖有任何一個共享標籤，相對外參絕對能正常算出來（這也是啟動時有 baseline: 74.58 mm 的原因）。但「世界平面 plane_n 和中心 plane_c」則取決於 `compute_global_plane` 在左圖的 SVD 擬合結果。若左圖未能正常檢索出標籤或 SVD 擬合失敗，`plane_n` 就會是 `None`。
+3. 根據使用者「如果算不出來要在終端機印出原因，沒畫 rect 可以接受，不要畫 600mm 虛擬預測」的要求，我移除了 600mm 的模擬投影回退方案，並在 `compute_global_plane` 及 `update_display` 中增加了詳盡的 Console 提示日誌。
+4. 當平面 `plane_n` 為 `None` 導致不畫搜尋框時，終端機會清楚印出：`⚠️ [預估搜尋框繪製跳過] 因為世界平面參數 (plane_n) 為 None，無法計算平面單應性投影。` 以便使用者能完全掌控根本原因。
+5. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-01T16_28_00+08_00.txt。

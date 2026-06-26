@@ -1,0 +1,15 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-05 08:29
+
+[新增的部分]
+- 恢復 LightGlue 與 SIFT 匹配核心函數 (`run_lightglue`, `run_opencv_matching`)。
+- 恢復 `find_precise_match` (單應性修正匹配)。
+- 恢復 `do_measure` 中的 Grad-SIFT 梯度注入邏輯。
+- 恢復 UI 控制選項 (CheckButtons)。
+
+[修改的部分]
+- 調整資料結構，將每一幀的 LightGlue 匹配點對 (`ptsA_lg`, `ptsB_lg`) 儲存在 candidates 列表中。
+- 確保量測時會同時對所有候選幀執行完整的四階段匹配流程 (ArUco -> Grad-SIFT -> Precise -> Global)。
+
+[備註]
+現在影片版本的功能已與 SBS 圖片版本完全同步，並額外支援多幀時序平均量測。

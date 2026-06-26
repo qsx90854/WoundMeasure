@@ -1,0 +1,764 @@
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py
+修改時間: 20260527_220519
+
+=== 變更 1 (狀態變數初始化) ===
+原始行號範圍: 962-972 (原始檔案)
+減少內容:
+----------------------------------------
+    # 手動鎖定模式的狀態變數
+    locked_L = None
+    locked_R = None
+    locked_R_list = []
+    locked_R_mode = 'single'
+    live_L = True
+    live_R = True
+    has_set_L = False
+    has_set_R = False
+    reset_pose_history = True
+----------------------------------------
+新增內容:
+----------------------------------------
+    # 手動鎖定模式的狀態變數
+    locked_L = None
+    locked_R = None
+    locked_R_list = []
+    locked_R_mode = 'single'
+    locked_R_display_index = -1  # -1: 平均, 0,1,2: 對應 lock_3R 中的各幀
+    live_L = True
+    live_R = True
+    has_set_L = False
+    has_set_R = False
+    reset_pose_history = True
+----------------------------------------
+
+=== 變更 2 (新增 UI 切換按鈕與樣式) ===
+原始行號範圍: 1007-1021 (原始檔案)
+減少內容:
+----------------------------------------
+    ax_btn_lock_3R = fig.add_axes([0.88, 0.86, 0.08, 0.04])
+    btn_lock_3R = Button(ax_btn_lock_3R, "鎖定3張右圖", **btn_style)
+    
+    # 統一設定字型、文字顏色與邊框寬度
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_lock_3R]:
+        b.label.set_color('#E0E0E0') # 質感白
+        b.label.set_fontsize(8)
+        b.ax.patch.set_linewidth(1.2) # 細緻邊框
+        
+    # 依功能進行邊框分色（專業軟體常見的語意化色彩）
+    # 1. 影像鎖定/控制類：使用專業藍 (#007ACC)
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_lock_3R]:
+        b.ax.patch.set_edgecolor('#007ACC')
+----------------------------------------
+新增內容:
+----------------------------------------
+    ax_btn_lock_3R = fig.add_axes([0.88, 0.86, 0.08, 0.04])
+    btn_lock_3R = Button(ax_btn_lock_3R, "鎖定3張右圖", **btn_style)
+    
+    ax_btn_switch_R = fig.add_axes([0.88, 0.80, 0.08, 0.04])
+    btn_switch_R = Button(ax_btn_switch_R, "顯示幀: 平均", **btn_style)
+    
+    # 統一設定字型、文字顏色與邊框寬度
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_lock_3R, btn_switch_R]:
+        b.label.set_color('#E0E0E0') # 質感白
+        b.label.set_fontsize(8)
+        b.ax.patch.set_linewidth(1.2) # 細緻邊框
+        
+    # 依功能進行邊框分色（專業軟體常見的語意化色彩）
+    # 1. 影像鎖定/控制類：使用專業藍 (#007ACC)
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_lock_3R, btn_switch_R]:
+        b.ax.patch.set_edgecolor('#007ACC')
+----------------------------------------
+
+=== 變更 3 (重設 locked_R_display_index 與實作 on_switch_R) ===
+原始行號範圍: 1083-1130 (原始檔案)
+減少內容:
+----------------------------------------
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R, reset_pose_history, locked_R_mode
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                locked_R = frame_buffer[-1].copy()
+                locked_R_mode = 'single'
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+                btn_lock_3R.label.set_text("鎖定3張右圖")
+                print("🔒 右圖已鎖定當前畫面")
+                if not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            btn_lock_3R.label.set_text("鎖定3張右圖")
+            print("🔓 右圖恢復 Live")
+        reset_pose_history = True
+        request_blit_refresh()
+        
+    def on_lock_3R(event):
+        nonlocal live_R, locked_R, locked_R_list, has_set_R, reset_pose_history, locked_R_mode
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                # 連續抓取 3 張右圖影格以平均抑制雜訊
+                locked_R_list = []
+                indices = [-1, -2, -3]
+                for idx in indices:
+                    buf_idx = len(frame_buffer) + idx
+                    buf_idx = max(0, min(buf_idx, len(frame_buffer) - 1))
+                    locked_R_list.append(frame_buffer[buf_idx].copy())
+                # 為了相容顯示，以第一張作為主顯示影像
+                locked_R = locked_R_list[0].copy()
+                locked_R_mode = 'multi3'
+                has_set_R = True
+                btn_lock_R.label.set_text("鎖定右圖")
+                btn_lock_3R.label.set_text("解鎖右圖")
+                print("🔒 右圖已啟動連續 3 幀鎖定")
+                if not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            btn_lock_3R.label.set_text("鎖定3張右圖")
+            print("🔓 右圖恢復 Live")
+        reset_pose_history = True
+        request_blit_refresh()
+----------------------------------------
+新增內容:
+----------------------------------------
+    def on_lock_R(event):
+        nonlocal live_R, locked_R, has_set_R, reset_pose_history, locked_R_mode, locked_R_display_index
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                locked_R = frame_buffer[-1].copy()
+                locked_R_mode = 'single'
+                locked_R_display_index = -1
+                btn_switch_R.label.set_text("顯示幀: 平均")
+                has_set_R = True
+                btn_lock_R.label.set_text("解鎖右圖")
+                btn_lock_3R.label.set_text("鎖定3張右圖")
+                print("🔒 右圖已鎖定當前畫面")
+                if not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            btn_lock_3R.label.set_text("鎖定3張右圖")
+            locked_R_display_index = -1
+            btn_switch_R.label.set_text("顯示幀: 平均")
+            print("🔓 右圖恢復 Live")
+        reset_pose_history = True
+        request_blit_refresh()
+        
+    def on_lock_3R(event):
+        nonlocal live_R, locked_R, locked_R_list, has_set_R, reset_pose_history, locked_R_mode, locked_R_display_index
+        live_R = not live_R
+        if not live_R:
+            if len(frame_buffer) > 0:
+                # 連續抓取 3 張右圖影格以平均抑制雜訊
+                locked_R_list = []
+                indices = [-1, -2, -3]
+                for idx in indices:
+                    buf_idx = len(frame_buffer) + idx
+                    buf_idx = max(0, min(buf_idx, len(frame_buffer) - 1))
+                    locked_R_list.append(frame_buffer[buf_idx].copy())
+                # 為了相容顯示，以第一張作為主顯示影像
+                locked_R = locked_R_list[0].copy()
+                locked_R_mode = 'multi3'
+                locked_R_display_index = -1
+                btn_switch_R.label.set_text("顯示幀: 平均")
+                has_set_R = True
+                btn_lock_R.label.set_text("鎖定右圖")
+                btn_lock_3R.label.set_text("解鎖右圖")
+                print("🔒 右圖已啟動連續 3 幀鎖定")
+                if not live_L:
+                    on_calc(None)
+        else:
+            btn_lock_R.label.set_text("鎖定右圖")
+            btn_lock_3R.label.set_text("鎖定3張右圖")
+            locked_R_display_index = -1
+            btn_switch_R.label.set_text("顯示幀: 平均")
+            print("🔓 右圖恢復 Live")
+        reset_pose_history = True
+        request_blit_refresh()
+        
+    def on_switch_R(event):
+        nonlocal locked_R_display_index
+        if not (not live_R and locked_R_mode == 'multi3'):
+            print("⚠️ 目前非 3 幀鎖定模式，無需切換")
+            return
+        
+        # 在 -1, 0, 1, 2 之間切換
+        if locked_R_display_index == -1:
+            locked_R_display_index = 0
+        elif locked_R_display_index == 0:
+            locked_R_display_index = 1
+        elif locked_R_display_index == 1:
+            locked_R_display_index = 2
+        else:
+            locked_R_display_index = -1
+            
+        if locked_R_display_index == -1:
+            btn_switch_R.label.set_text("顯示幀: 平均")
+        else:
+            btn_switch_R.label.set_text(f"顯示幀: 右圖{locked_R_display_index+1}")
+            
+        print(f"🔄 切換顯示至: {btn_switch_R.label.get_text()}")
+        
+        # 立即觸發 UI 重繪與更新
+        all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+        measure_res = measure_results.get(current_cand['idx'], None)
+        if measure_res is not None:
+            summary = [f"F{current_cand['idx']}: {measure_res['d']:.1f}" if measure_res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+            apply_measure_result(measure_res, np.mean(all_d) if all_d else None, summary)
+        else:
+            request_blit_refresh()
+----------------------------------------
+
+=== 變更 4 (背景執行緒 ArUco 姿態估計迴圈優化以收集 frame_poses) ===
+原始行號範圍: 1252-1284 (原始檔案)
+減少內容:
+----------------------------------------
+                # ---------- ArUco 位姿解算 ----------
+                all_R_r, all_t_r, all_rv_r = [], [], []
+                all_baselines = []
+                all_objA = []
+                all_cA_dicts, all_cB_dicts = [], []
+                all_curr_marker_poses = []
+                all_curr_marker_poses_R = []
+                all_shared = []
+                
+                temp_history_marker_poses = dict(history_marker_poses)
+                temp_history_rel_pose = history_rel_pose
+                
+                for imgB_gray_i in imgB_grays:
+                    res_pose = get_joint_relative_pose(
+                        snap_imgA_gray, imgB_gray_i, KL, KL, ACTUAL_MARKER_SIZE_MM,
+                        global_plane_n=global_plane_n,
+                        global_plane_c=global_plane_c,
+                        prev_marker_poses=temp_history_marker_poses,
+                        prev_rel_pose=temp_history_rel_pose
+                    )
+                    if res_pose is not None:
+                        R_r_i, t_r_i, baseline_i, objA_i, shared_i, cA_dict_i, cB_dict_i, curr_marker_poses_i, curr_marker_poses_R_i, rv_r_i = res_pose
+                        all_R_r.append(R_r_i)
+                        all_t_r.append(t_r_i)
+                        all_rv_r.append(rv_r_i)
+                        all_baselines.append(baseline_i)
+                        all_objA.append(objA_i)
+                        all_cA_dicts.append(cA_dict_i)
+                        all_cB_dicts.append(cB_dict_i)
+                        all_curr_marker_poses.append(curr_marker_poses_i)
+                        all_curr_marker_poses_R.append(curr_marker_poses_R_i)
+                        all_shared.append(shared_i)
+----------------------------------------
+新增內容:
+----------------------------------------
+                # ---------- ArUco 位姿解算 ----------
+                all_R_r, all_t_r, all_rv_r = [], [], []
+                all_baselines = []
+                all_objA = []
+                all_cA_dicts, all_cB_dicts = [], []
+                all_curr_marker_poses = []
+                all_curr_marker_poses_R = []
+                all_shared = []
+                
+                temp_history_marker_poses = dict(history_marker_poses)
+                temp_history_rel_pose = history_rel_pose
+                
+                frame_poses = []
+                for imgB_gray_i in imgB_grays:
+                    res_pose = get_joint_relative_pose(
+                        snap_imgA_gray, imgB_gray_i, KL, KL, ACTUAL_MARKER_SIZE_MM,
+                        global_plane_n=global_plane_n,
+                        global_plane_c=global_plane_c,
+                        prev_marker_poses=temp_history_marker_poses,
+                        prev_rel_pose=temp_history_rel_pose
+                    )
+                    if res_pose is not None:
+                        R_r_i, t_r_i, baseline_i, objA_i, shared_i, cA_dict_i, cB_dict_i, curr_marker_poses_i, curr_marker_poses_R_i, rv_r_i = res_pose
+                        all_R_r.append(R_r_i)
+                        all_t_r.append(t_r_i)
+                        all_rv_r.append(rv_r_i)
+                        all_baselines.append(baseline_i)
+                        all_objA.append(objA_i)
+                        all_cA_dicts.append(cA_dict_i)
+                        all_cB_dicts.append(cB_dict_i)
+                        all_curr_marker_poses.append(curr_marker_poses_i)
+                        all_curr_marker_poses_R.append(curr_marker_poses_R_i)
+                        all_shared.append(shared_i)
+                        
+                        frame_poses.append({
+                            'pose_valid': True,
+                            'R': R_r_i,
+                            'T': t_r_i,
+                            'rv': rv_r_i,
+                            'baseline': baseline_i,
+                            'direction': "向左" if t_r_i[0] > 0 else "向右"
+                        })
+                    else:
+                        frame_poses.append({
+                            'pose_valid': False,
+                            'R': None,
+                            'T': None,
+                            'rv': None,
+                            'baseline': 0.0,
+                            'direction': "無"
+                        })
+----------------------------------------
+
+=== 變更 5 (定義 pose_details 並於 cand_list 迴圈中套用單幀位姿) ===
+原始行號範圍: 1404-1438 (原始檔案)
+減少內容:
+----------------------------------------
+                else:
+                    print("❌ 未偵測到共享 ArUco")
+                    n_local, c_local = global_plane_n, global_plane_c
+
+                # 建立各個影格對應的 cand 字典用於多幀特徵匹配
+                cand_list = []
+                for i in range(len(imgB_grays)):
+                    gray_i = imgB_grays[i]
+                    bgr_i = imgB_bgrs[i]
+                    if snap_vs.get('use_hamming', False):
+                        kb_i, db_i = orb.detectAndCompute(gray_i, None)
+                    else:
+                        kb_i, db_i = sift.detectAndCompute(gray_i, None)
+                    
+                    cand_i = dict(snap_cand)
+                    cand_i.update({
+                        'rgb': cv2.cvtColor(bgr_i, cv2.COLOR_BGR2RGB),
+                        'gray': gray_i,
+                        'kpB': kb_i, 'desB': db_i,
+                        'plane_n': n_local, 'plane_c': c_local,
+                        'pose_info': pose_info, 'pose_valid': pose_valid,
+                        'baseline': baseline_val,
+                        'cornersA': cA_dict, 'cornersB': cB_dict,
+                        'curr_marker_poses': curr_marker_poses if pose_valid else {},
+                        'curr_marker_poses_R': curr_marker_poses_R if pose_valid else {}
+                    })
+                    if pose_valid:
+                        cand_i.update({
+                            'R_rel': R_r, 't_rel': t_r,
+                            'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+                        })
+                    cand_list.append(cand_i)
+                
+                # 預設以首張作為顯示輸出 cand
+                snap_cand = cand_list[0]
+----------------------------------------
+新增內容:
+----------------------------------------
+                else:
+                    print("❌ 未偵測到共享 ArUco")
+                    n_local, c_local = global_plane_n, global_plane_c
+
+                pose_details = {
+                    'avg': {
+                        'pose_valid': pose_valid,
+                        'R': R_r,
+                        'T': t_r,
+                        'rv': rv_r_smooth if (pose_valid and ENABLE_POSE_SMOOTHING) else (rv_r if pose_valid else None),
+                        'baseline': baseline_val,
+                        'direction': "向左" if (pose_valid and t_r[0] > 0) else "向右"
+                    },
+                    'frames': frame_poses
+                }
+
+                # 建立各個影格對應的 cand 字典用於多幀特徵匹配
+                cand_list = []
+                for i in range(len(imgB_grays)):
+                    gray_i = imgB_grays[i]
+                    bgr_i = imgB_bgrs[i]
+                    if snap_vs.get('use_hamming', False):
+                        kb_i, db_i = orb.detectAndCompute(gray_i, None)
+                    else:
+                        kb_i, db_i = sift.detectAndCompute(gray_i, None)
+                    
+                    cand_i = dict(snap_cand)
+                    fp = frame_poses[i]
+                    f_pose_valid = fp['pose_valid']
+                    
+                    cand_i.update({
+                        'rgb': cv2.cvtColor(bgr_i, cv2.COLOR_BGR2RGB),
+                        'gray': gray_i,
+                        'kpB': kb_i, 'desB': db_i,
+                        'plane_n': n_local, 'plane_c': c_local,
+                        'pose_valid': f_pose_valid,
+                        'baseline': fp['baseline'],
+                    })
+                    if f_pose_valid:
+                        f_F = compute_fundamental_matrix(KL, KL, fp['R'], fp['T'])
+                        cand_i.update({
+                            'R_rel': fp['R'], 't_rel': fp['T'],
+                            'F': f_F,
+                            'pose_info': f"ArUco 定位(單幀, Bsl: {fp['baseline']:.1f}mm, {fp['direction']})",
+                            'cornersA': all_cA_dicts[i] if i < len(all_cA_dicts) else cA_dict,
+                            'cornersB': all_cB_dicts[i] if i < len(all_cB_dicts) else cB_dict,
+                            'curr_marker_poses': all_curr_marker_poses[i] if i < len(all_curr_marker_poses) else curr_marker_poses,
+                            'curr_marker_poses_R': all_curr_marker_poses_R[i] if i < len(all_curr_marker_poses_R) else curr_marker_poses_R
+                        })
+                    else:
+                        cand_i.update({
+                            'R_rel': None, 't_rel': None,
+                            'F': None,
+                            'pose_info': "未偵測到 ArUco",
+                            'cornersA': {},
+                            'cornersB': {},
+                            'curr_marker_poses': {},
+                            'curr_marker_poses_R': {}
+                        })
+                    cand_list.append(cand_i)
+                
+                # 預設以首張作為顯示輸出 cand
+                snap_cand = cand_list[0]
+                snap_cand['pose_details'] = pose_details
+----------------------------------------
+
+=== 變更 6 (背景執行緒打包回傳結果更新) ===
+原始行號範圍: 1515-1530 (原始檔案)
+減少內容:
+----------------------------------------
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'snap_cand': snap_cand,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+                    'baseline_val': baseline_val,
+                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
+                })
+----------------------------------------
+新增內容:
+----------------------------------------
+                # 打包回傳給主執行緒
+                calc_result_q.put({
+                    'measure_res': measure_res,
+                    'all_measure_res': all_measure_res,
+                    'snap_cand': snap_cand,
+                    'cand_list': cand_list,
+                    'cA_dict': cA_dict, 'cB_dict': cB_dict,
+                    'pose_valid': pose_valid, 'pose_info': pose_info,
+                    'baseline_val': baseline_val,
+                    'imgA_bgr': imgA_bgr_, 'imgB_bgr': imgB_bgr_
+                })
+----------------------------------------
+
+=== 變更 7 (主迴圈輪詢結果，保存 all_measure_res 與 cand_list) ===
+原始行號範圍: 1626-1645 (原始檔案)
+減少內容:
+----------------------------------------
+        # 輪詢 result queue，有結果就在主執行緒更新 UI
+        try:
+            result = calc_result_q.get_nowait()
+            measure_res = result['measure_res']
+            snap_cand   = result['snap_cand']
+            # 同步更新 current_cand，讓手動點選時可用
+            current_cand.update(snap_cand)
+            measure_results[current_cand['idx']] = measure_res
+            # 更新 ArUco 顯示
+            draw_aruco(ax_A, result['cA_dict'])
+            draw_aruco(ax_B, result['cB_dict'])
+            # 更新 imgA_gray 以便手動點選使用（nonlocal 更新）
+            imgA_gray = cv2.cvtColor(result['imgA_bgr'], cv2.COLOR_BGR2GRAY)
+            # 用 apply_measure_result 更新所有 UI
+            all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+            summary = [f"F{current_cand['idx']}: {measure_res['d']:.1f}" if measure_res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+            apply_measure_result(measure_res, np.mean(all_d) if all_d else None, summary)
+        except queue.Empty:
+            pass
+----------------------------------------
+新增內容:
+----------------------------------------
+        # 輪詢 result queue，有結果就在主執行緒更新 UI
+        try:
+            result = calc_result_q.get_nowait()
+            measure_res = result['measure_res']
+            snap_cand   = result['snap_cand']
+            # 同步更新 current_cand，讓手動點選時可用
+            current_cand.update(snap_cand)
+            if 'all_measure_res' in result:
+                current_cand['all_measure_res'] = result['all_measure_res']
+            if 'cand_list' in result:
+                current_cand['cand_list'] = result['cand_list']
+            measure_results[current_cand['idx']] = measure_res
+            # 更新 ArUco 顯示
+            draw_aruco(ax_A, result['cA_dict'])
+            draw_aruco(ax_B, result['cB_dict'])
+            # 更新 imgA_gray 以便手動點選使用（nonlocal 更新）
+            imgA_gray = cv2.cvtColor(result['imgA_bgr'], cv2.COLOR_BGR2GRAY)
+            # 用 apply_measure_result 更新所有 UI
+            all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
+            summary = [f"F{current_cand['idx']}: {measure_res['d']:.1f}" if measure_res['d'] is not None else f"F{current_cand['idx']}: N/A"]
+            apply_measure_result(measure_res, np.mean(all_d) if all_d else None, summary)
+        except queue.Empty:
+            pass
+----------------------------------------
+
+=== 變更 8 (主迴圈中 display_R 的鎖定單影格切換渲染) ===
+原始行號範圍: 1654-1666 (原始檔案)
+減少內容:
+----------------------------------------
+        if live_R:
+            display_R = frame_left.copy()
+        else:
+            display_R = locked_R
+----------------------------------------
+新增內容:
+----------------------------------------
+        if live_R:
+            display_R = frame_left.copy()
+        else:
+            if locked_R_mode == 'multi3' and len(locked_R_list) >= 3 and locked_R_display_index in [0, 1, 2]:
+                display_R = locked_R_list[locked_R_display_index]
+            else:
+                display_R = locked_R
+----------------------------------------
+
+=== 變更 9 (重構 update_display 函數，引入 active_cand 以對齊切換影格之特徵極線與 HUD) ===
+原始行號範圍: 781-857 (原始檔案)
+減少內容:
+----------------------------------------
+    def update_display(avg, summary):
+        res = measure_results.get(current_cand['idx'], {'pt': None, 'neighbors': [], 'p3d': None, 'g_ptsA': None})
+        u, v = last_click if last_click else (0, 0)
+        scatter_A.set_offsets([[u, v]])
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        # 清除舊連線 Artists
+        for item in view_state['grad_lines']:
+            try:
+                con = item[0] if isinstance(item, tuple) else item
+                con.remove()
+            except: pass
+        view_state['grad_lines'] = []
+        old_h = view_state.get('highlighted_grad_line_artist')
+        if old_h is not None:
+            try: old_h.remove()
+            except: pass
+        view_state['highlighted_grad_line_artist'] = None
+        view_state['highlighted_grad_line'] = None
+        view_state['grad_data'] = None
+        
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        scatter_grad_inject.set_offsets(np.empty((0,2)))
+        scatter_grad_match.set_offsets(np.empty((0,2)))
+        scatter_all_sift_B.set_offsets(np.empty((0,2)))
+        
+        if res.get('g_kptsB') is not None:
+            scatter_all_sift_B.set_offsets(res['g_kptsB'])
+            sift_rect.set_bounds(*res['g_rect'])
+            sift_rect.set_visible(True)
+            # 更新 Rect 中心標記
+            rx, ry, rw, rh = res['g_rect']
+            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+            sift_rect_center.set_visible(True)
+            
+            if res.get('g_ptsA') is not None:
+                scatter_grad_inject.set_offsets(res['g_ptsA'])
+                scatter_grad_match.set_offsets(res['g_ptsB'])
+                view_state['grad_data'] = {'ptsA': res['g_ptsA'], 'ptsB': res['g_ptsB']}
+                redraw_grad_lines(None)  # 初始無高亮
+            else:
+                scatter_grad_inject.set_offsets(np.empty((0,2)))
+                scatter_grad_match.set_offsets(np.empty((0,2)))
+                
+
+        pose_info_str = current_cand.get('pose_info', '')
+        if res['pt'] is not None:
+            scatter_B.set_offsets([[res['pt'][0], res['pt'][1]]])
+            p0, p1 = epipolar_line(current_cand['F'], (u, v), w); epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+            p_dist_str = ""
+            if res['p3d'] is not None and current_cand['plane_n'] is not None:
+                p_dist = abs(np.dot(current_cand['plane_n'], res['p3d'] - current_cand['plane_c']))
+                if auto_calc_active:
+                    plane_dist_history.append(p_dist)
+                    p_dist_str = f"\n距平面: {np.mean(plane_dist_history):.1f}mm"
+                else:
+                    if len(plane_dist_history) > 0:
+                        plane_dist_history.clear()
+                    p_dist_str = f"\n距平面: {p_dist:.1f}mm"
+            if res['d'] is not None:
+                p3d_c = res['p3d']
+                p3d_w = res.get('p3d_w')
+                c_coords_str = f"({p3d_c[0]:.1f}, {p3d_c[1]:.1f}, {p3d_c[2]:.1f})" if p3d_c is not None else "N/A"
+                w_coords_str = f"({p3d_w[0]:.1f}, {p3d_w[1]:.1f}, {p3d_w[2]:.1f})" if p3d_w is not None else "N/A"
+                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm\n"
+                             f"傷口高度(相對於標記): {w_coords_str}mm\n"
+                             f"外參來源: {pose_info_str}"
+                             )
+            else:
+                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+        else: scatter_B.set_offsets(np.empty((0,2))); epi_line.set_data([], []); main_text = f"無效點({res.get('fail_reason', '無匹配點')})\n外參來源: {pose_info_str}"
+        depth_text.set_text(main_text)
+        request_blit_refresh()
+----------------------------------------
+新增內容:
+----------------------------------------
+    def update_display(avg, summary):
+        res = measure_results.get(current_cand['idx'], {'pt': None, 'neighbors': [], 'p3d': None, 'g_ptsA': None})
+        
+        # 根據鎖定右圖的切換 index，取得對應幀的結果與 cand
+        active_cand = current_cand
+        if not live_R and locked_R_mode == 'multi3' and locked_R_display_index in [0, 1, 2]:
+            if 'all_measure_res' in current_cand and len(current_cand['all_measure_res']) > locked_R_display_index:
+                res = current_cand['all_measure_res'][locked_R_display_index]
+            if 'cand_list' in current_cand and len(current_cand['cand_list']) > locked_R_display_index:
+                active_cand = current_cand['cand_list'][locked_R_display_index]
+                
+        # 同步重繪 ArUco
+        draw_aruco(ax_A, active_cand.get('cornersA', {}))
+        draw_aruco(ax_B, active_cand.get('cornersB', {}))
+
+        u, v = last_click if last_click else (0, 0)
+        scatter_A.set_offsets([[u, v]])
+        for l in view_state['lines']: l.remove()
+        view_state['lines'] = []
+        # 清除舊連線 Artists
+        for item in view_state['grad_lines']:
+            try:
+                con = item[0] if isinstance(item, tuple) else item
+                con.remove()
+            except: pass
+        view_state['grad_lines'] = []
+        old_h = view_state.get('highlighted_grad_line_artist')
+        if old_h is not None:
+            try: old_h.remove()
+            except: pass
+        view_state['highlighted_grad_line_artist'] = None
+        view_state['highlighted_grad_line'] = None
+        view_state['grad_data'] = None
+        
+        sift_rect.set_visible(False)
+        sift_rect_center.set_visible(False)
+        scatter_grad_inject.set_offsets(np.empty((0,2)))
+        scatter_grad_match.set_offsets(np.empty((0,2)))
+        scatter_all_sift_B.set_offsets(np.empty((0,2)))
+        
+        if res.get('g_kptsB') is not None:
+            scatter_all_sift_B.set_offsets(res['g_kptsB'])
+            sift_rect.set_bounds(*res['g_rect'])
+            sift_rect.set_visible(True)
+            # 更新 Rect 中心標記
+            rx, ry, rw, rh = res['g_rect']
+            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+            sift_rect_center.set_visible(True)
+            
+            if res.get('g_ptsA') is not None:
+                scatter_grad_inject.set_offsets(res['g_ptsA'])
+                scatter_grad_match.set_offsets(res['g_ptsB'])
+                view_state['grad_data'] = {'ptsA': res['g_ptsA'], 'ptsB': res['g_ptsB']}
+                redraw_grad_lines(None)  # 初始無高亮
+            else:
+                scatter_grad_inject.set_offsets(np.empty((0,2)))
+                scatter_grad_match.set_offsets(np.empty((0,2)))
+                
+
+        # 產生客製化的 pose_info_str，包含 RT 矩陣與 baseline 數值
+        pd = current_cand.get('pose_details', None)
+        if pd is not None and not live_R and locked_R_mode == 'multi3':
+            if locked_R_display_index in [0, 1, 2] and len(pd['frames']) > locked_R_display_index:
+                pf = pd['frames'][locked_R_display_index]
+                if pf['pose_valid']:
+                    rv = pf['rv'].flatten()
+                    tv = pf['T'].flatten()
+                    bsl = pf['baseline']
+                    dir_str = pf['direction']
+                    pose_info_str = (f"ArUco 定位(右圖{locked_R_display_index+1}, Bsl: {bsl:.1f}mm, {dir_str})\n"
+                                     f"  R: [{rv[0]:.3f}, {rv[1]:.3f}, {rv[2]:.3f}]\n"
+                                     f"  T: [{tv[0]:.1f}, {tv[1]:.1f}, {tv[2]:.1f}]")
+                else:
+                    pose_info_str = f"ArUco 定位(右圖{locked_R_display_index+1}): 未偵測到 ArUco"
+            else:
+                pa = pd['avg']
+                if pa['pose_valid']:
+                    rv = pa['rv'].flatten()
+                    tv = pa['T'].flatten()
+                    bsl = pa['baseline']
+                    dir_str = pa['direction']
+                    pose_info_str = (f"ArUco 定位(3幀平均, Bsl: {bsl:.1f}mm, {dir_str})\n"
+                                     f"  R: [{rv[0]:.3f}, {rv[1]:.3f}, {rv[2]:.3f}]\n"
+                                     f"  T: [{tv[0]:.1f}, {tv[1]:.1f}, {tv[2]:.1f}]")
+                else:
+                    pose_info_str = "ArUco 定位(3幀平均): 未偵測到 ArUco"
+        else:
+            if 'R_rel' in active_cand and active_cand['R_rel'] is not None:
+                rv_temp, _ = cv2.Rodrigues(active_cand['R_rel'])
+                rv = rv_temp.flatten()
+            else:
+                rv = np.zeros(3)
+            tv = active_cand.get('t_rel', np.zeros((3,1))).flatten()
+            bsl = active_cand.get('baseline', 0.0)
+            dir_str = "向左" if tv[0] > 0 else "向右"
+            orig_info = active_cand.get('pose_info', '未偵測到 ArUco')
+            if 'ArUco' in orig_info:
+                pose_info_str = (f"{orig_info}\n"
+                                 f"  R: [{rv[0]:.3f}, {rv[1]:.3f}, {rv[2]:.3f}]\n"
+                                 f"  T: [{tv[0]:.1f}, {tv[1]:.1f}, {tv[2]:.1f}]")
+            else:
+                pose_info_str = orig_info
+
+        if res['pt'] is not None:
+            scatter_B.set_offsets([[res['pt'][0], res['pt'][1]]])
+            if active_cand.get('F') is not None:
+                p0, p1 = epipolar_line(active_cand['F'], (u, v), w)
+                epi_line.set_data([p0[0], p1[0]], [p0[1], p1[1]])
+            else:
+                epi_line.set_data([], [])
+            p_dist_str = ""
+            if res['p3d'] is not None and active_cand.get('plane_n') is not None:
+                p_dist = abs(np.dot(active_cand['plane_n'], res['p3d'] - active_cand['plane_c']))
+                if auto_calc_active:
+                    plane_dist_history.append(p_dist)
+                    p_dist_str = f"\n距平面: {np.mean(plane_dist_history):.1f}mm"
+                else:
+                    if len(plane_dist_history) > 0:
+                        plane_dist_history.clear()
+                    p_dist_str = f"\n距平面: {p_dist:.1f}mm"
+            if res['d'] is not None:
+                p3d_c = res['p3d']
+                p3d_w = res.get('p3d_w')
+                c_coords_str = f"({p3d_c[0]:.1f}, {p3d_c[1]:.1f}, {p3d_c[2]:.1f})" if p3d_c is not None else "N/A"
+                w_coords_str = f"({p3d_w[0]:.1f}, {p3d_w[1]:.1f}, {p3d_w[2]:.1f})" if p3d_w is not None else "N/A"
+                main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm\n"
+                             f"傷口高度(相對於標記): {w_coords_str}mm\n"
+                             f"外參來源: {pose_info_str}"
+                             )
+            else:
+                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+        else:
+            scatter_B.set_offsets(np.empty((0,2)))
+            epi_line.set_data([], [])
+            main_text = f"無效點({res.get('fail_reason', '無匹配點')})\n外參來源: {pose_info_str}"
+            
+        depth_text.set_text(main_text)
+        request_blit_refresh()
+----------------------------------------
+
+=== 變更 10 (綁定 btn_switch_R 的點擊事件) ===
+原始行號範圍: 1568-1577 (原始檔案)
+減少內容:
+----------------------------------------
+    worker_thread = threading.Thread(target=calc_worker, daemon=True)
+    worker_thread.start()
+    btn_lock_L.on_clicked(on_lock_L)
+    btn_lock_R.on_clicked(on_lock_R)
+    btn_lock_3R.on_clicked(on_lock_3R)
+    btn_calc.on_clicked(on_calc)
+    btn_auto_calc.on_clicked(on_auto_calc)
+    btn_hide_R.on_clicked(on_hide_R)
+    btn_grad_toggle.on_clicked(on_grad_toggle)
+    btn_norm_toggle.on_clicked(on_norm_toggle)
+----------------------------------------
+新增內容:
+----------------------------------------
+    worker_thread = threading.Thread(target=calc_worker, daemon=True)
+    worker_thread.start()
+    btn_lock_L.on_clicked(on_lock_L)
+    btn_lock_R.on_clicked(on_lock_R)
+    btn_lock_3R.on_clicked(on_lock_3R)
+    btn_switch_R.on_clicked(on_switch_R)
+    btn_calc.on_clicked(on_calc)
+    btn_auto_calc.on_clicked(on_auto_calc)
+    btn_hide_R.on_clicked(on_hide_R)
+    btn_grad_toggle.on_clicked(on_grad_toggle)
+    btn_norm_toggle.on_clicked(on_norm_toggle)
+----------------------------------------

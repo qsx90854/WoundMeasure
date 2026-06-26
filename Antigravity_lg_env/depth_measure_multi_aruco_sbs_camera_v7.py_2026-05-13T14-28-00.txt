@@ -1,0 +1,20 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T14:28:00
+
+[減少的部分]
+行 975 附近 (主迴圈 auto_calc):
+-        # 如果處於連續計算模式，自動觸發（非阻塞）
+-        if auto_calc_active and has_set_R and calc_request_q.empty() and not calc_busy.is_set():
+-            on_calc(None)
+
+[新增的部分]
+行 960 附近 (變數初始化):
++    _last_auto_calc_time = 0.0
+
+行 975 附近 (主迴圈 auto_calc):
++        # 如果處於連續計算模式，自動觸發（非阻塞），限制每秒最多計算 2 次 (間隔 0.5 秒)
++        _cur_time = _time.perf_counter()
++        if auto_calc_active and has_set_R and (_cur_time - _last_auto_calc_time >= 0.5) and calc_request_q.empty() and not calc_busy.is_set():
++            _last_auto_calc_time = _cur_time
++            on_calc(None)

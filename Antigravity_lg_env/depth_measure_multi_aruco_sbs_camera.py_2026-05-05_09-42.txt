@@ -1,0 +1,6 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-05 09:42
+
+[修復的部分]
+- 補回 `get_patch` 函式。
+- 確保 ECC 亞像素精修邏輯能正確讀取影像區塊進行迭代運算。

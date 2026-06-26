@@ -1,0 +1,43 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T15:11:30
+
+[減少的部分]
+行 632-634:
+    last_exec_time = 0
+    stored_raw_B = None # 用於鎖定 Frame B
+
+行 672-675:
+                direction = "向右" if t_r[0] > 0 else "向左"
+                pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm, 方向: {direction}")
+
+[新增的部分]
+行 632-637:
+    last_exec_time = 0
+    stored_raw_B = None # 用於鎖定 Frame B
+    prev_R = None
+    prev_t = None
+    prev_B_id = None
+
+行 675-695 附近 (Live 迴圈):
+                direction = "向右" if t_r[0] > 0 else "向左"
+                pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+                print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm, 方向: {direction}")
+                
+                # 偵測外參跳變 (只有在 B 幀未更換時才有意義)
+                curr_B_id = id(stored_raw_B)
+                if prev_B_id != curr_B_id:
+                    prev_R = None
+                    prev_t = None
+                    prev_B_id = curr_B_id
+                
+                if prev_R is not None and prev_t is not None:
+                    diff_t = np.linalg.norm(t_r - prev_t)
+                    diff_R = np.linalg.norm(R_r - prev_R)
+                    if diff_t > 15.0 or diff_R > 0.1: # 15mm 或 旋轉矩陣差異 > 0.1
+                        pose_info += " [外參跳變]"
+                        print(f"  - ⚠️ 偵測到外參跳變! diff_t: {diff_t:.1f}mm, diff_R: {diff_R:.2f}")
+                
+                prev_R = R_r.copy()
+                prev_t = t_r.copy()

@@ -1,0 +1,30 @@
+時間點: 2026-04-17T16:01:21+08:00
+
+【新增檔案】
+複製了 `depth_measure_multi_aruco.py`，產生新檔案 `depth_measure_multi_aruco_lk.py`。
+
+【減少的部份】
+無 (為原版內容的複製體，僅有些微替換)。
+
+【新增的部份】
+在 `do_measure` 函式的三角測距之前，加入了 OpenCV 光流法二次優化：
+    # === 新增：用 LK 光流法進行二次亞像素優化 (Refinement) ===
+    lk_params = dict(winSize=(21, 21),
+                     maxLevel=3,
+                     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01),
+                     flags=cv2.OPTFLOW_USE_INITIAL_FLOW)
+    
+    p0_lk = np.array([[[click_u, click_v]]], dtype=np.float32)
+    p1_initial = np.array([[[match_pt[0], match_pt[1]]]], dtype=np.float32)
+    
+    p1_refined, st, err = cv2.calcOpticalFlowPyrLK(
+        imgA_gray, imgB_gray, p0_lk, p1_initial, **lk_params
+    )
+    
+    if st[0][0] == 1: # LK 追蹤成功
+        lk_match_pt = p1_refined[0][0]
+        print(f"  [LK 原匹配點]: ({match_pt[0]:.2f}, {match_pt[1]:.2f}) -> 光流優化位移: ({lk_match_pt[0]:.2f}, {lk_match_pt[1]:.2f})")
+        match_pt = lk_match_pt
+        method += " (+LK光流優化)"
+    else:
+        print(f"  [LK Refine] 光流追蹤失敗，維持原匹配點")

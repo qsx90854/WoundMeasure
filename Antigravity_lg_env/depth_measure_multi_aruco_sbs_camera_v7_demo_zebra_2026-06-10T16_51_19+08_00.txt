@@ -1,0 +1,259 @@
+修改時間: 2026-06-10T16:51:19+08:00
+修改檔案: d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+此檔案記錄了本次修改中，各個檔案減少與新增的部份及行數，以便日後復原程式使用。
+
+================================================================================
+變更 1: 新增 compute_rgb_sift_descriptors 函數以計算 RGB-SIFT 描述子
+原本行號: 150 之前
+--------------------------------------------------------------------------------
+[減少] (無，原為空白行)
+--------------------------------------------------------------------------------
+[新增]
+def compute_rgb_sift_descriptors(img_bgr, kpts, sift_detector):
+    """
+    計算指定 KeyPoints 在 BGR 影像的 R, G, B 通道上的 SIFT 描述子，並予以串接。
+    回傳的描述子維度為 N x 384 (128 * 3)。
+    """
+    if not kpts or img_bgr is None:
+        return None, None
+        
+    # 分離 B, G, R 通道
+    b, g, r = cv2.split(img_bgr)
+    
+    # 分別對三個通道計算 SIFT 描述子
+    _, des_r = sift_detector.compute(r, kpts)
+    _, des_g = sift_detector.compute(g, kpts)
+    _, des_b = sift_detector.compute(b, kpts)
+    
+    # 邊界狀況檢查
+    if des_r is None or des_g is None or des_b is None:
+        return None, None
+    if len(des_r) != len(kpts) or len(des_g) != len(kpts) or len(des_b) != len(kpts):
+        return None, None
+        
+    # 串接描述子 (維度: N x 384)
+    des_rgb = np.hstack([des_r, des_g, des_b])
+    return kpts, des_rgb
+================================================================================
+
+================================================================================
+變更 2: run_improved_matching_flow 簽名新增 use_rgb_sift 參數
+原本行號: 188
+--------------------------------------------------------------------------------
+[減少]
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift, use_color_hist=False):
+--------------------------------------------------------------------------------
+[新增]
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift, use_color_hist=False, use_rgb_sift=False):
+================================================================================
+
+================================================================================
+變更 3: run_improved_matching_flow 左圖提取 SIFT 時引入 RGB-SIFT 條件分支
+原本行號: 226-227
+--------------------------------------------------------------------------------
+[減少]
+    else:
+        _, des_inj = sift.compute(imgA_gray, kpts_inj)
+--------------------------------------------------------------------------------
+[新增]
+    else:
+        if use_rgb_sift:
+            _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+        else:
+            _, des_inj = sift.compute(imgA_gray, kpts_inj)
+================================================================================
+
+================================================================================
+變更 4: run_improved_matching_flow 右圖提取 SIFT 與 L2 距離比對門檻調適
+原本行號: 279-285
+--------------------------------------------------------------------------------
+[減少]
+    else:
+        _, des_r = sift.compute(imgB_gray, kpts_r)
+        if des_r is None or len(des_r) == 0:
+            return None, "Improved-NoDescriptorB", None, None, g_rect
+        bf = cv2.BFMatcher(cv2.NORM_L2)
+        matches = bf.match(des_inj, des_r)
+        good = [m for m in matches if m.distance < 450]
+--------------------------------------------------------------------------------
+[新增]
+    else:
+        if use_rgb_sift:
+            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+            _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+        else:
+            _, des_r = sift.compute(imgB_gray, kpts_r)
+            
+        if des_r is None or len(des_r) == 0:
+            return None, "Improved-NoDescriptorB", None, None, g_rect
+        bf = cv2.BFMatcher(cv2.NORM_L2)
+        matches = bf.match(des_inj, des_r)
+        sift_thres = 780 if use_rgb_sift else 450
+        good = [m for m in matches if m.distance < sift_thres]
+================================================================================
+
+================================================================================
+變更 5: run_improved_matching_flow 匹配結果方法名稱更改
+原本行號: 326
+--------------------------------------------------------------------------------
+[減少]
+    return mapped, "Grad-SIFT (Improved)", ptsA_m, ptsB_m, g_rect
+--------------------------------------------------------------------------------
+[新增]
+    method_name = "RGB-SIFT (Improved)" if use_rgb_sift else "Grad-SIFT (Improved)"
+    return mapped, method_name, ptsA_m, ptsB_m, g_rect
+================================================================================
+
+================================================================================
+變更 6: UI 面板新增按鈕 ax_c10 軸坐標
+原本行號: 1883-1887
+--------------------------------------------------------------------------------
+[減少]
+    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c9 = fig.add_axes([0.29, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+--------------------------------------------------------------------------------
+[新增]
+    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c9 = fig.add_axes([0.29, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
+================================================================================
+
+================================================================================
+變更 7: 實例化按鈕 c10
+原本行號: 1893-1898
+--------------------------------------------------------------------------------
+[減少]
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+    c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+--------------------------------------------------------------------------------
+[新增]
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+    c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+    c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
+================================================================================
+
+================================================================================
+變更 8: view_state 狀態中加入變數 'use_rgb_sift'
+原本行號: 1900-1903
+--------------------------------------------------------------------------------
+[減少]
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+                  'use_color_hist': False,
+--------------------------------------------------------------------------------
+[新增]
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+                  'use_color_hist': False,
+                  'use_rgb_sift': False,
+================================================================================
+
+================================================================================
+變更 9: 統一按鈕色彩與邊框設定 (新增 c10 於處理清單中)
+原本行號: 1934-1936
+--------------------------------------------------------------------------------
+[減少]
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9]:
+--------------------------------------------------------------------------------
+[新增]
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10]:
+================================================================================
+
+================================================================================
+變更 10: 綁定按鈕 c10 的點擊動作
+原本行號: 1960-1963
+--------------------------------------------------------------------------------
+[減少]
+    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+    c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))
+    c9.on_clicked(make_on_opt(c9, 'use_color_hist', "色彩直方圖約束"))
+--------------------------------------------------------------------------------
+[新增]
+    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+    c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))
+    c9.on_clicked(make_on_opt(c9, 'use_color_hist', "色彩直方圖約束"))
+    c10.on_clicked(make_on_opt(c10, 'use_rgb_sift', "啟用 RGB-SIFT"))
+================================================================================
+
+================================================================================
+變更 11: 修改 compute_measure 中 run_improved_matching_flow 的呼叫參數 (加上 use_rgb_sift)
+原本行號: 2042-2045 (對應平移後為 2076-2080)
+--------------------------------------------------------------------------------
+[減少]
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift,
+                            snap_view_state.get('use_color_hist', False)
+                        )
+--------------------------------------------------------------------------------
+[新增]
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift,
+                            snap_view_state.get('use_color_hist', False),
+                            snap_view_state.get('use_rgb_sift', False)
+                        )
+================================================================================
+
+================================================================================
+變更 12: compute_measure 預設 Grad-SIFT 流程中左圖引入 RGB-SIFT 條件分支
+原本行號: 2147-2148
+--------------------------------------------------------------------------------
+[減少]
+                            else:
+                                _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+--------------------------------------------------------------------------------
+[新增]
+                            else:
+                                if snap_view_state.get('use_rgb_sift', False):
+                                    _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
+                                else:
+                                    _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+================================================================================
+
+================================================================================
+變更 13: compute_measure 預設 Grad-SIFT 流程中右圖引入 RGB-SIFT 條件分支與 L2 門檻值調整
+原本行號: 2172-2176
+--------------------------------------------------------------------------------
+[減少]
+                                else:
+                                    _, des_r = sift.compute(cand['gray'], kpts_r)
+                                    bf = cv2.BFMatcher(cv2.NORM_L2)
+                                    matches = bf.match(des_inj, des_r)
+                                    good = [m for m in matches if m.distance < 450]
+--------------------------------------------------------------------------------
+[新增]
+                                else:
+                                    if snap_view_state.get('use_rgb_sift', False):
+                                         imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+                                         _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
+                                    else:
+                                         _, des_r = sift.compute(cand['gray'], kpts_r)
+                                         
+                                    if des_r is not None and len(des_r) > 0:
+                                         bf = cv2.BFMatcher(cv2.NORM_L2)
+                                         matches = bf.match(des_inj, des_r)
+                                         sift_thres = 780 if snap_view_state.get('use_rgb_sift', False) else 450
+                                         good = [m for m in matches if m.distance < sift_thres]
+                                    else:
+                                         good = []
+================================================================================
+
+================================================================================
+變更 14: compute_measure 中回傳匹配結果方法名稱更改
+原本行號: 2161 (平移後對應為 2203-2204)
+--------------------------------------------------------------------------------
+[減少]
+                                    m_pt, method = mapped, "Grad-SIFT"
+--------------------------------------------------------------------------------
+[新增]
+                                    method_name = "RGB-SIFT" if snap_view_state.get('use_rgb_sift', False) else "Grad-SIFT"
+                                    m_pt, method = mapped, method_name
+================================================================================

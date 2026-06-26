@@ -1,0 +1,17 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T09-45-04
+
+[減少的部分]
+行 873:
+-                global_plane_n, global_plane_c = compute_global_plane(snap_imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+行 882:
+-                    'plane_n': global_plane_n, 'plane_c': global_plane_c,
+
+[新增的部分]
+行 873-875:
++                n_local, c_local = compute_global_plane(snap_imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
++                if n_local is None:
++                    n_local, c_local = global_plane_n, global_plane_c
+行 884:
++                    'plane_n': n_local, 'plane_c': c_local,

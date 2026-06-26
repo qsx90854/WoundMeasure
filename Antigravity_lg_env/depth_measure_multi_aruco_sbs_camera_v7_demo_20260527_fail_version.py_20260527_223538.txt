@@ -1,0 +1,119 @@
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_fail_version.py
+修改時間: 20260527_223538
+
+=== 變更 1 (全域設定區新增變數 DYNAMIC_SUBPIX_WIN 與說明) ===
+原始行號範圍: 43-46 (原始檔案)
+減少內容:
+----------------------------------------
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+ARUCO_SUBPIX_WIN_SIZE = 3                          # ArUco 角點 cornerSubPix 搜尋半徑 (winSize)
+----------------------------------------
+新增內容:
+----------------------------------------
+ENABLE_POSE_SMOOTHING  = True                       # 是否啟用時序平滑濾波 (EMA)
+POSE_SMOOTHING_ALPHA   = 0.3                        # 平滑係數 (0.0 ~ 1.0)，越小越平滑但延遲越高
+ARUCO_SUBPIX_WIN_SIZE = 3                          # 手動模式下的 ArUco 角點 cornerSubPix 搜尋半徑 (winSize)
+DYNAMIC_SUBPIX_WIN    = True                       # 是否啟用依影像中標記像素尺寸自適應動態調整搜尋半徑
+----------------------------------------
+
+=== 變更 2 (新增 compute_adaptive_win_size 函數) ===
+原始行號範圍: 301-305 (原始檔案)
+減少內容:
+----------------------------------------
+def snap_to_aruco_corner(x, y, corners_dict):
+    pt = np.array([x, y])
+    for corners in corners_dict.values():
+        dists = np.linalg.norm(corners - pt, axis=1)
+        if np.min(dists) < 10:
+            return float(corners[np.argmin(dists)][0]), float(corners[np.argmin(dists)][1])
+    return x, y
+----------------------------------------
+新增內容:
+----------------------------------------
+def snap_to_aruco_corner(x, y, corners_dict):
+    pt = np.array([x, y])
+    for corners in corners_dict.values():
+        dists = np.linalg.norm(corners - pt, axis=1)
+        if np.min(dists) < 10:
+            return float(corners[np.argmin(dists)][0]), float(corners[np.argmin(dists)][1])
+    return x, y
+
+def compute_adaptive_win_size(pts, default_val=3):
+    """依據標記的像素邊長自適應計算 subpix 搜尋半徑。
+    物理模型：邊長 S = (f * W) / Z。搜尋半徑限制在約單個格子的半寬以下 (S/12)。
+    此處取邊長的 5% 為搜尋半徑，並限制於 [2, 8] 像素區間。
+    """
+    if not DYNAMIC_SUBPIX_WIN:
+        return default_val
+    try:
+        # pts 格式為 4x2
+        d1 = np.linalg.norm(pts[0] - pts[1])
+        d2 = np.linalg.norm(pts[1] - pts[2])
+        d3 = np.linalg.norm(pts[2] - pts[3])
+        d4 = np.linalg.norm(pts[3] - pts[0])
+        S = (d1 + d2 + d3 + d4) / 4.0
+        win_size = int(round(S * 0.05))
+        return max(2, min(win_size, 8))
+    except Exception:
+        return default_val
+----------------------------------------
+
+=== 變更 3 (修改 get_joint_relative_pose 中的 cornerSubPix 呼叫) ===
+原始行號範圍: 159-163 (原始檔案)
+減少內容:
+----------------------------------------
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+    if cA is not None:
+        for c in cA: cv2.cornerSubPix(imgA_gray, c, (ARUCO_SUBPIX_WIN_SIZE, ARUCO_SUBPIX_WIN_SIZE), (-1, -1), term)
+    if cB is not None:
+        for c in cB: cv2.cornerSubPix(imgB_gray, c, (ARUCO_SUBPIX_WIN_SIZE, ARUCO_SUBPIX_WIN_SIZE), (-1, -1), term)
+----------------------------------------
+新增內容:
+----------------------------------------
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+    if cA is not None:
+        for c in cA:
+            win_size = compute_adaptive_win_size(c[0], ARUCO_SUBPIX_WIN_SIZE)
+            cv2.cornerSubPix(imgA_gray, c, (win_size, win_size), (-1, -1), term)
+    if cB is not None:
+        for c in cB:
+            win_size = compute_adaptive_win_size(c[0], ARUCO_SUBPIX_WIN_SIZE)
+            cv2.cornerSubPix(imgB_gray, c, (win_size, win_size), (-1, -1), term)
+----------------------------------------
+
+=== 變更 4 (修改 draw_aruco 中的矩形繪製，改採動態 win_size) ===
+原始行號範圍: 433-445 (原始檔案)
+減少內容:
+----------------------------------------
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+                
+                # 繪製 cornerSubPix 搜尋範圍矩形框 (搜尋視窗寬高為 2 * ARUCO_SUBPIX_WIN_SIZE)
+                r_size = 2 * ARUCO_SUBPIX_WIN_SIZE
+                r_patch = Rectangle(
+                    (pts[i,0] - ARUCO_SUBPIX_WIN_SIZE, pts[i,1] - ARUCO_SUBPIX_WIN_SIZE),
+                    r_size, r_size,
+                    fill=False, edgecolor='red', lw=0.5, alpha=0.6, zorder=4
+                )
+                ax.add_patch(r_patch)
+                ax.art.append(r_patch)
+----------------------------------------
+新增內容:
+----------------------------------------
+            for i in range(4):
+                c_pt, = ax.plot(pts[i,0], pts[i,1], c_colors[i], markersize=6, zorder=4)
+                ax.art.append(c_pt)
+                
+                # 繪製 cornerSubPix 搜尋範圍矩形框 (搜尋視窗寬高為 2 * win_size)
+                win_size = compute_adaptive_win_size(pts, ARUCO_SUBPIX_WIN_SIZE)
+                r_size = 2 * win_size
+                r_patch = Rectangle(
+                    (pts[i,0] - win_size, pts[i,1] - win_size),
+                    r_size, r_size,
+                    fill=False, edgecolor='red', lw=0.5, alpha=0.6, zorder=4
+                )
+                ax.add_patch(r_patch)
+                ax.art.append(r_patch)
+----------------------------------------

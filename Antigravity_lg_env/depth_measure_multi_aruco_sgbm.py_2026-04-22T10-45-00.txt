@@ -1,0 +1,11 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sgbm.py
+時間：2026-04-22 10:45:00
+
+【重構】
+內容：
+1. 移除傳統的 1D 極線掃描、ECC 精修與 2D LK 匹配邏輯。
+2. 整合 OpenCV SGBM (Semi-Global Block Matching) 演算法。
+3. 在程式啟動時預先計算全域視差圖 (`disparity_map`)。
+4. `do_measure` 流程調整為：ArUco 角點優先 -> LightGlue 特徵 -> SGBM 視差查找。
+5. 清除相關的 UI 暫存變數（如 `scatter_ecc_coarse`）。
+原因：針對低紋理區域，預計算的全域 SGBM 視差圖比單點 1D 掃描更具備空間連續性，能有效減少誤匹配。

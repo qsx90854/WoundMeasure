@@ -1,0 +1,26 @@
+時間點: 2026-04-17T16:39:19+08:00
+
+【User 訊息】
+現在baseline怎麼估的
+
+【Assistant 回答】
+在我們目前的程式碼中，**Baseline (相機基線，兩台相機之間的真實物理距離)** 的估算方法非常巧妙。它不依賴事先做雙目相機校正 (Stereo Calibration)，而是將環境中的 ArUco 當作「真實尺寸的度量衡」來還原 3D 空間。
+
+具體運作的 5 個核心步驟是這樣的（這都發生在 `get_joint_relative_pose` 裡面）：
+
+1. **注入物理尺度 (Scale)**：
+   程式先利用您在設定區輸入的 `ACTUAL_MARKER_SIZE_MM` (例如：33mm)，建立出 ArUco 的理想 3D 幾何四邊形。
+
+2. **建立 Camera A 的絕對空間**：
+   對於左圖 (Camera A) 裡的每個 ArUco，程式各別做了一次單應性運算 (`solvePnP`)，把那張標籤的 4 個角點「還原出相對 Camera A 鏡頭光心」的有物理單位的真實 3D 座標 (`all_obj_pts_A`)。
+
+3. **聯合解算 (Joint solvePnP)**：
+   現在，我們擁有一大把「已知相對於 Camera A 真實 3D 座標的角點」，我們立刻拿這整把有著真實 mm 刻度的 3D 點，去對應右圖 (Camera B) 在這幾個角點上拍到的 2D 像素位置 (`all_img_pts_B`)，丟進 OpenCV 進行一次聯合的 `solvePnP` 解算。
+
+4. **取得相對位移 (t_rel)**：
+   這一次的解算出來的平移向量 `t_rel`，數學意義上正是「計算那堆 3D 點的 0,0,0 原點」距離 Camera B 的位置。而既然那堆 3D 點是建構在 Camera A 座摽系上的（所以 Camera A 的光心就是原點），那麼 **`t_rel` 完美等同於 Camera A 到 Camera B 的三維空間位移向量**！
+
+5. **算出 Baseline**：
+   我們最後將 `t_rel` 這個三維向量算它的歐幾里得距離長度 (`np.linalg.norm(t_rel)`)。這就得到了精確的 Baseline 數值（單位：mm）。
+
+這種聯合計算的方式，只要畫面中的 ArUco 角點有被勾選參與運算，就能夠動態把兩張照片之間的實體距離推算出來，是個極度堅固強健的純幾何寫法！

@@ -1,0 +1,12 @@
+時間：2026-05-29 09:27:49
+
+使用者提問：
+(lg_env) D:\Lightglue\lg_env>python depth_measure_multi_aruco_sbs_camera_v7_demo.py
+  File "D:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py", line 353
+    if ok_rel and len(rvecs_rel) > 0:
+IndentationError: unexpected indent
+
+Antigravity回答：
+已成功排查並熱修復了由於上一次代碼替換匹配偏離產生的代碼殘留與縮排語法錯誤 (IndentationError)。
+清理了原第 349 行到 374 行的舊代碼殘留，將 `get_joint_relative_pose` 的 return 語句完全恢復為乾淨且正確的狀態。
+請使用者重新啟動程式進行測試與驗證。

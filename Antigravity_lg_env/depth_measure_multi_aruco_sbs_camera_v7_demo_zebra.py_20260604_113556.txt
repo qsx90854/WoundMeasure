@@ -1,0 +1,17 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-04T11:35:56+08:00
+
+說明：
+將測量數值框 (depth_text) 的座標變換系由 ax_A.transAxes 改至整個視窗的 fig.transFigure。將位置設定為 X=0.53 (原本右半部右圖的左起點附近)，高度設定為 Y=0.45 (中間高度)。這樣即可確保在右半部圖像隱藏的情況下，數值框依然能在右半部空白位置常駐顯示，且不會遮擋左側影像視野。同時，渲染迴圈重繪機制亦修正為 fig.draw_artist(depth_text)。
+
+--------------------------------------------------
+[修改] 行 1455 (數值框坐標變換與位置設定)
+--------------------------------------------------
+-    depth_text = ax_A.text(0.02, 0.45, "", transform=ax_A.transAxes, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
++    depth_text = fig.text(0.53, 0.45, "", transform=fig.transFigure, color='white', fontweight='bold', fontsize=16, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+
+--------------------------------------------------
+[修改] 行 2646 (重繪 depth_text 的對象改為整個 fig)
+--------------------------------------------------
+-        ax_A.draw_artist(depth_text)
++        fig.draw_artist(depth_text)

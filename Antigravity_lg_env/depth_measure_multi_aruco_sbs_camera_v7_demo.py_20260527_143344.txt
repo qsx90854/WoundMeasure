@@ -1,0 +1,49 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-27 14:33:44 (20260527_143344)
+
+=========================================
+新增與減少的部份（附帶行數）：
+=========================================
+新增部分:
+1. (Line 23):
+   from matplotlib.patches import ConnectionPatch, Rectangle, Polygon
+   
+2. (Line 733 - 751):
+   在 do_measure 內部新增自訂平面選點攔截邏輯
+   
+3. (Line 837 - 845):
+   在 apply_measure_result 內部 HUD 文字生成中計算並加入投影距離 "\n距自訂平面: {proj_dist:.1f}mm"
+   
+4. (Line 943 - 965):
+   在 main 內部新增自訂平面擬合狀態變數與 redraw_custom_plane_poly 輔助函數
+   
+5. (Line 1000 - 1023):
+   在 main 內部定義自訂平面按鈕 ax_btn_custom_plane / btn_custom_plane，並對字型與邊框色彩設定清單進行更新
+   
+6. (Line 1045 - 1047):
+   在 on_auto_calc 內部加入自訂平面模式下的防呆驗證
+   
+7. (Line 1085 - 1102):
+   在 on_lock_R 內部加入解鎖右圖時清除自訂平面狀態、點選歷史與標記的邏輯
+   
+8. (Line 1105 - 1198):
+   新增自訂平面點擊事件處理常式 on_custom_plane，包含極限偵測、SVD 平面擬合等邏輯
+   
+9. (Line 1400):
+   btn_custom_plane.on_clicked(on_custom_plane) 註冊
+   
+10. (Line 1509 - 1515):
+    在 blit 快速渲染迴圈中，新增對 custom_plane_poly_artist 與 custom_plane_artists 的手動 draw_artist 渲染
+
+減少部分:
+1. (Line 23):
+   -from matplotlib.patches import ConnectionPatch, Rectangle
+   
+2. (Line 1001):
+   -for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle]:
+   
+3. (Line 1012):
+   -for b in [btn_norm_toggle, btn_grad_toggle]:
+   
+4. (Line 1507 - 1510):
+   舊有的快速通道繪製項目（移位與新增繪製覆蓋）

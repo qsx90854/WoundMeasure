@@ -1,0 +1,66 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_live.py
+修改時間：2026-06-03T10:20:29+08:00
+
+說明：
+本檔案原為即時(Live)獲取相機SBS影像量測版本，現已複製覆寫為與 depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py 相同的「開相機錄製影片 -> 載入影片進行離線分析姿態自標定 -> 互動量測與日誌輸出」流程。
+
+為了維持 Live 版的特定硬體解析度與特徵匹配搜索尺寸，在複製完畢後，進行了以下客製化參數調整：
+
+--------------------------------------------------
+[修改] 行 28 - 29 (全局設定參數)
+--------------------------------------------------
+-VIDEO_PATH            = r"test_video_Zebra//video_20260601_172436.mp4"
+-RECORD_SAVE_DIR       = "test_video_Zebra"
++VIDEO_PATH            = r"test_video_Live//video_20260601_172436.mp4"
++RECORD_SAVE_DIR       = "test_video_Live"
+
+--------------------------------------------------
+[修改] 行 48 - 49 (相機解析度)
+--------------------------------------------------
+-CAMERA_WIDTH          = 1920
+-CAMERA_HEIGHT         = 1080
++CAMERA_WIDTH          = 2560
++CAMERA_HEIGHT         = 1024
+
+--------------------------------------------------
+[修改] 行 51 (標定參數檔)
+--------------------------------------------------
+-PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"
++PARAMS_JSON_PATH      = "calibration_result.json"
+
+--------------------------------------------------
+[修改] 行 1461 (compute_measure)
+--------------------------------------------------
+-                    sobel_range = 18
++                    sobel_range = 12
+
+--------------------------------------------------
+[修改] 行 1477 (compute_measure)
+--------------------------------------------------
+-                        rad = 30
++                        rad = 20
+
+--------------------------------------------------
+[修改] 行 1511 - 1515 (compute_measure)
+--------------------------------------------------
+-                                    H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 4.0)
++                                    H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
+...
+-                                    M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=4.0)
++                                    M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
+
+--------------------------------------------------
+[修改] 行 1544 - 1553 (compute_measure ECC精修)
+--------------------------------------------------
+-                tmpl = get_patch(snap_imgA_gray, (u, v), 45)
+-                roi = get_patch(cand['gray'], m_pt, 91)
++                tmpl = get_patch(snap_imgA_gray, (u, v), 31)
++                roi = get_patch(cand['gray'], m_pt, 61)
+...
+-                    warp[0, 2] = (91 - 45) / 2.0; warp[1, 2] = (91 - 45) / 2.0
++                    warp[0, 2] = (61 - 31) / 2.0; warp[1, 2] = (61 - 31) / 2.0
+...
+-                        m_pt = np.array([m_pt[0] - 45.5 + warp[0, 2] + 22.5,
+-                                         m_pt[1] - 45.5 + warp[1, 2] + 22.5])
++                        m_pt = np.array([m_pt[0] - 30.5 + warp[0, 2] + 15.5,
++                                         m_pt[1] - 30.5 + warp[1, 2] + 15.5])

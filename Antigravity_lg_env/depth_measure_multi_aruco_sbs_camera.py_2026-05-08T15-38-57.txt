@@ -1,0 +1,23 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T15-38-57
+
+[減少的部分]
+行 361 附近:
+-        for cand in candidates:
+
+行 775-783 附近 (Live 迴圈):
+-        # 動態繪製當前畫面（如果是 Live 的話）的 ArUco，提供視覺反饋
+-        if live_L:
+-            cA, idsA, _ = cv2.aruco.detectMarkers(...)
+-            ...
+-        if live_R:
+-            cB, idsB, _ = cv2.aruco.detectMarkers(...)
+-            ...
+
+[新增的部分]
+行 361 附近:
++        for cand in [current_cand]:
+
+行 775 附近:
+    刪除了迴圈中的 ArUco 偵測，僅保留 `plt.pause(0.001)`。

@@ -1,0 +1,14 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-04T09:29:02+08:00
+
+說明：
+將 HUD 姿態估計提示文字從左半圖內側 `(0.01, 0.91)` 移至外側上方 `(0.0, 1.02)`，並將垂直對齊方式設定為 `va='bottom'`。這樣該提示文字即可與 `Camera (Live)` 標題在水平線上完美對齊，使 UI 版面更佳整齊且不遮擋影像視野。
+
+--------------------------------------------------
+[修改] 行 1480 - 1483 (微調座標與 va)
+--------------------------------------------------
+-    pose_status_text = ax_A.text(0.01, 0.91, pose_status_str, transform=ax_A.transAxes,
+-                                 color=pose_status_color, fontsize=10, fontweight='bold', va='top',
++    pose_status_text = ax_A.text(0.0, 1.02, pose_status_str, transform=ax_A.transAxes,
++                                 color=pose_status_color, fontsize=10, fontweight='bold', va='bottom',
+                                  bbox=dict(facecolor='#121212', alpha=0.7, edgecolor=pose_status_color, lw=1), zorder=10)

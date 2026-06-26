@@ -1,0 +1,143 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-20T10:44:56
+
+--- 減少的部份 ---
+第 299-306 行:
+```python
+    def draw_aruco(ax, corners):
+        if not hasattr(ax, 'art'): ax.art = []
+        for a in ax.art: a.remove()
+        ax.art = []
+        for mid, pts in corners.items():
+            p = np.vstack((pts, pts[0])); l, = ax.plot(p[:,0], p[:,1], 'cyan', lw=1.5)
+            t = ax.text(pts[0,0], pts[0,1]-5, f"ID:{mid}", color='cyan', fontsize=8); ax.art.extend([l, t])
+```
+
+第 331 行:
+```python
+    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=18, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+```
+
+第 570-597 行:
+```python
+        d_val, p3d_val, fail_reason = None, None, ""
+        if m_pt is not None:
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: ({m_pt[0]:.1f}, {m_pt[1]:.1f}) | 匹配方式: {method}")
+            R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
+            t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
+            print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
+            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])
+            if p3d[2] <= 0:
+                fail_reason = "深度為負(在相機後方)"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            elif p3d[2] > MAX_DEPTH_MM:
+                fail_reason = "超過最大深度"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            else:
+                d_val = np.linalg.norm(p3d); p3d_val = p3d
+                p_dist_str = "N/A"
+                if cand['plane_n'] is not None:
+                    p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
+                    p_dist_str = f"{p_dist:.2f} mm"
+                print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+        else:
+            fail_reason = "無匹配點"
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
+            print(f"   [計算失敗] 原因: {fail_reason}")
+
+        return {'pt': m_pt, 'p3d': p3d_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+                'fail_reason': fail_reason, 'u': u, 'v': v}
+```
+
+第 709-713 行:
+```python
+            if res['d'] is not None:
+                main_text = f"深度值(距離): {res['d']:.1f}mm{p_dist_str}\n外參來源: {pose_info_str}"
+            else:
+                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+```
+
+--- 新增的部份 ---
+第 299-317 行:
+```python
+    def draw_aruco(ax, corners):
+        if not hasattr(ax, 'art'): ax.art = []
+        for a in ax.art: a.remove()
+        ax.art = []
+        if not corners: return
+        min_id = min(corners.keys())
+        for mid, pts in corners.items():
+            p = np.vstack((pts, pts[0])); l, = ax.plot(p[:,0], p[:,1], 'cyan', lw=1.5)
+            t_str = f"ID:{mid}"
+            if mid == min_id:
+                t_str += " (World Origin)"
+                center = np.mean(pts, axis=0)
+                c_pt, = ax.plot(center[0], center[1], 'r+', markersize=10, markeredgewidth=2, zorder=4)
+                ax.art.append(c_pt)
+            t = ax.text(pts[0,0], pts[0,1]-5, t_str, color='cyan', fontsize=8, fontweight='bold' if mid == min_id else 'normal', zorder=4)
+            ax.art.extend([l, t])
+```
+
+第 342 行:
+```python
+    depth_text = ax_B.text(0.02, 0.05, "", transform=ax_B.transAxes, color='white', fontweight='bold', fontsize=13, bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
+```
+
+第 581-619 行:
+```python
+        d_val, p3d_val, p3d_w_val, fail_reason = None, None, None, ""
+        if m_pt is not None:
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: ({m_pt[0]:.1f}, {m_pt[1]:.1f}) | 匹配方式: {method}")
+            R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
+            t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
+            print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
+            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])
+            if p3d[2] <= 0:
+                fail_reason = "深度為負(在相機後方)"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            elif p3d[2] > MAX_DEPTH_MM:
+                fail_reason = "超過最大深度"
+                print(f"   [計算失敗] 原因: {fail_reason} | 原始算出Z: {p3d[2]:.2f} mm")
+            else:
+                d_val = np.linalg.norm(p3d); p3d_val = p3d
+                p_dist_str = "N/A"
+                if cand['plane_n'] is not None:
+                    p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
+                    p_dist_str = f"{p_dist:.2f} mm"
+                print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
+                
+                # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
+                if cand.get('cornersA'):
+                    min_id = min(cand['cornersA'].keys())
+                    half = ACTUAL_MARKER_SIZE_MM / 2.0
+                    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+                    ok_origin, rv_o, tv_o = cv2.solvePnP(canon, cand['cornersA'][min_id], KL, np.zeros(5))
+                    if ok_origin:
+                        R_o, _ = cv2.Rodrigues(rv_o)
+                        p3d_w = R_o.T @ (p3d_val.reshape(3, 1) - tv_o.reshape(3, 1))
+                        p3d_w_val = p3d_w.flatten()
+        else:
+            fail_reason = "無匹配點"
+            print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
+            print(f"   [計算失敗] 原因: {fail_reason}")
+
+        return {'pt': m_pt, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'method': method, 'neighbors': neighbors,
+                'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+                'fail_reason': fail_reason, 'u': u, 'v': v}
+```
+
+第 730-743 行:
+```python
+            if res['d'] is not None:
+                p3d_c = res['p3d']
+                p3d_w = res.get('p3d_w')
+                c_coords_str = f"({p3d_c[0]:.1f}, {p3d_c[1]:.1f}, {p3d_c[2]:.1f})" if p3d_c is not None else "N/A"
+                w_coords_str = f"({p3d_w[0]:.1f}, {p3d_w[1]:.1f}, {p3d_w[2]:.1f})" if p3d_w is not None else "N/A"
+                main_text = (f"深度值(距離): {res['d']:.1f}mm\n"
+                             f"相機3D座標: {c_coords_str}\n"
+                             f"世界3D座標: {w_coords_str}{p_dist_str}\n"
+                             f"外參來源: {pose_info_str}")
+            else:
+                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+```

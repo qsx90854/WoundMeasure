@@ -1,0 +1,4 @@
+檔案: depth_measure_video_mode.py
+修改紀錄:
+- [修改] 85, 116-121 行: 針對「小標籤」引起的力臂效應 (Lever-arm Effect) 進行姿態追蹤穩定。在 `get_aruco_pose_to_global` 中引入 `last_rvec` 與 `last_tvec`，並將解算模式改為 `cv2.SOLVEPNP_ITERATIVE` 且開啟 `useExtrinsicGuess=True`。這使得解算器會以上一幀的姿態作為初始猜測，大幅降低小標籤因為像素雜訊導致的法向量旋轉震盪，確保相機軌跡平滑，進而修正 SVD 的交會誤差。
+- [修改] 129, 210, 266 行: 在狀態中記錄歷史姿態並在迴圈中傳遞。

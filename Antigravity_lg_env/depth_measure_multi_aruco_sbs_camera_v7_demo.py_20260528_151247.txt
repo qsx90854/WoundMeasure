@@ -1,0 +1,67 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-05-28 15:12:47
+
+第一處修改 (get_joint_relative_pose 中的視差過小過濾)：
+減少的部份 (原第 213 行至第 217 行)：
+213:             imgB.append(cB[idxB][0])
+214:             
+215:     if not objA: return None
+216:     objA = np.vstack(objA).astype(np.float32)
+217:     imgB = np.vstack(imgB).astype(np.float32)
+
+新增的部份 (新第 213 行至第 229 行)：
+213:             imgB.append(cB[idxB][0])
+214:             
+215:     # 計算共享標籤角點在左右圖之間的平均像素位移 (視差)
+216:     all_dists = []
+217:     for mid in shared:
+218:         if mid in cA_dict and mid in cB_dict:
+219:             dists = np.linalg.norm(cA_dict[mid] - cB_dict[mid], axis=1)
+220:             all_dists.extend(dists)
+221:     mean_disparity = np.mean(all_dists) if all_dists else 0.0
+222:     
+223:     if mean_disparity < 2.0:
+224:         print(f"⚠️ [外參解算] 左右圖平均像素位移過小 ({mean_disparity:.2f} px < 2.0 px)，判定為無視差退化狀態，跳過此幀。")
+225:         return None
+226:         
+227:     if not objA: return None
+228:     objA = np.vstack(objA).astype(np.float32)
+229:     imgB = np.vstack(imgB).astype(np.float32)
+
+
+第二處修改 (calc_worker 中的物理基線範圍限制)：
+減少的部份 (原第 1290 行至第 1301 行)：
+1290:                 res_pose = get_joint_relative_pose(
+1291:                     snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
+1292:                     prev_marker_poses=history_marker_poses,
+1293:                     prev_rel_pose=history_rel_pose
+1294:                 )
+1295:                 baseline_val = 0.0
+1296:                 pose_valid = False
+1297:                 pose_info = "未偵測到 ArUco"
+1298:                 R_r, t_r = None, None
+1299:                 cA_dict, cB_dict = {}, {}
+1300: 
+1301:                 if res_pose is not None:
+
+新增的部份 (新第 1302 行至第 1321 行)：
+1302:                 res_pose = get_joint_relative_pose(
+1303:                     snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
+1304:                     prev_marker_poses=history_marker_poses,
+1305:                     prev_rel_pose=history_rel_pose
+1306:                 )
+1307:                 
+1308:                 # 檢查算出的原始 baseline 是否在物理合理範圍內 (例如 5.0mm 到 35.0mm 之間)
+1309:                 if res_pose is not None:
+1310:                     raw_baseline = res_pose[2]
+1311:                     if not (5.0 <= raw_baseline <= 35.0):
+1312:                         print(f"❌ 算出的原始 Baseline 異常 ({raw_baseline:.2f} mm)，判定為無視差退化或定位異常，忽略此幀")
+1313:                         res_pose = None
+1314:                         
+1315:                 baseline_val = 0.0
+1316:                 pose_valid = False
+1317:                 pose_info = "未偵測到 ArUco"
+1318:                 R_r, t_r = None, None
+1319:                 cA_dict, cB_dict = {}, {}
+1320: 
+1321:                 if res_pose is not None:

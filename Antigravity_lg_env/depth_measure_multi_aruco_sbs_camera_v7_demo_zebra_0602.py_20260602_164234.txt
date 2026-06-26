@@ -1,0 +1,127 @@
+被修改的檔名: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_0602.py
+修改的時間: 20260602_164234
+
+----------------- 減少的部份 (行數: 809 - 818) -----------------
+809:     return x, y
+810: 
+811: def main():
+812:     import collections, time
+813:     
+814:     # 1. 讀取相機內參
+815:     mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
+816:     
+817:     # 由於去畸變時需要影像尺寸，我們先用 VideoCapture 打開影片讀取第一影格取得原影像寬高
+818:     cap_temp = cv2.VideoCapture(VIDEO_PATH)
+
+----------------- 新增的部份 (行數: 809 - 909) -----------------
+809:     return x, y
+810: 
+811: def record_video_from_camera():
+812:     import datetime
+813:     # 建立影片儲存資料夾（如果不存在的話）
+814:     save_path = "test_video_Zebra"
+815:     if not os.path.exists(save_path):
+816:         os.makedirs(save_path)
+817: 
+818:     # 開啟相機
+819:     cap = cv2.VideoCapture(0, cv2.CAP_MSMF)
+820:     if not cap.isOpened():
+821:         print("❌ 錯誤：無法開啟相機")
+822:         return None
+823: 
+824:     # 設定相機解析度為 1920x1080 且設定編碼格式
+825:     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'YUY2'))
+826:     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+827:     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+828:     
+829:     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+830:     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+831:     print(f"📷 目前接收到的串流解析度: {width} x {height}")
+832:     print("操作說明：")
+833:     print("  按下 's' 鍵 - 開始/停止錄影")
+834:     print("  按下 'q' 鍵 - 當錄影完成後，結束預覽並載入影片")
+835: 
+836:     is_recording = False
+837:     video_writer = None
+838:     video_name = None
+839:     has_recorded = False
+840: 
+841:     while True:
+842:         ret, frame = cap.read()
+843:         if not ret:
+844:             print("❌ 無法接收畫面，錄影中斷...")
+845:             break
+846: 
+847:         # 錄影寫入
+848:         if is_recording and video_writer is not None:
+849:             video_writer.write(frame)
+850: 
+851:         display_frame = frame.copy()
+852:         h, w = display_frame.shape[:2]
+853: 
+854:         # 顯示錄影狀態指示
+855:         if is_recording:
+856:             cv2.circle(display_frame, (30, h - 30), 15, (0, 0, 255), -1)
+857:             cv2.putText(display_frame, "REC", (55, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+858:             cv2.putText(display_frame, "Press 'S' to STOP recording", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+859:         else:
+860:             if has_recorded:
+861:                 cv2.putText(display_frame, "Recorded! Press 'Q' to start depth measure or 'S' to re-record", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+862:             else:
+863:                 cv2.putText(display_frame, "Press 'S' to START recording", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
+864: 
+865:         # 4. 偵測按鍵事件
+866:         key = cv2.waitKey(1) & 0xFF
+867: 
+868:         if key == ord('q'):
+869:             if has_recorded and not is_recording:
+870:                 print(f"🎬 錄影就緒，準備載入: {video_name}")
+871:                 break
+872:             elif is_recording:
+873:                 print("⚠️ 正在錄影中，請先按 's' 停止錄影後再按 'q' 離開。")
+874:             else:
+875:                 print("⚠️ 尚未錄製 any 影片，請按 's' 錄製一段影片。")
+876:         
+877:         elif key == ord('s'):
+878:             if not is_recording:
+879:                 now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+880:                 video_name = os.path.join(save_path, f"video_{now_str}.mp4")
+881:                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+882:                 fps = cap.get(cv2.CAP_PROP_FPS)
+883:                 if fps <= 0 or fps > 100: fps = 25.0  # 保底 FPS
+884:                 video_writer = cv2.VideoWriter(video_name, fourcc, fps, (w, h))
+885:                 is_recording = True
+886:                 has_recorded = True
+887:                 print(f"🎬 開始錄影：{video_name}")
+888:             else:
+889:                 is_recording = False
+890:                 if video_writer is not None:
+891:                     video_writer.release()
+892:                     video_writer = None
+893:                 print("🛑 錄影結束")
+894:         
+895:         # 縮放預覽，避免影像太大
+896:         display_small = cv2.resize(display_frame, (int(w//2), int(h//2)))
+897:         cv2.imshow('Camera Recording Window', display_small)
+898: 
+899:     cap.release()
+900:     cv2.destroyAllWindows()
+901:     return video_name
+902: 
+903: def main():
+904:     import collections, time
+905:     
+906:     # 0. 先開啟相機錄影
+907:     recorded_path = record_video_from_camera()
+908:     if recorded_path is None or not os.path.exists(recorded_path):
+909:         print("❌ 錄影失敗或未錄製影片，程式結束。")
+910:         sys.exit(1)
+911:         
+912:     global VIDEO_PATH
+913:     VIDEO_PATH = recorded_path
+914:     
+915:     # 1. 讀取相機內參
+916:     mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = load_json_camera_params(PARAMS_JSON_PATH)
+917:     
+918:     # 由於去畸變時需要影像尺寸，我們先用 VideoCapture 打開影片讀取第一影格取得原影像寬高
+919:     cap_temp = cv2.VideoCapture(VIDEO_PATH)

@@ -1,0 +1,10 @@
+時間：2026-05-18T17:03:11
+對話：
+User: sift是怎麼決定要挑哪些位置的
+Antigravity:
+向使用者解釋了 SIFT (Scale-Invariant Feature Transform) 決定特徵點位置的四大核心步驟：
+1. 建立高斯金字塔 (尋找不同距離的特徵)
+2. 計算高斯差分 DoG (抓出變化劇烈的區域)
+3. 尋找 3D 局部極值 (確認該點在空間與尺度上都是最特別的)
+4. 剔除邊緣與低對比點 (利用 Hessian 矩陣排除只在一條線上變化的邊緣點，留下真正的「斑點」或「角點」)
+並說明了程式中 `contrastThreshold` 與 `edgeThreshold` 參數的對應關係。

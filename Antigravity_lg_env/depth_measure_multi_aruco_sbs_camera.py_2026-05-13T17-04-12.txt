@@ -1,0 +1,24 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T17:04:12
+
+[減少的部分]
+行 401 附近 (compute_measure 原參數):
+-    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, is_single_calc=False, img_right_inst=None):
+
+行 469 附近 (原 SGBM 永遠使用 snap_imgA_gray):
+-                    rectA_s = cv2.remap(snap_imgA_gray, map1_L_s, map2_L_s, cv2.INTER_LINEAR)
+
+行 1145 附近 (calc_worker 原呼叫方式):
+-                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs, is_single_calc=req.get('is_single_calc', False), img_right_inst=req.get('img_right_inst'))
+
+[新增的部分]
+行 401 附近 (加入 img_left_inst 參數):
++    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, is_single_calc=False, img_right_inst=None, img_left_inst=None):
+
+行 469 附近 (時序模式下使用當前左圖):
++                    img_L_for_sgbm = img_left_inst if img_left_inst is not None else snap_imgA_gray
++                    rectA_s = cv2.remap(img_L_for_sgbm, map1_L_s, map2_L_s, cv2.INTER_LINEAR)
+
+行 1145 附近 (傳入當前左圖 imgB_gray_):
++                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs, is_single_calc=req.get('is_single_calc', False), img_right_inst=req.get('img_right_inst'), img_left_inst=imgB_gray_)

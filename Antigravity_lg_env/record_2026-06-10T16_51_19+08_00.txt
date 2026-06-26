@@ -1,0 +1,20 @@
+時間點: 2026-06-10T16:51:19+08:00
+
+使用者問題:
+請再多一個按鈕 實作 RGB-SIFT方法
+
+Antigravity的回答與修改方案:
+1. 實作了 RGB-SIFT 描述子計算邏輯：
+   新增了 compute_rgb_sift_descriptors 函數，將 BGR 影像拆分為 B、G、R 三個色彩通道，分別調用 SIFT 特徵檢測器計算 128 維描述子，然後水平串接 (hstack) 成一個 384 維的特徵向量。
+   
+2. 整合特徵提取與匹配：
+   - 於 run_improved_matching_flow 改良匹配流程與 compute_measure 之 Grad-SIFT 比對中加入了 RGB-SIFT 的條件分支。若開啟此功能，將分別取得左圖 (locked_L) 與右圖 (cand['rgb'] 轉 BGR) 的彩色影像進行 RGB-SIFT 提取。
+   - 因為描述子維度從 128 變為 384 (原來的 3 倍)，其 L2 歐氏距離會隨之增加。依等比例比例將篩選門檻由原先的 450 調整至 780，以保證匹配召回率與精度。
+   - 亦對 des_r 描述子加入防空指標與長度防護機制，防止特徵點匹配階段拋出崩潰異常。
+
+3. UI 介面按鈕整合：
+   - 在控制面板下方（Y = 0.74 處）新增按鈕 ax_c10，命名為 "[ ] 啟用 RGB-SIFT"，預設為關閉狀態。
+   - 將該按鈕綁定 make_on_opt 事件並更新 view_state['use_rgb_sift'] 的控制。
+   - 於畫面的點選匹配方法文字中同步更新，啟用時將方法標記為 "RGB-SIFT (Improved)" 或 "RGB-SIFT"。
+
+4. 已將檔案變更內容（包括行號、刪除與新增的行）記錄於 depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_2026-06-10T16_51_19+08_00.txt 中。

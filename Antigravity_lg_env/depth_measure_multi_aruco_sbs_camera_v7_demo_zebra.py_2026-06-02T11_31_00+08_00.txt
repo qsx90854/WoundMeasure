@@ -1,0 +1,123 @@
+修改時間: 2026-06-02T11:31:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L295 - L300):
+-            # 使用 cv2.undistortPoints 將角點去畸變，使其與去畸變後的影像對齊
+-            undist_corners = []
+-            for c in corners:
+-                c_undist = cv2.undistortPoints(c, mtx_L, dist_L, P=K_L)
+-                undist_corners.append(c_undist.reshape(4, 2))
+-            return dict(zip(ids_list, undist_corners))
+(約原 L335 - L402):
+-            ok_ref, rvec_ref, tvec_ref = cv2.solvePnP(canon, corners_dict[ref_id], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
+-            ok_m, rvec_m, tvec_m = cv2.solvePnP(canon, pts, K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
+-            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_dict[ref_id], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
+-            ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, K_L, np.zeros(5), rvec=rvec_init, tvec=tvec_init, useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
+...
+-            ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約原 L481 - L498):
+-    valid_poses = {}
+-    for item in valid_start + valid_end:
+-        valid_poses[item['idx']] = (item['R'], item['t'])
+-        
+-    return {
+-        'frame_A': frames[best_start['idx']],
+-        'frame_B': frames[best_end['idx']],
+-        'idx_A': best_start['idx'],
+-        'idx_B': best_end['idx'],
+-        'R_rel': R_rel,
+-        't_rel': t_rel,
+-        'baseline': baseline,
+-        'cornersA': best_start['corners'],
+-        'cornersB': best_end['corners'],
+-        'all_frames': frames,
+-        'valid_poses': valid_poses,
+-        'marker_map': marker_map
+-    }
+(約原 L587 - L590):
+-            ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約原 L633 - L635):
+-            ok_L, rv_L, tv_L = cv2.solvePnP(joint_objW, joint_imgA, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+-            ok_R, rv_R, tv_R = cv2.solvePnP(joint_objW, joint_imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約原 L674 - L678):
+-        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約原 L896 - L900):
+-            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約原 L1327 - L1331):
+-                        ok_origin, rv_o, tv_o = cv2.solvePnP(
+-                            canon, cand['cornersA'][min_id], KL, np.zeros(5),
+-                            flags=cv2.SOLVEPNP_ITERATIVE
+-                        )
+
+新增的部份:
+(約新 L295 - L298):
++            # 返回原始角點，位姿求解將在原始畸變空間中直接進行以獲取最高精度
++            raw_corners = [c.reshape(4, 2) for c in corners]
++            return dict(zip(ids_list, raw_corners))
+(約新 L335 - L402):
++            ok_ref, rvec_ref, tvec_ref = cv2.solvePnP(canon, corners_dict[ref_id], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
++            ok_m, rvec_m, tvec_m = cv2.solvePnP(canon, pts, mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
++            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_dict[ref_id], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+...
++            ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, mtx_L, dist_L, rvec=rvec_init, tvec=tvec_init, useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
+...
++            ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, mtx_L, dist_L, flags=cv2.SOLVEPNP_ITERATIVE)
+(約新 L481 - L508):
++    valid_poses = {}
++    for item in valid_start + valid_end:
++        valid_poses[item['idx']] = (item['R'], item['t'])
++        
++    def undistort_corners_dict(corners_dict):
++        undist = {}
++        for mid, pts in corners_dict.items():
++            pts_reshaped = pts.reshape(-1, 1, 2).astype(np.float32)
++            pts_undist = cv2.undistortPoints(pts_reshaped, mtx_L, dist_L, P=K_L)
++            undist[mid] = pts_undist.reshape(4, 2)
++        return undist
++
++    cornersA_undist = undistort_corners_dict(best_start['corners'])
++    cornersB_undist = undistort_corners_dict(best_end['corners'])
++        
++    return {
++        'frame_A': frames[best_start['idx']],
++        'frame_B': frames[best_end['idx']],
++        'idx_A': best_start['idx'],
++        'idx_B': best_end['idx'],
++        'R_rel': R_rel,
++        't_rel': t_rel,
++        'baseline': baseline,
++        'cornersA': cornersA_undist,
++        'cornersB': cornersB_undist,
++        'all_frames': frames,
++        'valid_poses': valid_poses,
++        'marker_map': marker_map
++    }
+(約新 L597 - L600):
++            ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+(約新 L643 - L655):
++            min_id = min(active_mids)
++            idxA_min = idsA_l.index(min_id)
++            idxB_min = idsB_l.index(min_id)
++            ok_L_init, rv_L_init, tv_L_init = cv2.solvePnP(canon, cA[idxA_min][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
++            ok_R_init, rv_R_init, tv_R_init = cv2.solvePnP(canon, cB[idxB_min][0], K_R, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
++            if ok_L_init and ok_R_init:
++                ok_L, rv_L, tv_L = cv2.solvePnP(joint_objW, joint_imgA, K_L, np.zeros(5), rvec=rv_L_init.copy().astype(np.float32), tvec=tv_L_init.copy().astype(np.float32), useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
++                ok_R, rv_R, tv_R = cv2.solvePnP(joint_objW, joint_imgB, K_R, np.zeros(5), rvec=rv_R_init.copy().astype(np.float32), tvec=tv_R_init.copy().astype(np.float32), useExtrinsicGuess=True, flags=cv2.SOLVEPNP_ITERATIVE)
++            else:
++                ok_L, rv_L, tv_L = cv2.solvePnP(joint_objW, joint_imgA, K_L, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
++                ok_R, rv_R, tv_R = cv2.solvePnP(joint_objW, joint_imgB, K_R, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
+(約新 L694 - L698):
++        ok, rv, tv = cv2.solvePnP(canon, cA[idxA][0], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+(約新 L916 - L920):
++            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
+(約新 L1347 - L1351):
++                        ok_origin, rv_o, tv_o = cv2.solvePnP(
++                            canon, cand['cornersA'][min_id], KL, np.zeros(5),
++                            flags=cv2.SOLVEPNP_IPPE_SQUARE
++                        )

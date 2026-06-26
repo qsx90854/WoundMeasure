@@ -1,0 +1,20 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T13-54-27
+
+[減少的部分]
+行 325-330:
+-    def on_opt(label):
+-        s = check_opt.get_status()
+-        view_state.update({'precise': s[0], 'grad_sift': s[1], 'enforce_epi': s[2], 'ecc': s[3], 'manual': s[4]})
+-        if label == "手動匹配模式" and not s[4]: view_state['manual_pt_A'] = None
+-    check_opt.on_clicked(on_opt)
+
+[新增的部分]
+行 325-331:
++    def on_opt(label):
++        s = check_opt.get_status()
++        view_state.update({'precise': s[0], 'grad_sift': s[1], 'enforce_epi': s[2], 'ecc': s[3], 'manual': s[4]})
++        if label == "手動匹配模式" and not s[4]: view_state['manual_pt_A'] = None
++        request_blit_refresh()
++    check_opt.on_clicked(on_opt)

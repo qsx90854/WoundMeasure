@@ -1,0 +1,62 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-13T09:47:49
+
+[減少的部分]
+行 1093 附近:
+-    _perf_t0 = _time.perf_counter()
+-
+-    while plt.fignum_exists(fig.number):
+
+行 1102 附近:
+-        frame_left = frame[:, :w_alg]
+-        frame_buffer.append(frame_left)
+
+行 970 附近 (on_calc):
+-            'is_single_calc': not auto_calc_active
+-        }
+
+行 1046 附近 (calc_worker):
+-                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs, is_single_calc=req.get('is_single_calc', False))
+
+行 392 附近 (compute_measure 簽名):
+-    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, is_single_calc=False):
+
+行 444-464 附近 (舊 SGBM 區塊):
+-                # 計算 SGBM 作為 Ground Truth (僅在單次計算時執行)
+-                if is_single_calc:
+-                    stereo = cv2.StereoSGBM_create(...)
+-                    # ... (舊的時序視差計算) ...
+
+[新增的部分]
+行 1093 附近:
++    _perf_t0 = _time.perf_counter()
++    
++    live_frame_right_box = [None]
++
++    while plt.fignum_exists(fig.number):
+
+行 1102 附近:
++        frame_left = frame[:, :w_alg]
++        frame_right = frame[:, w_alg:]
++        live_frame_right_box[0] = frame_right
++        frame_buffer.append(frame_left)
+
+行 970 附近 (on_calc):
++            'is_single_calc': not auto_calc_active,
++            'img_right_inst': live_frame_right_box[0]
++        }
+
+行 1046 附近 (calc_worker):
++                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs, is_single_calc=req.get('is_single_calc', False), img_right_inst=req.get('img_right_inst'))
+
+行 392 附近 (compute_measure 簽名):
++    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, is_single_calc=False, img_right_inst=None):
+
+行 444 附近 (新 SGBM 區塊):
++                # 計算 SGBM 作為 Ground Truth (僅在單次計算時執行，且有當前右圖)
++                if is_single_calc and img_right_inst is not None:
++                    # 使用固定外參進行立體校正
++                    R_fixed = np.array(extrinsic.get('R', np.eye(3)))
++                    t_fixed = np.array(extrinsic.get('T', np.zeros(3))).reshape(3, 1)
++                    # ... (讀取當前右圖並執行空間立體校正與 SGBM) ...

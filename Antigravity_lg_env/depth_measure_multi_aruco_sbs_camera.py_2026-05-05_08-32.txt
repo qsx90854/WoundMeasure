@@ -1,0 +1,14 @@
+檔案: depth_measure_multi_aruco_sbs_camera.py
+修改時間: 2026-05-05 08:32
+
+[新增的部分]
+- 實作互動式導航事件處理函式：`on_press`, `on_release`, `on_motion`, `on_scroll`。
+- 支援滑鼠中鍵/滾輪縮放。
+- 支援按住滑鼠左鍵進行畫面移動。
+
+[修改的部分]
+- 將點擊量測的觸發點由 `button_press` 改為 `button_release`。
+- 加入 `dragged` 狀態判斷，確保使用者在移動畫面時不會誤觸發量測點。
+
+[備註]
+此功能對於觀察微小特徵或調整點擊精準度非常有幫助。

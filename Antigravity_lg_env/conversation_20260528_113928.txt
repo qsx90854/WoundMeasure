@@ -1,0 +1,65 @@
+時間：2026-05-28 11:39:28
+
+使用者提問：
+depth_measure_multi_aruco_sbs_camera_v7_demo跟depth_measure_multi_aruco_sbs_camera_v7_demo_20260527_backup差異有哪些地方
+
+Antigravity回答：
+經過對兩個檔案的程式碼比對，主要差異集中在**「自訂平面擬合功能 (Custom Plane Fitting)」**的導入與對應 UI 控制。以下是詳細的差異點分析：
+
+### 1. 導入套件 (Imports) 的差異
+* **當前版本 (demo)**：
+  ```python
+  from matplotlib.patches import ConnectionPatch, Rectangle, Polygon
+  ```
+  導入了 `Polygon` 用於在左圖繪製自訂平面的多邊形網格。
+* **備份版本 (20260527_backup)**：
+  ```python
+  from matplotlib.patches import ConnectionPatch, Rectangle
+  ```
+
+### 2. 新增的 UI 按鈕與佈局
+* **當前版本 (demo)**：
+  * 在 UI 區塊新增了第 8 個按鈕：**「自訂平面擬合」** 按鈕 (`btn_custom_plane`)，座標為 `[0.88, 0.86, 0.08, 0.04]`。
+  * 該按鈕在 `btn_style` 的基礎上，依功能類別將邊框顏色設定為灰色 (`#555555`)。
+* **備份版本 (20260527_backup)**：
+  * 只有 7 個按鈕，無自訂平面按鈕。
+
+### 3. 自訂平面擬合機制的完整導入 (demo 新增的代碼邏輯)
+* **狀態變數宣告**：
+  當前版本在主函數中宣告了控制自訂平面狀態的變數：
+  `custom_plane_mode`, `custom_plane_pts_3d`, `custom_plane_pts_2d`, `custom_plane_n`, `custom_plane_c`, `custom_plane_fitted`, `custom_plane_artists`, `custom_plane_poly_artist`。
+* **多邊形繪製函數 (`redraw_custom_plane_poly`)**：
+  當前版本新增了此函數，當選點大於等於 3 個時，在左圖繪製一個半透明的洋紅色多邊形來視覺化自訂平面。
+* **點選點邏輯 (`do_measure`) 的改變**：
+  * 在 `custom_plane_mode` 啟用時，使用者的點選動作會被攔截。程式會計算該點的 3D 坐標，並將其加入 `custom_plane_pts_3d` 與 2D 坐標 `custom_plane_pts_2d`。
+  * 會在左圖的點擊位置繪製洋紅色的標記與序號（如 `P1`, `P2`, `P3`），並隨時更新按鈕文字顯示已選取的點數（如 `完成擬合 (3)`）。
+* **平面解算方法 (`on_custom_plane`)**：
+  當點擊「完成擬合」時，若點數大於等於 3，程式利用 SVD 分解來估計平面法向量與中心：
+  ```python
+  pts = np.array(custom_plane_pts_3d)
+  c = np.mean(pts, axis=0)
+  _, _, Vt = np.linalg.svd(pts - c)
+  n = Vt[-1]
+  if np.dot(n, c) > 0: n = -n
+  ```
+* **測量距離計算與顯示**：
+  在一般深度測量模式下，若已完成自訂平面擬合，程式會計算測量點相對於自訂平面的有向距離並顯示於 HUD 面板上：
+  ```python
+  proj_dist_signed = np.dot(custom_plane_n, p3d_c - custom_plane_c)
+  status = "高於" if proj_dist_signed > 0 else "低於"
+  custom_plane_str = f"\n距自訂平面: {status} {abs(proj_dist_signed):.1f}mm"
+  ```
+* **資源清理**：
+  在解鎖右圖 (`on_lock_R`) 的事件中，當前版本會自動重置所有自訂平面狀態並清除繪製的 Artist，防止舊的外參平面影響新的測量。
+
+### 4. 畫面渲染 (Blit) 的差異
+* **當前版本 (demo)**：
+  在主渲染循環中，手動 Blit 左圖覆蓋層時，額外繪製了自訂平面的多邊形和點標記：
+  ```python
+  if custom_plane_poly_artist is not None:
+      ax_A.draw_artist(custom_plane_poly_artist)
+  for a in custom_plane_artists:
+      ax_A.draw_artist(a)
+  ```
+* **備份版本 (20260527_backup)**：
+  無此渲染部分。

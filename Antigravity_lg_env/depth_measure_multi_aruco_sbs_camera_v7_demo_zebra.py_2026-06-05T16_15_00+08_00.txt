@@ -1,0 +1,65 @@
+修改時間：2026-06-05T16:15:00+08:00
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+本輪變更主要為「清理上一輪替換時越界產生的重複殘留代碼與語法損壞，使 Python 腳本恢復語法完整性」。
+
+【減少/刪除的部分】
+1. 刪除第 2391 行至 2402 行：
+-                print(f"📊 [三角化 3D 重投影誤差]")
+-                print(f"   - 左圖 (點選點 vs 3D點投影): {err_L_tri:.2f} px")
+-                print(f"   - 右圖 (極線對齊點 vs 3D點投影): {err_R_tri_aligned:.2f} px")
+-                if res.get('pt_raw') is not None:
+-                    err_R_tri_raw = np.linalg.norm(np.array(res['pt_raw']) - pt_reproj_B_tri)
+-                    print(f"   - 右圖 (原始未對齊匹配點 vs 3D點投影): {err_R_tri_raw:.2f} px (💡 反映特徵點偏離極線程度)")
+-                
+-            p_dist_str = ""
+-            if res['p3d'] is not None and current_cand['plane_n'] is not None:
+-                p_dist = abs(np.dot(current_cand['plane_n'], res['p3d'] - current_cand['plane_c']))
+
+2. 刪除第 2390 行至 2413 行：
+-                if custom_plane_fitted and p3d_c is not None and custom_plane_n is not None and custom_plane_c is not None:
+-                    proj_dist_signed = np.dot(custom_plane_n, p3d_c - custom_plane_c)
+-                    status = "高於" if proj_dist_signed > 0 else "低於"
+-                    custom_plane_str = f"\n距皮膚平面: {(proj_dist_signed):.1f}mm"
+-                
+-                if custom_plane_fitted:
+-                    main_text = f"相機與傷口距離(點選處): {res['d']:.1f}mm{custom_plane_str}\n"
+-                else:
+-                    main_text = (f"相機與傷口距離(點選處): {res['d']:.1f}mm\n"
+-                                 f"傷口高度(相對於標記): {p3d_w[2] + wound_z_offset:.1f}mm\n"
+-                                 )
+-            else:
+-                main_text = f"深度值(距離): 無效({res.get('fail_reason', '原因未知')}){p_dist_str}\n外參來源: {pose_info_str}"
+-        else:
+-            scatter_B.set_offsets(np.empty((0,2)))
+-            scatter_B_reproj.set_offsets(np.empty((0,2)))
+-            scatter_A_reproj.set_offsets(np.empty((0,2)))
+-            epi_line.set_data([], [])
+-            main_text = f"無效點({res.get('fail_reason', '無匹配點')})\n外參來源: {pose_info_str}"
+-        depth_text.set_text(main_text)
+-        request_blit_refresh()
+
+3. 刪除第 2394 行至 2409 行：
+-    pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False, 'dragging_hud': False}
+-    def on_press(event):
+-        if event.button != 1: return
+-        
+-        try:
+-            bbox = depth_text.get_window_extent(fig.canvas.get_renderer())
+-            if bbox.contains(event.x, event.y):
+-                pan_state['dragging_hud'] = True
+-                return
+-        except Exception:
+-            pass
+-            
+-        if event.inaxes not in (ax_A, ax_B): return
+-        pan_state.update({'pressing': True, 'dragged': False, 'x': event.x, 'y': event.y, 'ax': event.inaxes})
+
+4. 刪除第 2390 行至 2468 行（重複且老舊的 mouse release & motion 邏輯，舊邏輯僅限於 ax_B 且未做 Figure 坐標系轉換）：
+-    def on_release(event):
+-        ... (重複的 event 處理內容)
+-    def on_motion(event):
+-        ... (限制在 ax_B 的舊拖曳機制)
+
+【新增/保留的部分】
+1. 在第 2296 行至 2390 行保留了全新設計的 draggable HUD 與 event press/release/motion 機制，能流暢在整個 Matplotlib 視窗中跟手拖曳深度數值視窗。

@@ -1,0 +1,59 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T15-36-54
+
+[減少的部分]
+行 259:
+-    sift = cv2.SIFT_create(contrastThreshold=0.005)
+
+行 321:
+-    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
+-                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+-                  'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
+-                  'grad_data': None}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+行 417:
+-                    _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+
+行 431-434:
+-                        _, des_r = sift.compute(cand['gray'], kpts_r)
+-                        if des_inj is not None and des_r is not None:
+-                            bf = cv2.BFMatcher(cv2.NORM_HAMMING); matches = bf.match(des_inj, des_r)
+-                            good = [m for m in matches if m.distance < 450]
+
+[新增的部分]
+行 259-260:
++    sift = cv2.SIFT_create(contrastThreshold=0.005)
++    orb = cv2.ORB_create(nfeatures=1000) # 新增 ORB 用於 NORM_HAMMING
+
+行 321-323:
++    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
++                  'use_hamming': False, # 新增：切換 NORM_HAMMING 模式
++                  'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
+
+行 372-380:
++    ax_btn_norm = fig.add_axes([0.5, 0.02, 0.15, 0.05])
++    btn_norm_toggle = Button(ax_btn_norm, '切換 NORM_HAMMING')
++    def on_norm_toggle(event):
++        view_state['use_hamming'] = not view_state['use_hamming']
++        btn_norm_toggle.label.set_text('使用 NORM_L2' if view_state['use_hamming'] else '使用 NORM_HAMMING')
++        request_blit_refresh()
++    btn_norm_toggle.on_clicked(on_norm_toggle)
+
+行 417-422:
++                    if snap_view_state.get('use_hamming', False):
++                        _, des_inj = orb.compute(snap_imgA_gray, kpts_inj)
++                    else:
++                        _, des_inj = sift.compute(snap_imgA_gray, kpts_inj)
+
+行 431-443:
++                        if snap_view_state.get('use_hamming', False):
++                            _, des_r = orb.compute(cand['gray'], kpts_r)
++                            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
++                            matches = bf.match(des_inj, des_r)
++                            good = [m for m in matches if m.distance < 50] # 漢明距離閾值設為 50
++                        else:
++                            _, des_r = sift.compute(cand['gray'], kpts_r)
++                            bf = cv2.BFMatcher(cv2.NORM_L2)
++                            matches = bf.match(des_inj, des_r)
++                            good = [m for m in matches if m.distance < 450]

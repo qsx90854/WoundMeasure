@@ -1,0 +1,44 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T11-45-48
+
+[減少的部分]
+行 987-991:
+-        # 兩路徑都需要 draw_artist + blit，確保畫面不空白
+-        ax_A.draw_artist(im_A)
+-        ax_B.draw_artist(im_B)
+-        ax_A.draw_artist(fps_text)
+-        fig.canvas.blit(fig.bbox)
+
+[新增的部分]
+行 987-1012:
++        # 兩路徑都需要 draw_artist + blit，確保畫面不空白
++        ax_A.draw_artist(im_A)
++        ax_B.draw_artist(im_B)
++        
++        # === 手動繪製覆蓋層（解決點、線被影像遮擋的問題） ===
++        # 1. 散點與基礎幾何
++        ax_A.draw_artist(scatter_A)
++        ax_B.draw_artist(scatter_B)
++        ax_A.draw_artist(scatter_grad_inject)
++        ax_B.draw_artist(scatter_grad_match)
++        ax_B.draw_artist(scatter_all_sift_B)
++        ax_B.draw_artist(epi_line)
++        ax_B.draw_artist(sift_rect)
++        ax_B.draw_artist(sift_rect_center)
++
++        # 2. 梯度 SIFT 連線
++        for line in view_state.get('grad_lines', []):
++            ax_B.draw_artist(line)
++        if view_state.get('highlighted_grad_line_artist'):
++            ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
++
++        # 3. ArUco 標記 (儲存在 ax.art 中)
++        for ax in [ax_A, ax_B]:
++            if hasattr(ax, 'art'):
++                for a in ax.art:
++                    ax.draw_artist(a)
++        # =========================================================
++
++        ax_A.draw_artist(fps_text)
++        fig.canvas.blit(fig.bbox)

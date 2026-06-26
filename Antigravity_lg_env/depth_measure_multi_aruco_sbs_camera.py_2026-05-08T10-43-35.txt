@@ -1,0 +1,37 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T10-43-35
+
+[減少的部分]
+行 596-641 (原始 Live 迴圈):
+    plt.show(block=False)
+    
+    last_exec_time = 0
+    while plt.fignum_exists(fig.number):
+        ...
+        imgA_bgr, _ = process_view(raw_B, mtxL_o, distL, newKL_o)
+        ...
+        imgB_bgr, _ = process_view(raw_A, mtxL_o, distL, newKL_o)
+        ...
+
+[新增的部分]
+行 601 開始的新 Live 迴圈 (加入 Baseline 判斷與角色互換):
+    plt.show(block=False)
+    
+    last_exec_time = 0
+    stored_raw_B = None # 用於鎖定 Frame B
+    
+    while plt.fignum_exists(fig.number):
+        ...
+        raw_A = frame_buffer[-1] # Frame A (當前)
+        ...
+        # 1. 改成用當前 frame 作為左圖 (imgA)，frame B 作為右圖 (imgB)
+        imgA_bgr, _ = process_view(raw_A, mtxL_o, distL, newKL_o)
+        imgB_bgr, _ = process_view(stored_raw_B, mtxL_o, distL, newKL_o)
+        ...
+        # 2. 計算 Baseline
+        res_pose = get_joint_relative_pose(imgA_gray, imgB_gray, KL, KL, ACTUAL_MARKER_SIZE_MM)
+        ...
+        if baseline_val >= 15.0:
+            stored_raw_B = frame_buffer[0]
+        ...

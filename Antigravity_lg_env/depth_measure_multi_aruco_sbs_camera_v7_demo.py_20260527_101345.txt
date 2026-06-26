@@ -1,0 +1,466 @@
+修改檔案：depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間：2026-05-27 10:13:45
+
+--------------------------------------------------
+1. 新增變數與按鈕佈局 (約行 934 - 996)
+減少的部分：
+無
+
+新增的部分：
++   locked_R_list = []
++   locked_R_mode = 'single'
++   ax_btn_lock_3R = fig.add_axes([0.88, 0.86, 0.08, 0.04])
++   btn_lock_3R = Button(ax_btn_lock_3R, "鎖定3張右圖", **btn_style)
+
+--------------------------------------------------
+2. 修改按鈕事件處理與快照傳遞 (約行 1051 - 1088)
+減少的部分：
+-    def on_lock_R(event):
+-        nonlocal live_R, locked_R, has_set_R, reset_pose_history
+-        live_R = not live_R
+-        if not live_R:
+-            if len(frame_buffer) > 0:
+-                locked_R = frame_buffer[-1].copy()
+-                has_set_R = True
+-                btn_lock_R.label.set_text("解鎖右圖")
+-                print("🔒 右圖已鎖定當前畫面")
+-                if not live_L:
+-                    on_calc(None)
+-        else:
+-            btn_lock_R.label.set_text("鎖定右圖")
+-            print("🔓 右圖恢復 Live")
+-        reset_pose_history = True
+-        request_blit_refresh()
+-        
+-    def on_calc(event):
+-        if not has_set_R:
+-            print("⚠️ 請先鎖定右圖！")
+-            return
+-        # 快照計算所需數據，存入 request queue（不阻塞主執行緒）
+-        current_L_snap   = frame_buffer[-1].copy() if live_L and len(frame_buffer) > 0 else locked_L
+-        req = {
+-            'raw_imgA':   current_L_snap,
+-            'raw_imgB':   locked_R,
+-            'cand':       dict(current_cand),
+-            'view_state': dict(view_state),
+-            'u': active_u, 'v': active_v
+-        }
+-        # 丟棄積壓的舊請求，只保留最新一次
+-        while not calc_request_q.empty():
+-            try: calc_request_q.get_nowait()
+-            except: pass
+-        try:
+-            calc_request_q.put_nowait(req)
+-        except queue.Full:
+-            pass
+
+新增的部分：
++    def on_lock_R(event):
++        nonlocal live_R, locked_R, has_set_R, reset_pose_history, locked_R_mode
++        live_R = not live_R
++        if not live_R:
++            if len(frame_buffer) > 0:
++                locked_R = frame_buffer[-1].copy()
++                locked_R_mode = 'single'
++                has_set_R = True
++                btn_lock_R.label.set_text("解鎖右圖")
++                btn_lock_3R.label.set_text("鎖定3張右圖")
++                print("🔒 右圖已鎖定當前畫面")
++                if not live_L:
++                    on_calc(None)
++        else:
++            btn_lock_R.label.set_text("鎖定右圖")
++            btn_lock_3R.label.set_text("鎖定3張右圖")
++            print("🔓 右圖恢復 Live")
++        reset_pose_history = True
++        request_blit_refresh()
++        
++    def on_lock_3R(event):
++        nonlocal live_R, locked_R, locked_R_list, has_set_R, reset_pose_history, locked_R_mode
++        live_R = not live_R
++        if not live_R:
++            if len(frame_buffer) > 0:
++                # 連續抓取 3 張右圖影格以平均抑制雜訊
++                locked_R_list = []
++                indices = [-1, -2, -3]
++                for idx in indices:
++                    buf_idx = len(frame_buffer) + idx
++                    buf_idx = max(0, min(buf_idx, len(frame_buffer) - 1))
++                    locked_R_list.append(frame_buffer[buf_idx].copy())
++                # 為了相容顯示，以第一張作為主顯示影像
++                locked_R = locked_R_list[0].copy()
++                locked_R_mode = 'multi3'
++                has_set_R = True
++                btn_lock_R.label.set_text("鎖定右圖")
++                btn_lock_3R.label.set_text("解鎖右圖")
++                print("🔒 右圖已啟動連續 3 幀鎖定")
++                if not live_L:
++                    on_calc(None)
++        else:
++            btn_lock_R.label.set_text("鎖定右圖")
++            btn_lock_3R.label.set_text("鎖定3張右圖")
++            print("🔓 右圖恢復 Live")
++        reset_pose_history = True
++        request_blit_refresh()
++        
++    def on_calc(event):
++        if not has_set_R:
++            print("⚠️ 請先鎖定右圖！")
++            return
++        # 快照計算所需數據，存入 request queue（不阻塞主執行緒）
++        current_L_snap   = frame_buffer[-1].copy() if live_L and len(frame_buffer) > 0 else locked_L
++        req = {
++            'raw_imgA':   current_L_snap,
++            'raw_imgB':   locked_R,
++            'locked_R_list': [img.copy() for img in locked_R_list] if (not live_R and locked_R_mode == 'multi3') else None,
++            'locked_R_mode': locked_R_mode if not live_R else 'single',
++            'cand':       dict(current_cand),
++            'view_state': dict(view_state),
++            'u': active_u, 'v': active_v
++        }
++        # 丟棄積壓 of 舊請求，只保留最新一次
++        while not calc_request_q.empty():
++            try: calc_request_q.get_nowait()
++            except: pass
++        try:
++            calc_request_q.put_nowait(req)
++        except queue.Full:
++            pass
+
+--------------------------------------------------
+3. 修改背景執行緒位姿融合與點匹配平均 (約行 1157 - 1248)
+減少的部分：
+-                imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
+-                imgB_gray_ = cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)
+-
+-                # ---------- ArUco 位姿解算 ----------
+-
+-                res_pose = get_joint_relative_pose(
+-                    snap_imgA_gray, imgB_gray_, KL, KL, ACTUAL_MARKER_SIZE_MM,
+-                    prev_marker_poses=history_marker_poses,
+-                    prev_rel_pose=history_rel_pose
+-                )
+-                baseline_val = 0.0
+-                pose_valid = False
+-                pose_info = "未偵測到 ArUco"
+-                R_r, t_r = None, None
+-                cA_dict, cB_dict = {}, {}
+-
+-                if res_pose is not None:
+-                    R_r, t_r, baseline_val, objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_r = res_pose
+-                    pose_valid = True
+-                    
+-                    # 更新歷史標籤位姿
+-                    history_marker_poses = curr_marker_poses
+-                    
+-                    # 進行時序 EMA 平滑濾波
+-                    if ENABLE_POSE_SMOOTHING:
+-                        if filtered_rv_rel is None or filtered_tv_rel is None:
+-                            filtered_rv_rel = rv_r.copy()
+-                            filtered_tv_rel = t_r.copy()
+-                        else:
+-                            alpha = POSE_SMOOTHING_ALPHA
+-                            filtered_tv_rel = alpha * t_r + (1.0 - alpha) * filtered_tv_rel
+-                            filtered_rv_rel = alpha * rv_r + (1.0 - alpha) * filtered_rv_rel
+-                        
+-                        # 覆蓋 R_r 與 t_r 以便後續三角測量計算
+-                        t_r = filtered_tv_rel.copy()
+-                        rv_r_smooth = filtered_rv_rel.copy()
+-                        R_r, _ = cv2.Rodrigues(rv_r_smooth)
+-                        baseline_val = float(np.linalg.norm(t_r))
+-                        
+-                    # 更新歷史相對位姿供下一幀 extrinsic guess 使用
+-                    if ENABLE_POSE_SMOOTHING:
+-                        history_rel_pose = (filtered_rv_rel.copy(), filtered_tv_rel.copy())
+-                    else:
+-                        history_rel_pose = (rv_r.copy(), t_r.copy())
+-                        
+-                    direction = "向左" if t_r[0] > 0 else "向右"
+-                    pose_info = f"ArUco 定位(Bsl: {baseline_val:.1f}mm, {direction})"
+-                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
+-                    
+-                    # 🌟 透過立體三角測量計算所有共享角點的 3D 座標，用來擬合平面
+-                    all_pts3d = []
+-                    for mid in shared:
+-                        ptsA = cA_dict[mid] # 4x2
+-                        ptsB = cB_dict[mid] # 4x2
+-                        for i in range(4):
+-                            p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
+-                            all_pts3d.append(p3d)
+-                            
+-                    if len(all_pts3d) >= 3:
+-                        all_pts3d = np.array(all_pts3d)
+-                        c_local = np.mean(all_pts3d, axis=0)
+-                        _, _, Vt = np.linalg.svd(all_pts3d - c_local)
+-                        n_local = Vt[-1]
+-                        if np.dot(n_local, c_local) > 0: n_local = -n_local
+-                    else:
+-                        n_local, c_local = global_plane_n, global_plane_c
+-                else:
+-                    print("❌ 未偵測到共享 ArUco")
+-                    n_local, c_local = global_plane_n, global_plane_c
+-                kb, db = sift.detectAndCompute(imgB_gray_, None)
+-
+-                # 更新 snap_cand
+-                snap_cand = dict(snap_cand)
+-                snap_cand.update({
+-                    'rgb': cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2RGB),
+-                    'gray': imgB_gray_,
+-                    'kpB': kb, 'desB': db,
+-                    'plane_n': n_local, 'plane_c': c_local,
+-                    'pose_info': pose_info, 'pose_valid': pose_valid,
+-                    'baseline': baseline_val,
+-                    'cornersA': cA_dict, 'cornersB': cB_dict,
+-                    'curr_marker_poses': curr_marker_poses if pose_valid else {}
+-                })
+-                if pose_valid:
+-                    snap_cand.update({
+-                        'R_rel': R_r, 't_rel': t_r,
+-                        'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
+-                    })
+-
+-                # ---------- 特徵匹配與深度計算 ----------
+-                measure_res = compute_measure(u, v, snap_cand, snap_imgA_gray, snap_vs)
+
+新增的部分：
++                # ---------- 在背景執行緒進行耗時的反畸變與灰階轉換 ----------
++                locked_R_mode = req.get('locked_R_mode', 'single')
++                locked_R_list_raw = req.get('locked_R_list', None)
++                
++                if locked_R_mode == 'multi3' and locked_R_list_raw is not None:
++                    imgB_grays = []
++                    imgB_bgrs = []
++                    for raw_R in locked_R_list_raw:
++                        bgr, _ = process_view(raw_R, mtxL_o, distL, newKL_o)
++                        imgB_bgrs.append(bgr)
++                        imgB_grays.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY))
++                    imgB_bgr_disp = imgB_bgrs[0]
++                    imgB_gray_disp = imgB_grays[0]
++                else:
++                    imgB_bgr_, _ = process_view(req['raw_imgB'], mtxL_o, distL, newKL_o)
++                    imgB_bgrs = [imgB_bgr_]
++                    imgB_grays = [cv2.cvtColor(imgB_bgr_, cv2.COLOR_BGR2GRAY)]
++                    imgB_bgr_disp = imgB_bgr_
++                    imgB_gray_disp = imgB_grays[0]
++
++                # ---------- ArUco 位姿解算 ----------
++                all_R_r, all_t_r, all_rv_r = [], [], []
++                all_baselines = []
++                all_objA = []
++                all_cA_dicts, all_cB_dicts = [], []
++                all_curr_marker_poses = []
++                all_shared = []
++                
++                temp_history_marker_poses = dict(history_marker_poses)
++                temp_history_rel_pose = history_rel_pose
++                
++                for imgB_gray_i in imgB_grays:
++                    res_pose = get_joint_relative_pose(
++                        snap_imgA_gray, imgB_gray_i, KL, KL, ACTUAL_MARKER_SIZE_MM,
++                        prev_marker_poses=temp_history_marker_poses,
++                        prev_rel_pose=temp_history_rel_pose
++                    )
++                    if res_pose is not None:
++                        R_r_i, t_r_i, baseline_i, objA_i, shared_i, cA_dict_i, cB_dict_i, curr_marker_poses_i, rv_r_i = res_pose
++                        all_R_r.append(R_r_i)
++                        all_t_r.append(t_r_i)
++                        all_rv_r.append(rv_r_i)
++                        all_baselines.append(baseline_i)
++                        all_objA.append(objA_i)
++                        all_cA_dicts.append(cA_dict_i)
++                        all_cB_dicts.append(cB_dict_i)
++                        all_curr_marker_poses.append(curr_marker_poses_i)
++                        all_shared.append(shared_i)
++                
++                baseline_val = 0.0
++                pose_valid = False
++                pose_info = "未偵測到 ArUco"
++                R_r, t_r = None, None
++                cA_dict, cB_dict = {}, {}
++                n_local, c_local = global_plane_n, global_plane_c
++                curr_marker_poses = {}
++                shared = []
++
++                if len(all_R_r) > 0:
++                    pose_valid = True
++                    # 融合平均 T 與 Rodrigues rv
++                    t_r = np.mean(all_t_r, axis=0)
++                    rv_r = np.mean(all_rv_r, axis=0)
++                    R_r, _ = cv2.Rodrigues(rv_r)
++                    baseline_val = float(np.linalg.norm(t_r))
++                    
++                    # 使用第一影格偵測結果為顯示基礎
++                    cA_dict = all_cA_dicts[0]
++                    cB_dict = all_cB_dicts[0]
++                    shared = all_shared[0]
++                    
++                    # 對每個共享標籤姿態進行平均
++                    merged_marker_poses = {}
++                    for mid in cA_dict.keys():
++                        m_rvs, m_tvs = [], []
++                        for cmp in all_curr_marker_poses:
++                            if mid in cmp:
++                                m_rvs.append(cmp[mid][0])
++                                m_tvs.append(cmp[mid][1])
++                        if m_rvs:
++                            merged_marker_poses[mid] = (np.mean(m_rvs, axis=0), np.mean(m_tvs, axis=0))
++                    curr_marker_poses = merged_marker_poses
++                    
++                    # 更新歷史標籤位姿
++                    history_marker_poses = curr_marker_poses
++                    
++                    # 進行時序 EMA 平滑濾波
++                    if ENABLE_POSE_SMOOTHING:
++                        if filtered_rv_rel is None or filtered_tv_rel is None:
++                            filtered_rv_rel = rv_r.copy()
++                            filtered_tv_rel = t_r.copy()
++                        else:
++                            alpha = POSE_SMOOTHING_ALPHA
++                            filtered_tv_rel = alpha * t_r + (1.0 - alpha) * filtered_tv_rel
++                            filtered_rv_rel = alpha * rv_r + (1.0 - alpha) * filtered_rv_rel
++                        
++                        t_r = filtered_tv_rel.copy()
++                        rv_r_smooth = filtered_rv_rel.copy()
++                        R_r, _ = cv2.Rodrigues(rv_r_smooth)
++                        baseline_val = float(np.linalg.norm(t_r))
++                        
++                    # 更新歷史相對位姿供下一幀 extrinsic guess 使用
++                    if ENABLE_POSE_SMOOTHING:
++                        history_rel_pose = (filtered_rv_rel.copy(), filtered_tv_rel.copy())
++                    else:
++                        history_rel_pose = (rv_r.copy(), t_r.copy())
++                        
++                    direction = "向左" if t_r[0] > 0 else "向右"
++                    mode_str = "3幀平均" if locked_R_mode == 'multi3' else "單幀"
++                    pose_info = f"ArUco 定位({mode_str}, Bsl: {baseline_val:.1f}mm, {direction})"
++                    print(f"  - 計算出的時序 Baseline: {baseline_val:.2f} mm")
++                    
++                    # 🌟 透過立體三角測量計算所有共享角點的 3D 座標，用來擬合平面
++                    all_pts3d = []
++                    for mid in shared:
++                        ptsA = cA_dict[mid] # 4x2
++                        ptsB = cB_dict[mid] # 4x2
++                        for i in range(4):
++                            p3d = triangulate_point_3d(ptsA[i], ptsB[i], KL, KL, R_r, t_r)
++                            all_pts3d.append(p3d)
++                            
++                    if len(all_pts3d) >= 3:
++                        all_pts3d = np.array(all_pts3d)
++                        c_local = np.mean(all_pts3d, axis=0)
++                        _, _, Vt = np.linalg.svd(all_pts3d - c_local)
++                        n_local = Vt[-1]
++                        if np.dot(n_local, c_local) > 0: n_local = -n_local
++                    else:
++                        n_local, c_local = global_plane_n, global_plane_c
++                else:
++                    print("❌ 未偵測到共享 ArUco")
++                    n_local, c_local = global_plane_n, global_plane_c
++
++                # 建立各個影格對應的 cand 字典用於多幀特徵匹配
++                cand_list = []
++                for i in range(len(imgB_grays)):
++                    gray_i = imgB_grays[i]
++                    bgr_i = imgB_bgrs[i]
++                    if snap_vs.get('use_hamming', False):
++                        kb_i, db_i = orb.detectAndCompute(gray_i, None)
++                    else:
++                        kb_i, db_i = sift.detectAndCompute(gray_i, None)
++                    
++                    cand_i = dict(snap_cand)
++                    cand_i.update({
++                        'rgb': cv2.cvtColor(bgr_i, cv2.COLOR_BGR2RGB),
++                        'gray': gray_i,
++                        'kpB': kb_i, 'desB': db_i,
++                        'plane_n': n_local, 'plane_c': c_local,
++                        'pose_info': pose_info, 'pose_valid': pose_valid,
++                        'baseline': baseline_val,
++                        'cornersA': cA_dict, 'cornersB': cB_dict,
++                        'curr_marker_poses': curr_marker_poses if pose_valid else {}
++                    })
++                    if pose_valid:
++                        cand_i.update({
++                            'R_rel': R_r, 't_rel': t_r,
++                            'F': compute_fundamental_matrix(KL, KL, R_r, t_r)
++                        })
++                    cand_list.append(cand_i)
++                
++                # 預設以首張作為顯示輸出 cand
++                snap_cand = cand_list[0]
++
++                # ---------- 特徵匹配與深度計算 ----------
++                all_m_pts = []
++                all_measure_res = []
++                for cand_i in cand_list:
++                    res_i = compute_measure(u, v, cand_i, snap_imgA_gray, snap_vs)
++                    all_measure_res.append(res_i)
++                    if res_i.get('pt') is not None:
++                        all_m_pts.append(res_i['pt'])
++                
++                measure_res = all_measure_res[0].copy()
++                if len(all_m_pts) > 0:
++                    m_pt_avg = np.mean(all_m_pts, axis=0)
++                    measure_res['pt'] = m_pt_avg
++                    
++                    # 重新計算最終的三角測量與世界座標
++                    if pose_valid:
++                        # 再次進行極線強制對齊
++                        if snap_vs['enforce_epi'] and measure_res.get('method') != "ArUco":
++                            l_B = snap_cand['F'] @ np.array([u, v, 1.0])
++                            denom = l_B[0]**2 + l_B[1]**2
++                            if denom > 1e-9:
++                                dist_e = (l_B[0]*m_pt_avg[0] + l_B[1]*m_pt_avg[1] + l_B[2]) / np.sqrt(denom)
++                                m_pt_avg = np.array([m_pt_avg[0] - l_B[0]/np.sqrt(denom)*dist_e,
++                                                     m_pt_avg[1] - l_B[1]/np.sqrt(denom)*dist_e])
++                                measure_res['pt'] = m_pt_avg
++                        
++                        p3d = triangulate_point_3d((u, v), m_pt_avg, KL, KL, R_r, t_r)
++                        if p3d[2] <= 0:
++                            measure_res['fail_reason'] = "深度為負(在相機後方)"
++                            measure_res['p3d'] = None
++                            measure_res['d'] = None
++                            measure_res['p3d_w'] = None
++                        elif p3d[2] > MAX_DEPTH_MM:
++                            measure_res['fail_reason'] = "超過最大深度"
++                            measure_res['p3d'] = None
++                            measure_res['d'] = None
++                            measure_res['p3d_w'] = None
++                        else:
++                            measure_res['p3d'] = p3d
++                            measure_res['d'] = float(np.linalg.norm(p3d))
++                            measure_res['fail_reason'] = ""
++                            
++                            # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
++                            if snap_cand.get('cornersA'):
++                                min_id = min(snap_cand['cornersA'].keys())
++                                if 'curr_marker_poses' in snap_cand and min_id in snap_cand['curr_marker_poses']:
++                                    rv_o, tv_o = snap_cand['curr_marker_poses'][min_id]
++                                    R_o, _ = cv2.Rodrigues(rv_o)
++                                    p3d_w = R_o.T @ (p3d.reshape(3, 1) - tv_o.reshape(3, 1))
++                                    measure_res['p3d_w'] = p3d_w.flatten()
++                else:
++                    measure_res = {
++                        'pt': None, 'p3d': None, 'p3d_w': None, 'd': None, 'method': '', 'neighbors': [],
++                        'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                        'fail_reason': '所有幀匹配失敗', 'u': u, 'v': v
++                    }
+
+--------------------------------------------------
+4. 按鈕 callback 註冊 (約行 1265 - 1272)
+減少的部分：
+-    btn_lock_L.on_clicked(on_lock_L)
+-    btn_lock_R.on_clicked(on_lock_R)
+-    btn_calc.on_clicked(on_calc)
+-    btn_auto_calc.on_clicked(on_auto_calc)
+-    btn_hide_R.on_clicked(on_hide_R)
+-    btn_grad_toggle.on_clicked(on_grad_toggle)
+-    btn_norm_toggle.on_clicked(on_norm_toggle)
+
+新增的部分：
++    btn_lock_L.on_clicked(on_lock_L)
++    btn_lock_R.on_clicked(on_lock_R)
++    btn_lock_3R.on_clicked(on_lock_3R)
++    btn_calc.on_clicked(on_calc)
++    btn_auto_calc.on_clicked(on_auto_calc)
++    btn_hide_R.on_clicked(on_hide_R)
++    btn_grad_toggle.on_clicked(on_grad_toggle)
++    btn_norm_toggle.on_clicked(on_norm_toggle)

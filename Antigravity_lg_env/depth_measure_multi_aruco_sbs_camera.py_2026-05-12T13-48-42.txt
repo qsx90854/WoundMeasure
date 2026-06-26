@@ -1,0 +1,36 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T13-48-42
+
+[減少的部分]
+行 448-456:
+-                        if snap_view_state.get('use_hamming', False):
+-                            _, des_r = orb.compute(cand['gray'], kpts_r)
+-                            bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+-                            matches = bf.match(des_inj, des_r)
+-                            good = [m for m in matches if m.distance < 100]
+-                        else:
+-                            _, des_r = sift.compute(cand['gray'], kpts_r)
+-                            bf = cv2.BFMatcher(cv2.NORM_L2)
+-                            matches = bf.match(des_inj, des_r)
+-                            good = [m for m in matches if m.distance < 450]
+
+[新增的部分]
+行 447-463:
++                        good = []
++                        if snap_view_state.get('use_hamming', False):
++                            _, des_r = orb.compute(cand['gray'], kpts_r)
++                            if des_inj is not None and des_r is not None and len(des_r) >= 2:
++                                bf = cv2.BFMatcher(cv2.NORM_HAMMING)
++                                matches = bf.knnMatch(des_inj, des_r, k=2)
++                                for m_n in matches:
++                                    if len(m_n) == 2 and m_n[0].distance < 0.8 * m_n[1].distance:
++                                        good.append(m_n[0])
++                        else:
++                            _, des_r = sift.compute(cand['gray'], kpts_r)
++                            if des_inj is not None and des_r is not None and len(des_r) >= 2:
++                                bf = cv2.BFMatcher(cv2.NORM_L2)
++                                matches = bf.knnMatch(des_inj, des_r, k=2)
++                                for m_n in matches:
++                                    if len(m_n) == 2 and m_n[0].distance < 0.75 * m_n[1].distance:
++                                        good.append(m_n[0])

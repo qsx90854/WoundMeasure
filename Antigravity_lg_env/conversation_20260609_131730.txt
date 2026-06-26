@@ -1,0 +1,12 @@
+時間點: 2026-06-09T13:17:30+08:00
+
+使用者提問:
+請改成次要frame不要強制關閉這些處理, 用一個變數讓我控制要不要
+
+助手回答:
+已將原先強制關閉次要影格 ECC 和 Precise 計算的寫死邏輯重構。
+在 `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 與 `depth_measure_multi_aruco_sbs_camera_v7_demo_live.py` 檔案的頂端全域變數區新增控制開關：
+`DISABLE_EXTRA_CANDS_ECC_PRECISE = True` (預設為 True)。
+* 當設為 `True` 時，將跳過次要融合幀的 ECC/Precise 計算，此時測量反應速度最快（幾百毫秒）。
+* 當設為 `False` 時，次要影格也會進行完整的精確匹配與 ECC 亞像素精修，可以供研究高精度表現，但點選後需等待數秒。
+相關變更對照與對話日誌已存至專案目錄的 `Antigravity_lg_env` 底下。

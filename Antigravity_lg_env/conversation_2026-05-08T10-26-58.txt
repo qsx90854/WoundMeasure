@@ -1,0 +1,12 @@
+時間: 2026-05-08T10-26-58
+使用者請求:
+34~37行的變數因為目前程式流程有改變 應該已經用不到了 請將相關程式碼刪除
+
+回答訊息:
+已在 `depth_measure_multi_aruco_sbs_camera.py` 中刪除行 34 至 37 與舊影片流程相關的變數：
+- `videoframe_leftImage_index`
+- `videoframe_total_number`
+- `videoframe_left_to_right_gap`
+- `videoframe_right_to_right_gap`
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

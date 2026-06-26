@@ -1,0 +1,73 @@
+修改時間：2026-06-05T16:14:34+08:00
+修改檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+本輪變更主要為「將進度條跑完與主 UI 彈出之間的重度 CPU 計算（去畸變、平面擬合與最佳/次佳影像的 SIFT 特徵提取）移至背景分析執行緒中非同步執行，並由進度條視窗即時反饋狀態，顯著提升 MeasureTool UI 的載入流暢度」。
+
+【減少的部分】
+1. 減少第 658 行至 676 行（原 analyze_video_frames 返回前無背景特徵提取處理）：
+-    if progress_callback:
+-        progress_callback(100, "分析完成，即將載入主量測介面...")
+-        
+-    return {
+-        'frame_A': frames[best_start['idx']],
+-        'frame_B': frames[best_end['idx']],
+-        'idx_A': best_start['idx'],
+-        'idx_B': best_end['idx'],
+-        'R_rel': R_rel,
+-        't_rel': t_rel,
+-        'baseline': baseline,
+-        'cornersA': cornersA_undist,
+-        'cornersB': cornersB_undist,
+-        'all_frames': frames,
+-        'valid_poses': valid_poses,
+-        'marker_map': marker_map,
+-        'extra_candidates': extra_candidates_info,
+-        'min_reproj_err': best_reproj_err
+-    }
+
+2. 減少第 1421 行至 1483 行（原 main() 內於主執行緒同步進行平面計算與 SIFT 特徵提取）：
+-    global_plane_n, global_plane_c = compute_global_plane(imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+-    ...
+-    # 計算右圖的 SIFT 特徵
+-    kb, db = sift.detectAndCompute(current_cand['gray'], None)
+-    current_cand.update({'kpB': kb, 'desB': db})
+-    ...
+-    for extra in video_data.get('extra_candidates', []):
+-        ...
+-        kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
+-        extra_cand.update({'kpB': kb_e, 'desB': db_e})
+
+【新增的部分】
+1. 新增第 658 行至 714 行（在 analyze_video_frames 背景線程中執行去畸變校正、平面擬合以及 SIFT 特徵檢索，並包含進度回報）：
++    if progress_callback:
++        progress_callback(92, "正在進行去畸變影像校正...")
++    ...
++    global_plane_n, global_plane_c = compute_global_plane(imgA_gray, K_L, marker_size_mm)
++    ...
++    kb, db = sift.detectAndCompute(imgB_gray, None)
++    ...
++    for idx_extra, extra in enumerate(extra_candidates_info):
++        ...
++        kb_e, db_e = sift.detectAndCompute(imgB_extra_gray, None)
++        extra['kpB'] = kb_e
++        extra['desB'] = db_e
+
+2. 新增第 1421 行至 1485 行（在 main() 主執行緒中優先從背景獲取預算好的平面參數與 SIFT 特徵，並附帶降級 fallback 計算）：
++    global_plane_n = video_data.get('global_plane_n')
++    global_plane_c = video_data.get('global_plane_c')
++    if global_plane_n is None or global_plane_c is None:
++        global_plane_n, global_plane_c = compute_global_plane(imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
++    ...
++    'kpB': video_data.get('best_kpB', []), 
++    'desB': video_data.get('best_desB'),
++    ...
++    if not current_cand['kpB'] or current_cand['desB'] is None:
++        kb, db = sift.detectAndCompute(current_cand['gray'], None)
++        current_cand.update({'kpB': kb, 'desB': db})
++    ...
++    'kpB': extra.get('kpB', []),
++    'desB': extra.get('desB'),
++    ...
++    if not extra_cand['kpB'] or extra_cand['desB'] is None:
++        kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
++        extra_cand.update({'kpB': kb_e, 'desB': db_e})

@@ -1,0 +1,180 @@
+修改時間: 2026-06-10T16:47:42+08:00
+修改檔案: d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+此檔案記錄了本次修改中，各個檔案減少與新增的部份及行數，以便日後復原程式使用。
+
+================================================================================
+變更 1: 新增色彩直方圖相似度計算函數並調整 run_improved_matching_flow 簽名
+原本行號: 150
+--------------------------------------------------------------------------------
+[減少]
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift):
+--------------------------------------------------------------------------------
+[新增]
+def check_color_histogram_similarity(pt_A, pt_B, cand, patch_size=16, threshold=0.45):
+    """
+    計算左圖 pt_A (從全域變數 locked_L 中取得，BGR格式)
+    與右圖 pt_B (從 cand['rgb'] 中取得，RGB格式) 的色彩直方圖巴氏距離。
+    """
+    global locked_L
+    if locked_L is None or 'rgb' not in cand:
+        return True
+        
+    h_A, w_A = locked_L.shape[:2]
+    h_B, w_B = cand['rgb'].shape[:2]
+    
+    xA, yA = int(round(pt_A[0])), int(round(pt_A[1]))
+    xB, yB = int(round(pt_B[0])), int(round(pt_B[1]))
+    
+    r = patch_size // 2
+    
+    if xA - r < 0 or xA + r >= w_A or yA - r < 0 or yA + r >= h_A:
+        return False
+    if xB - r < 0 or xB + r >= w_B or yB - r < 0 or yB + r >= h_B:
+        return False
+        
+    patch_A = locked_L[yA-r:yA+r, xA-r:xA+r]
+    patch_B = cand['rgb'][yB-r:yB+r, xB-r:xB+r]
+    
+    hsv_A = cv2.cvtColor(patch_A, cv2.COLOR_BGR2HSV)
+    hsv_B = cv2.cvtColor(patch_B, cv2.COLOR_RGB2HSV)
+    
+    hist_A = cv2.calcHist([hsv_A], [0, 1], None, [18, 16], [0, 180, 0, 256])
+    hist_B = cv2.calcHist([hsv_B], [0, 1], None, [18, 16], [0, 180, 0, 256])
+    
+    cv2.normalize(hist_A, hist_A, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    cv2.normalize(hist_B, hist_B, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
+    
+    dist = cv2.compareHist(hist_A, hist_B, cv2.HISTCMP_BHATTACHARYYA)
+    return dist <= threshold
+
+
+def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift, use_color_hist=False):
+================================================================================
+
+================================================================================
+變更 2: run_improved_matching_flow 匹配迴圈中加入直方圖過濾
+原本行號: 253-254
+--------------------------------------------------------------------------------
+[減少]
+        if np.linalg.norm(pL - np.array([u, v])) < 50:
+            pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+--------------------------------------------------------------------------------
+[新增]
+        if np.linalg.norm(pL - np.array([u, v])) < 50:
+            if use_color_hist:
+                if not check_color_histogram_similarity(pL, pR, cand, patch_size=16, threshold=0.45):
+                    continue
+            pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+================================================================================
+
+================================================================================
+變更 3: UI 面板加入按鈕 ax_c9 軸坐標
+原本行號: 1886-1887
+--------------------------------------------------------------------------------
+[減少]
+    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+--------------------------------------------------------------------------------
+[新增]
+    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c9 = fig.add_axes([0.29, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
+================================================================================
+
+================================================================================
+變更 4: 實例化按鈕 c9
+原本行號: 1897-1898
+--------------------------------------------------------------------------------
+[減少]
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+--------------------------------------------------------------------------------
+[新增]
+    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
+    c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
+================================================================================
+
+================================================================================
+變更 5: view_state 狀態中加入變數 'use_color_hist'
+原本行號: 1902-1903
+--------------------------------------------------------------------------------
+[減少]
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+--------------------------------------------------------------------------------
+[新增]
+                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'show_score': SHOW_SCORE_DEFAULT,
+                  'use_color_hist': False,
+================================================================================
+
+================================================================================
+變更 6: 統一按鈕色彩與邊框設定 (新增 c9 於處理清單中)
+原本行號: 1935-1940
+--------------------------------------------------------------------------------
+[減少]
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5, c6]:
+        c.label.set_color('white')
+        c.label.set_fontsize(8)
+        c.ax.patch.set_edgecolor('white')
+        c.ax.patch.set_linewidth(1.0)
+--------------------------------------------------------------------------------
+[新增]
+    # 統一設定文字顏色為白色，並將按鈕外框設為白色
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9]:
+        c.label.set_color('white')
+        c.label.set_fontsize(8)
+        c.ax.patch.set_edgecolor('white')
+        c.ax.patch.set_linewidth(1.0)
+================================================================================
+
+================================================================================
+變更 7: 綁定按鈕 c9 的點擊動作
+原本行號: 1962-1963
+--------------------------------------------------------------------------------
+[減少]
+    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+    c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))
+--------------------------------------------------------------------------------
+[新增]
+    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+    c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))
+    c9.on_clicked(make_on_opt(c9, 'use_color_hist', "色彩直方圖約束"))
+================================================================================
+
+================================================================================
+變更 8: 修改 compute_measure 中 run_improved_matching_flow 的呼叫參數
+原本行號: 2042-2045
+--------------------------------------------------------------------------------
+[減少]
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift
+                        )
+--------------------------------------------------------------------------------
+[新增]
+                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state.get('use_hamming', False), orb, sift,
+                            snap_view_state.get('use_color_hist', False)
+                        )
+================================================================================
+
+================================================================================
+變更 9: compute_measure 預設 Grad-SIFT 的特徵點比對迴圈中加入直方圖過濾
+原本行號: 2090-2091
+--------------------------------------------------------------------------------
+[減少]
+                                    if np.linalg.norm(pL - np.array([u, v])) < 50:
+                                        pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+--------------------------------------------------------------------------------
+[新增]
+                                    if np.linalg.norm(pL - np.array([u, v])) < 50:
+                                        if snap_view_state.get('use_color_hist', False):
+                                            if not check_color_histogram_similarity(pL, pR, cand, patch_size=16, threshold=0.45):
+                                                continue
+                                        pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
+================================================================================

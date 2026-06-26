@@ -1,0 +1,8 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-21 17:33:07
+
+【新增/修改】
+內容：
+1. 在 UI 區塊新增了 `啟用 ECC 匹配` 按鈕。
+2. 在匹配流程中加入了 `ecc_coarse_pt` 紀錄粗搜結果，並使用藍色圓圈顯示在畫面上 (`scatter_ecc_coarse`)。
+3. 如果啟用了 ECC 匹配 (`use_ecc` == True)，原本的 0.1 像素精修步長會被 `cv2.findTransformECC` 取代，以此達到光照不變更穩定的亞像素精修。

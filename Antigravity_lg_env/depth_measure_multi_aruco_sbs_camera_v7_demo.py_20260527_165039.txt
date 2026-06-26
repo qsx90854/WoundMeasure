@@ -1,0 +1,28 @@
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-27 16:50:39 (20260527_165039)
+
+=========================================
+新增與減少的部份（附帶行數）：
+=========================================
+新增部分:
+1. (Line 196 - 220):
+   在 get_joint_relative_pose 內部，針對無歷史資訊或首幀狀態，新增左右角點位移檢查 `corner_disp = np.linalg.norm(cA_dict[mid] - cB_dict[mid]) / 4.0`。
+   若位移小於 15.0 像素（表示相機幾乎沒有移動，此時物理 baseline 應該在 0 附近），則遍歷測試兩個候選解，計算兩者分別所產生的相對位姿，並選擇產生最小相對平移量 (Baseline) 的解，藉此從根本上消除在剛鎖定右圖時由於平面二義性所導致的 flipped 錯誤解。
+   若位移大於等於 15.0 像素，則維持原本的 tilt 最小化 heuristic。
+   
+2. (Line 301 - 312):
+   在 get_joint_relative_pose 返回前，新增第二重 Baseline 比例安全保護機制。
+   計算所有共享 ArUco 角點的平均影像位移。如果平均影像位移小於 15.0 像素，而估算出的 baseline_val 卻大於 50.0 mm，判定此為二義性引起的異常跳變解，主動列印警告並拒絕（返回 None）。
+
+3. (Line 1342):
+   將 `pose_info` 預設訊息由 `"未偵測到 ArUco"` 更新為 `"未偵測到 ArUco 或定位無效"`，使其在被安全保護機制拒絕時能給予使用者更為精確的狀態提示。
+
+減少部分:
+1. (Line 196 - 206):
+   舊有的無歷史資訊 tilt-based 單一選擇邏輯（移入 else 區塊）
+   
+2. (Line 289):
+   -return R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel
+   
+3. (Line 1330):
+   -pose_info = "未偵測到 ArUco"

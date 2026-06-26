@@ -1,0 +1,107 @@
+檔案：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+修改時間：2026-06-03T16:37:03+08:00
+
+說明：
+新增多右圖融合測量功能。除了原本的重投影誤差最小的最優對之外，在固定最優左圖的前提下，最多額外挑選 N 組 (N=5) 重投影誤差低於 M (M=0.5 px) 的次優右圖組合。使用者點點選左圖測量時，這張左圖將與所有右圖各自進行匹配與 3D 解算，最後對所有成功的結果進行坐標與深度的融合平均，並詳細寫入量測記錄檔與 JSON 中。
+
+--------------------------------------------------
+[新增] 行 47 - 48 (全局設定)
+--------------------------------------------------
++MAX_EXTRA_PAIRS       = 5                          # 除了最優對之外，最多再存 N 組次優配對
++MAX_REPROJ_ERR_THRES  = 0.5                        # 次優配對的重投影誤差上限門檻 M (px)
+
+--------------------------------------------------
+[新增] 行 652 - 685 (尋找次優額外右圖組)
+--------------------------------------------------
++    # 尋找次優額外右圖組
++    extra_candidates_info = []
++    if best_end is not None and best_start is not None:
++        candidates_scores = []
++        for item_s in valid_start:
++            if item_s['idx'] == best_start['idx']:
++                continue
++            R_s, t_s = item_s['R'], item_s['t']
++            R_e, t_e = best_end['R'], best_end['t']
++            R_rel_cand = R_s @ R_e.T
++            t_rel_cand = t_s - R_rel_cand @ t_e
++            bsl = float(np.linalg.norm(t_rel_cand))
++            
++            if bsl >= MIN_BASELINE_MM:
++                err = compute_pair_reprojection_error(item_s, best_end, mtx_L, dist_L)
++                if err < MAX_REPROJ_ERR_THRES:
++                    candidates_scores.append((err, item_s, R_rel_cand, t_rel_cand, bsl))
++                    
++        # 依據重投影誤差由小到大排序
++        candidates_scores.sort(key=lambda x: x[0])
++        # 最多取前 N 組
++        selected_extras = candidates_scores[:MAX_EXTRA_PAIRS]
++        
++        for err, item_s, R_rel_c, t_rel_c, bsl in selected_extras:
++            extra_candidates_info.append({
++                'idx_A': item_s['idx'],
++                'frame_A': frames[item_s['idx']],
++                'R_rel': R_rel_c,
++                't_rel': t_rel_c,
++                'baseline': bsl,
++                'cornersA': undistort_corners_dict(item_s['corners'])
++            })
++            log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
+
+--------------------------------------------------
+[修改] 行 711 - 726 (傳回值中加入 extra_candidates)
+--------------------------------------------------
+     return {
+         ...
+         'valid_poses': valid_poses,
+-        'marker_map': marker_map
++        'marker_map': marker_map,
++        'extra_candidates': extra_candidates_info
+     }
+
+--------------------------------------------------
+[新增] 行 1260 - 1285 (主程式加載去畸變與計算次優對 SIFT 特徵)
+--------------------------------------------------
++    extra_candidates_list = []
++    for extra in video_data.get('extra_candidates', []):
++        imgB_extra_bgr, _ = process_view(extra['frame_A'])
++        extra_cand = {
++            'idx': extra['idx_A'],
++            ...
++        }
++        kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
++        extra_cand.update({'kpB': kb_e, 'desB': db_e})
++        extra_candidates_list.append(extra_cand)
+
+--------------------------------------------------
+[修改] 行 1888 - 1920 (多對各自計算與融合平均)
+--------------------------------------------------
+-        res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
++        all_cands = [current_cand] + extra_candidates_list
++        res_list = []
++        for cand in all_cands:
++            res_c = compute_measure(u, v, cand, left_img_gray, snap_vs, manual_match_pt)
++            res_c['cand_idx'] = cand['idx']
++            if res_c.get('d') is not None and res_c.get('p3d') is not None:
++                res_list.append(res_c)
++                
++        if not res_list:
++            res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
++            res['cand_idx'] = current_cand['idx']
++        else:
++            best_res = next((r for r in res_list if r['cand_idx'] == current_cand['idx']), res_list[0])
++            all_p3d = np.array([r['p3d'] for r in res_list])
++            all_d = np.array([r['d'] for r in res_list])
++            ...
++            res['p3d'] = avg_p3d
++            res['d'] = avg_d
++            res['multi_res'] = res_list
+
+--------------------------------------------------
+[修改] 行 1121 - 1172 (日誌與 JSON 檔寫入融合平均細節)
+--------------------------------------------------
++    if "multi_res" in res:
++        text_lines.append("--------------------------------------------------")
++        text_lines.append(f"多對融合結果 (共 {len(res['multi_res'])} 組成功):")
++        ...
++    if "multi_res" in res:
++        json_data["multi_fusion"] = { ... }

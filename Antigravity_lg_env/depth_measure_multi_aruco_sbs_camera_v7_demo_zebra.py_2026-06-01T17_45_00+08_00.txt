@@ -1,0 +1,54 @@
+修改時間: 2026-06-01T17:45:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份:
+(約原 L282 - L295):
+-    def detect_frame_markers(frame):
+-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+-        gray = preprocess_gray(gray, True)
+-        if hasattr(cv2.aruco, 'ArucoDetector'):
+-            corners, ids, _ = detector.detectMarkers(gray)
+-        else:
+-            corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
+-        if ids is not None and len(ids) > 0:
+-            ids_list = [i[0] for i in ids]
+-            term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
+-            for c in corners:
+-                cv2.cornerSubPix(gray, c, (3, 3), (-1, -1), term)
+-            return dict(zip(ids_list, [c[0] for c in corners]))
+-        return {}
+(約原 L327 - L332):
+-    def get_pose_for_ref(corners_dict):
+-        if ref_id not in corners_dict: return None, None
+-        ok_generic, rvecs, tvecs, _ = cv2.solvePnPGeneric(
+-            canon, corners_dict[ref_id], K_L, dist_L, flags=cv2.SOLVEPNP_IPPE
+-        )
+
+新增的部份:
+(約新 L282 - L301):
++    def detect_frame_markers(frame):
++        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
++        gray = preprocess_gray(gray, True)
++        if hasattr(cv2.aruco, 'ArucoDetector'):
++            corners, ids, _ = detector.detectMarkers(gray)
++        else:
++            corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
++        if ids is not None and len(ids) > 0:
++            ids_list = [i[0] for i in ids]
++            term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
++            for c in corners:
++                cv2.cornerSubPix(gray, c, (3, 3), (-1, -1), term)
++            
++            # 使用 cv2.undistortPoints 將角點去畸變，使其與去畸變後的影像對齊
++            undist_corners = []
++            for c in corners:
++                c_undist = cv2.undistortPoints(c, mtxL_o, dist_L, P=K_L)
++                undist_corners.append(c_undist.reshape(4, 2))
++            return dict(zip(ids_list, undist_corners))
++        return {}
+(約新 L333 - L338):
++    def get_pose_for_ref(corners_dict):
++        if ref_id not in corners_dict: return None, None
++        ok_generic, rvecs, tvecs, _ = cv2.solvePnPGeneric(
++            canon, corners_dict[ref_id], K_L, np.zeros(5), flags=cv2.SOLVEPNP_IPPE
++        )

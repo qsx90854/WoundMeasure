@@ -1,0 +1,63 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T09-36-21
+
+[減少的部分]
+行 11: - 整合 LightGlue 與 Grad-SIFT 混合匹配演算法
+行 42: FEATURE_MATCHING_MODE = 'LightGlue'                # 可選: 'LightGlue' 或 'OpenCV'
+行 43: LG_ONNX_PATH          = "superpoint_lightglue_pipeline.onnx"
+行 44: LG_SCORE_THRESH       = 0.5                       # LightGlue 匹配分數門檻
+行 45: MATCH_SEARCH_RADIUS   = 7                         # 點點在匹配中搜尋的起始半徑
+行 46: MATCH_SEARCH_RADIUS_MAX = 30                       # 動態搜尋半徑上限
+行 199-206:
+def run_lightglue(lg_session, imgA, imgB):
+    t0, t1 = imgA.astype(np.float32)/255.0, imgB.astype(np.float32)/255.0
+    inp = np.expand_dims(np.stack([t0, t1], axis=0), axis=1)
+    out = lg_session.run(['keypoints', 'matches', 'mscores'], {"images": inp})
+    kpts, matches, scores = out
+    valid = [(kpts[0, int(m[1])], kpts[1, int(m[2])]) for m, s in zip(matches, scores) if s > LG_SCORE_THRESH]
+    if len(valid) < 4: return None, None
+    return np.array([v[0] for v in valid], dtype=np.float32), np.array([v[1] for v in valid], dtype=np.float32)
+行 208-217:
+def run_opencv_matching(imgA, imgB):
+    sift = cv2.SIFT_create()
+    kp1, des1 = sift.detectAndCompute(imgA, None)
+    kp2, des2 = sift.detectAndCompute(imgB, None)
+    if des1 is None or des2 is None: return None, None
+    flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
+    matches = flann.knnMatch(des1, des2, k=2)
+    good = [m[0] for m in matches if len(m)==2 and m[0].distance < 0.75*m[1].distance]
+    if len(good) < 4: return None, None
+    return np.float32([kp1[m.queryIdx].pt for m in good]), np.float32([kp2[m.trainIdx].pt for m in good])
+行 262-264:
+    lg_session = None
+    if FEATURE_MATCHING_MODE == 'LightGlue':
+        lg_session = ort.InferenceSession(LG_ONNX_PATH, providers=['CPUExecutionProvider'])
+行 300-302:
+            ptsA_lg, ptsB_lg = None, None
+            if lg_session: ptsA_lg, ptsB_lg = run_lightglue(lg_session, imgA_gray, imgB_gray)
+            else: ptsA_lg, ptsB_lg = run_opencv_matching(imgA_gray, imgB_gray)
+行 306:                 'cornersA': cA, 'cornersB': cB, 'kpB': kb, 'desB': db, 'ptsA_lg': ptsA_lg, 'ptsB_lg': ptsB_lg,
+行 479-490:
+                if m_pt is None and cand['ptsA_lg'] is not None:
+                    dists = np.linalg.norm(cand['ptsA_lg'] - np.array([u, v]), axis=1)
+                    curr_r = MATCH_SEARCH_RADIUS
+                    in_rad = np.where(dists < curr_r)[0]
+                    if len(in_rad) == 0:
+                        while len(in_rad) == 0 and curr_r < MATCH_SEARCH_RADIUS_MAX:
+                            curr_r += 5; in_rad = np.where(dists < curr_r)[0]
+                    if len(in_rad) > 0:
+                        off = cand['ptsB_lg'][in_rad] - cand['ptsA_lg'][in_rad]
+                        wts = 1.0 / (dists[in_rad] + 1e-5)**2
+                        m_pt, method = np.array([u, v]) + np.sum(off * wts[:, np.newaxis], axis=0) / np.sum(wts), FEATURE_MATCHING_MODE
+                        neighbors = list(in_rad)
+行 561-565:
+        if res.get('neighbors') and current_cand['ptsA_lg'] is not None:
+            for i in res['neighbors']:
+                con = ConnectionPatch(xyA=current_cand['ptsA_lg'][i], xyB=current_cand['ptsB_lg'][i], 
+                                      coordsA="data", coordsB="data", axesA=ax_A, axesB=ax_B, color="magenta", lw=1.2, ls="--")
+                ax_B.add_artist(con); view_state['lines'].append(con)
+
+[新增的部分]
+行 11: - 採用 Grad-SIFT 匹配演算法
+行 306:                 'cornersA': cA, 'cornersB': cB, 'kpB': kb, 'desB': db,

@@ -1,0 +1,30 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T11-17-39
+
+[減少的部分]
+行 423:
+-                    idx_g = np.argsort(flat)[-min(len(flat), 100):]
+行 439:
+-                        idx_gr = np.argsort(flatr)[-min(len(flatr), 400):]
+
+[新增的部分]
+行 423-429 (左圖邏輯):
++                    valid_mask = flat > 15.0
++                    if not np.any(valid_mask):
++                        return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
++                                'g_ptsA': None, 'g_ptsB': None, 'g_kptsB': None, 'g_rect': None,
++                                'fail_reason': '左圖特徵不足(太平滑)', 'u': u, 'v': v}
++                    valid_idx = np.where(valid_mask)[0]
++                    sorted_valid = valid_idx[np.argsort(flat[valid_idx])]
++                    idx_g = sorted_valid[-min(len(sorted_valid), 100):]
+
+行 443-449 (右圖邏輯):
++                        valid_mask_r = flatr > 15.0
++                        if not np.any(valid_mask_r):
++                            return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
++                                    'g_ptsA': [kp.pt for kp in kpts_inj], 'g_ptsB': None, 'g_kptsB': [], 'g_rect': (u0, v0, u1-u0, v1-v0),
++                                    'fail_reason': '右圖特徵不足(太平滑)', 'u': u, 'v': v}
++                        valid_idx_r = np.where(valid_mask_r)[0]
++                        sorted_valid_r = valid_idx_r[np.argsort(flatr[valid_idx_r])]
++                        idx_gr = sorted_valid_r[-min(len(sorted_valid_r), 400):]

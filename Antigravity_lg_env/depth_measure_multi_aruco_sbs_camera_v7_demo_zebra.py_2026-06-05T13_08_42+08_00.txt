@@ -1,0 +1,145 @@
+時間點: 2026-06-05T13:08:42+08:00
+修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+【減少部分】
+1. 約第 313 行：
+```python
+                cv2.cornerSubPix(gray, c, (3, 3), (-1, -1), term)
+```
+
+2. 約第 446 至 531 行（原本 `save_debug_pair_images` 內部的相對外參投影以及原本 `compute_pair_reprojection_error` 內部多次調用 IPPE solvePnP 解算單個標籤位姿做傳播的邏輯）：
+```python
+        R_rel = R_s @ R_e.T
+        t_rel = t_s - R_rel @ t_e
+        R_rel_back = R_rel.T
+        t_rel_back = -R_rel.T @ t_rel
+...
+            if mid in shared_mids:
+                ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_e[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+                if ok_init:
+                    R_i, _ = cv2.Rodrigues(rv_i)
+                    P_e = (R_i @ canon.T).T + tv_i.T
+                    P_s_proj = (R_rel @ P_e.T).T + t_rel.T
+                    pts_s_proj, _ = cv2.projectPoints(P_s_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
+                    pts_s_proj = pts_s_proj.reshape(4, 2).astype(np.int32).reshape((-1, 1, 2))
+                    cv2.polylines(img_A, [pts_s_proj], isClosed=True, color=(0, 0, 255), thickness=2)
+                    cv2.putText(img_A, f"Proj:{mid}", (pts_s_proj[0][0][0], pts_s_proj[0][0][1] + 15), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+...
+            if mid in shared_mids:
+                ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_s[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+                if ok_init:
+                    R_i, _ = cv2.Rodrigues(rv_i)
+                    P_s = (R_i @ canon.T).T + tv_i.T
+                    P_e_proj = (R_rel_back @ P_s.T).T + t_rel_back.T
+                    pts_e_proj, _ = cv2.projectPoints(P_e_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
+                    pts_e_proj = pts_e_proj.reshape(4, 2).astype(np.int32).reshape((-1, 1, 2))
+                    cv2.polylines(img_B, [pts_e_proj], isClosed=True, color=(0, 0, 255), thickness=2)
+                    cv2.putText(img_B, f"Proj:{mid}", (pts_e_proj[0][0][0], pts_e_proj[0][0][1] + 15), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+...
+    def compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L):
+        corners_s = item_s['corners']
+        corners_e = item_e['corners']
+        R_s, t_s = item_s['R'], item_s['t']
+        R_e, t_e = item_e['R'], item_e['t']
+        R_rel = R_s @ R_e.T
+        t_rel = t_s - R_rel @ t_e
+        R_rel_back = R_rel.T
+        t_rel_back = -R_rel.T @ t_rel
+        shared_mids = set(corners_s.keys()).intersection(set(corners_e.keys()))
+        if not shared_mids:
+            return float('inf')
+        errors = []
+        for mid in shared_mids:
+            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_e[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+            if not ok_init: continue
+            R_i, _ = cv2.Rodrigues(rv_i)
+            P_e = (R_i @ canon.T).T + tv_i.T
+            P_s_proj = (R_rel @ P_e.T).T + t_rel.T
+            pts_s_proj, _ = cv2.projectPoints(P_s_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
+            pts_s_proj = pts_s_proj.reshape(4, 2)
+            err = np.linalg.norm(pts_s_proj - corners_s[mid], axis=1)
+            errors.extend(err)
+        for mid in shared_mids:
+            ok_init, rv_i, tv_i = cv2.solvePnP(canon, corners_s[mid], mtx_L, dist_L, flags=cv2.SOLVEPNP_IPPE_SQUARE)
+            if not ok_init: continue
+            R_i, _ = cv2.Rodrigues(rv_i)
+            P_s = (R_i @ canon.T).T + tv_i.T
+            P_e_proj = (R_rel_back @ P_s.T).T + t_rel_back.T
+            pts_e_proj, _ = cv2.projectPoints(P_e_proj, np.zeros(3), np.zeros(3), mtx_L, dist_L)
+            pts_e_proj = pts_e_proj.reshape(4, 2)
+            err = np.linalg.norm(pts_e_proj - corners_e[mid], axis=1)
+            errors.extend(err)
+        if not errors:
+            return float('inf')
+        return np.mean(errors)
+```
+
+【新增部分】
+1. 約第 313 至 314 行：
+```python
+                # 將搜尋半徑從 (3, 3) 調整為 (5, 5)，以提升在高解析度影像下的亞像素角點精確度
+                cv2.cornerSubPix(gray, c, (5, 5), (-1, -1), term)
+```
+
+2. 新的第 446 至 525 行（使用自標定世界地圖 3D 點對各幀分別做投影誤差與 debug 圖片繪製）：
+```python
+            if mid in shared_mids and mid in marker_map:
+                R_m2ref, t_m2ref = marker_map[mid]
+                P_w = (R_m2ref @ canon.T).T + t_m2ref.T
+                rvec_s, _ = cv2.Rodrigues(R_s)
+                pts_s_proj, _ = cv2.projectPoints(P_w.astype(np.float32), rvec_s, t_s, mtx_L, dist_L)
+                pts_s_proj = pts_s_proj.reshape(4, 2).astype(np.int32).reshape((-1, 1, 2))
+                cv2.polylines(img_A, [pts_s_proj], isClosed=True, color=(0, 0, 255), thickness=2)
+                cv2.putText(img_A, f"Proj:{mid}", (pts_s_proj[0][0][0], pts_s_proj[0][0][1] + 15), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+...
+            if mid in shared_mids and mid in marker_map:
+                R_m2ref, t_m2ref = marker_map[mid]
+                P_w = (R_m2ref @ canon.T).T + t_m2ref.T
+                rvec_e, _ = cv2.Rodrigues(R_e)
+                pts_e_proj, _ = cv2.projectPoints(P_w.astype(np.float32), rvec_e, t_e, mtx_L, dist_L)
+                pts_e_proj = pts_e_proj.reshape(4, 2).astype(np.int32).reshape((-1, 1, 2))
+                cv2.polylines(img_B, [pts_e_proj], isClosed=True, color=(0, 0, 255), thickness=2)
+                cv2.putText(img_B, f"Proj:{mid}", (pts_e_proj[0][0][0], pts_e_proj[0][0][1] + 15), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+...
+    def compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L):
+        corners_s = item_s['corners']
+        corners_e = item_e['corners']
+        R_s, t_s = item_s['R'], item_s['t']
+        R_e, t_e = item_e['R'], item_e['t']
+        shared_mids = set(corners_s.keys()).intersection(set(corners_e.keys()))
+        if not shared_mids:
+            return float('inf')
+            
+        rvec_s, _ = cv2.Rodrigues(R_s)
+        rvec_e, _ = cv2.Rodrigues(R_e)
+        
+        errors = []
+        half = marker_size_mm / 2.0
+        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
+        
+        for mid in shared_mids:
+            if mid not in marker_map:
+                continue
+            R_m2ref, t_m2ref = marker_map[mid]
+            P_w = (R_m2ref @ canon.T).T + t_m2ref.T
+            
+            # 投影至 Frame s (右圖/開頭幀)
+            pts_s_proj, _ = cv2.projectPoints(P_w.astype(np.float32), rvec_s, t_s, mtx_L, dist_L)
+            pts_s_proj = pts_s_proj.reshape(4, 2)
+            err_s = np.linalg.norm(pts_s_proj - corners_s[mid], axis=1)
+            errors.extend(err_s)
+            
+            # 投影至 Frame e (左圖/結尾幀)
+            pts_e_proj, _ = cv2.projectPoints(P_w.astype(np.float32), rvec_e, t_e, mtx_L, dist_L)
+            pts_e_proj = pts_e_proj.reshape(4, 2)
+            err_e = np.linalg.norm(pts_e_proj - corners_e[mid], axis=1)
+            errors.extend(err_e)
+            
+        if not errors:
+            return float('inf')
+        return np.mean(errors)
+```

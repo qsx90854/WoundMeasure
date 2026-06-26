@@ -1,0 +1,12 @@
+時間點: 2026-05-05 08:07
+
+對話摘要:
+加入 ArUco 偵測與候選幀處理的調試訊息 (Debug Log)，以追蹤「無候選幀」的原因。
+
+修改檔案: depth_measure_multi_aruco_sbs_camera.py
+
+檔案變更統計:
+- 新增: get_joint_relative_pose 函式中顯示左右圖偵測到的標籤數量與共有標籤數量。
+- 新增: main 迴圈中顯示成功加入候選池的幀編號。
+
+詳細變更記錄已保存在 Antigravity_lg_env 資料夾中。

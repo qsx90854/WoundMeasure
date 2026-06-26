@@ -1,0 +1,31 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-12T15:10:05
+
+[減少的部分]
+行 669-676:
+-        if res.get('g_kptsB') is not None:
+-            scatter_all_sift_B.set_offsets(res['g_kptsB'])
+-            sift_rect.set_bounds(*res['g_rect'])
+-            sift_rect.set_visible(True)
+-            # 更新 Rect 中心標記
+-            rx, ry, rw, rh = res['g_rect']
+-            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+-            sift_rect_center.set_visible(True)
+
+[新增的部分]
+行 669-684:
++        if res.get('g_kptsB') is not None and len(res['g_kptsB']) > 0:
++            try:
++                scatter_all_sift_B.set_offsets(res['g_kptsB'])
++            except Exception:
++                # 預防某些版本 Matplotlib 對於空陣列轉 numpy 仍拋出維度錯誤
++                pass
++            
++            if res.get('g_rect') is not None:
++                sift_rect.set_bounds(*res['g_rect'])
++                sift_rect.set_visible(True)
++                # 更新 Rect 中心標記
++                rx, ry, rw, rh = res['g_rect']
++                sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
++                sift_rect_center.set_visible(True)

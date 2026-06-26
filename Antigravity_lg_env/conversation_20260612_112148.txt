@@ -1,0 +1,9 @@
+時間: 2026-06-12 11:21:48
+
+使用者批示:
+請開始修改
+
+工程師執行:
+1. 準備修改 depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py 以添加進階高光過濾功能。
+2. 將在 UI 區添加 c13 按鈕，並在 compute_measure 函數中完成 HSV + 自適應雙閾值 + 連通域動態膨脹算法的實作。
+3. 建立變更備份日誌。

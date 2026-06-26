@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera_v7.py
+時間: 2026-05-13T14:52:24
+
+[減少的部分]
+行 753 附近 (原按鈕尺寸):
+-    ax_btn_lock_L = fig.add_axes([0.55, 0.92, 0.10, 0.04])
+-    ax_btn_lock_R = fig.add_axes([0.66, 0.92, 0.10, 0.04])
+-    ax_btn_hide_R = fig.add_axes([0.77, 0.92, 0.10, 0.04])
+-    ax_btn_calc = fig.add_axes([0.55, 0.86, 0.10, 0.04])
+-    ax_btn_auto_calc = fig.add_axes([0.66, 0.86, 0.14, 0.04])
+
+[新增的部分]
+行 752 附近 (新按鈕尺寸與排列):
++    ax_btn_lock_L = fig.add_axes([0.58, 0.92, 0.08, 0.04])
++    ax_btn_lock_R = fig.add_axes([0.68, 0.92, 0.08, 0.04])
++    ax_btn_hide_R = fig.add_axes([0.78, 0.92, 0.08, 0.04])
++    ax_btn_norm = fig.add_axes([0.88, 0.92, 0.08, 0.04])
++    ax_btn_calc = fig.add_axes([0.58, 0.86, 0.08, 0.04])
++    ax_btn_auto_calc = fig.add_axes([0.68, 0.86, 0.08, 0.04])
++    ax_btn_grad = fig.add_axes([0.78, 0.86, 0.08, 0.04])
+
+行 930 附近 (事件綁定補回):
++    btn_grad_toggle.on_clicked(on_grad_toggle)
++    btn_norm_toggle.on_clicked(on_norm_toggle)

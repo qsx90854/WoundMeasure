@@ -1,0 +1,11 @@
+時間: 2026-05-08T11-37-04
+使用者請求:
+現在顯示的 Baseline: 12.06 mm, 方向: 向右好像跟我實際移動方向剛好相反
+
+回答訊息:
+已在 `depth_measure_multi_aruco_sbs_camera.py` 中將左右方向的判斷邏輯顛倒：
+原本的 `direction = "向左" if t_r[0] > 0 else "向右"`
+已修改為 `direction = "向右" if t_r[0] > 0 else "向左"`。
+這樣應該能正確對應您實際手持相機移動的方向。
+
+所有修改紀錄與對話已儲存至 `Antigravity_lg_env` 資料夾中。

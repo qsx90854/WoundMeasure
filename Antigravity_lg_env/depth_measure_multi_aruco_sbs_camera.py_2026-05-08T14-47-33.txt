@@ -1,0 +1,25 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-08T14-47-33
+
+[減少的部分]
+行 359-361 附近:
+    未檢查 baseline 是否小於 15mm。
+
+行 668:
+                if baseline_val >= 15.0:
+                    # 移動足夠，更新 stored_raw_B 為當前佇列中最舊的 (維持間隔)
+                    stored_raw_B = frame_buffer[0]
+
+行 681:
+                'pose_valid': pose_valid
+
+[新增的部分]
+行 368-375 附近 (do_measure):
+    加入 `if cand.get('baseline', 0.0) < 15.0:` 檢查，若視差不足則顯示「視差不足(<15mm)」並跳過計算。
+
+行 668 附近 (Live 迴圈):
+    修改門檻：`if baseline_val >= 40.0:`，只有當 Baseline 超過 40mm 時才更新 Frame B。
+
+行 689 附近:
+                'baseline': baseline_val

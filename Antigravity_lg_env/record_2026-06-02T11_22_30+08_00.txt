@@ -1,0 +1,10 @@
+對話時間: 2026-06-02T11:22:30+08:00
+
+本次對話與回答摘要：
+1. 分析了使用者提供的重投影誤差日誌：
+   - 發現當以單一 ID 2 標籤解算 Pose 時，ID 2 的誤差約 7 px，但 ID 5 的誤差顯著擴大至 16.54 px 與 23.69 px。這說明多標籤在獨立求解 PnP 時存在 3D 空間結構扭曲與噪聲。
+2. 實作多標籤地圖構建與聯合定位（Joint PnP）：
+   - 在影片分析階段 `analyze_video_frames` 中，先結合所有起點與終點幀觀測，利用 SVD 平均旋轉與算術平均平移，自動建立最穩定的相對 3D 標籤世界地圖 `marker_map`。
+   - 在計算 `valid_start` 與 `valid_end` 的相機 Pose 時，捨棄單標籤解算，改為聯合所有偵測到的標籤，以 Joint PnP 一次求解出無剛體扭曲、且重投影誤差最小化的最佳相機 Pose。
+   - 將建立好的 `marker_map` 傳入主 UI 中，並對在線 Compound PnP 階段的 `solvePnP` 調用統一加上 `flags=cv2.SOLVEPNP_ITERATIVE`。
+3. 儲存了變更記錄檔：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py_2026-06-02T11_20_00+08_00.txt。

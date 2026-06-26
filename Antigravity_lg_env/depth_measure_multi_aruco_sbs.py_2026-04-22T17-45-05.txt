@@ -1,0 +1,8 @@
+檔案：d:\Lightglue\lg_env\depth_measure_multi_aruco_sbs.py
+時間：2026-04-22 17:45:05
+
+【算法同步】修復基礎 SBS 版本的精細匹配精度問題
+內容：
+1. 修正 `find_precise_match` 中的坐標中心偏移：將 `patch_left.shape[1]//2.0` 改為明確的 `patch_size` (15)，消除 0.5 像素的系統性偏差。
+2. 保持與 `cal_circle_intent.py` 版本的亞像素插值與對位邏輯一致。
+原因：同步基準版本的量測精度。

@@ -1,0 +1,27 @@
+修改時間: 2026-06-01T16:15:00+08:00
+被修改檔案: depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py
+
+減少的部份 (約原 L1828 - L1986):
+-    while plt.fignum_exists(fig.number):
+-        _t0 = _time.perf_counter()
+-
+-        ret, frame = cap.read()
+-        if not ret: break
+-        _t1 = _time.perf_counter(); _t_cap += (_t1 - _t0) * 1000
+-        ... (原 cap 影像緩衝區、非同步 queue 輪詢、EMA 濾波、耗時分析) ...
+-    cap.release()
+
+新增的部份 (約新 L1828 - L1880):
++    # 更改 FPS 文字為靜態影片標籤
++    fps_text.set_text("Mode: Video (Offline)")
++    
++    while plt.fignum_exists(fig.number):
++        # 依前處理開關，動態切換顯示畫面（使肉眼可見差異）
++        if view_state['enable_clahe']:
++            gray_A = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
++            gray_A_enh = preprocess_gray(gray_A, True)
++            disp_A = cv2.cvtColor(gray_A_enh, cv2.COLOR_GRAY2RGB)
++            ...
++        fig.canvas.blit(fig.bbox)
++        fig.canvas.flush_events()
++        _time.sleep(0.01)

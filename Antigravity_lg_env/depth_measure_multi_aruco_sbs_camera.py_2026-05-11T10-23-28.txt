@@ -1,0 +1,51 @@
+檔案修改紀錄
+檔案: depth_measure_multi_aruco_sbs_camera.py
+時間: 2026-05-11T10-23-28
+
+[新增的部分]
+行 15:
++  import os, sys, glob, json, threading, queue
+
+行 352-505 (新增 calc_request_q / calc_result_q / calc_busy 佇列與 compute_measure 純計算函式):
++  calc_request_q = queue.Queue(maxsize=1)
++  calc_result_q  = queue.Queue()
++  calc_busy      = threading.Event()
++  def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
++      # 純計算版本，不觸碰任何 Matplotlib 元件，回傳 dict
++      ... (約 120 行)
+
+行 523-534 (新增 apply_measure_result 函式):
++  def apply_measure_result(res, avg, summary):
++      # 在主執行緒中，用純資料結果更新所有 UI 元件
+
+行 821-894 (新增 calc_worker 背景執行緒函式):
++  def calc_worker():
++      while True:
++          req = calc_request_q.get()
++          ... # ArUco 位姿解算、compute_measure
++          calc_result_q.put({...})
++  worker_thread = threading.Thread(target=calc_worker, daemon=True)
++  worker_thread.start()
+
+行 905-936 (主迴圈加入 result queue 輪詢):
++  if auto_calc_active and has_set_L and calc_request_q.empty() and not calc_busy.is_set():
++      on_calc(None)
++  try:
++      result = calc_result_q.get_nowait()
++      ... # 更新 current_cand / imgA_gray / ArUco 顯示 / apply_measure_result
++  except queue.Empty:
++      pass
+
+[減少的部分]
+行 515-658 (舊 do_measure 本體: 約 143 行 ArUco 位姿解算+匹配演算法):
+-  all_d, summary = [], []
+-  for cand in [current_cand]:
+-      ... (所有原始的 Grad-SIFT / ECC / triangulation 邏輯，已搬至 compute_measure)
+
+行 758-819 (舊 on_calc 同步版本: 約 62 行):
+-  def on_calc(event):
+-      ... get_joint_relative_pose / sift.detectAndCompute / do_measure (全部同步執行)
+
+行 909-911 (舊連續計算邏輯):
+-  if auto_calc_active and has_set_L:
+-      on_calc(None)

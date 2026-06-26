@@ -1,0 +1,39 @@
+檔案: depth_measure_multi_aruco_sbs_camera_v7_demo.py
+修改時間: 2026-05-20T11:47:57
+
+--- 減少的部份 ---
+第 38-41 行:
+```python
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+MIN_BASELINE_MM       = 8.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
+ENFORCE_COPLANAR      = False                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+```
+
+第 1117-1121 行:
+```python
+        # 如果處於連續計算模式，自動觸發（非阻塞），限制每秒最多計算 2 次 (間隔 0.5 秒)
+        _cur_time = _time.perf_counter()
+        if auto_calc_active and has_set_R and (_cur_time - _last_auto_calc_time >= 0.5) and calc_request_q.empty() and not calc_busy.is_set():
+            _last_auto_calc_time = _cur_time
+            on_calc(None)
+```
+
+--- 新增的部份 ---
+第 38-42 行:
+```python
+MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+MIN_BASELINE_MM       = 8.0                       # 最小基準線限制，低於此值不進行深度計算 (mm)
+AUTO_CALC_INTERVAL_SEC = 0.5                       # 連續計算模式下的計算時間間隔 (秒)
+ENFORCE_COPLANAR      = False                       # 強制共面對齊優化
+SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
+```
+
+第 1118-1122 行:
+```python
+        # 如果處於連續計算模式，自動觸發（非阻塞），限制計算時間間隔
+        _cur_time = _time.perf_counter()
+        if auto_calc_active and has_set_R and (_cur_time - _last_auto_calc_time >= AUTO_CALC_INTERVAL_SEC) and calc_request_q.empty() and not calc_busy.is_set():
+            _last_auto_calc_time = _cur_time
+            on_calc(None)
+```

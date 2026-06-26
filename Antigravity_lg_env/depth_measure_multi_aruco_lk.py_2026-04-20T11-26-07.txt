@@ -1,0 +1,8 @@
+時間點: 2026-04-20T11:26:07+08:00
+
+【減少的部份】
+1. 刪除了 `find_precise_match` 結尾的 `cv2.cornerSubPix` 邏輯。
+
+【新增的部份】
+1. 實作 2D 拋物線亞像素插值 (2D Parabolic Peak Interpolation)：讀取 `cv2.matchTemplate` 回傳的 NCC 算分矩陣 `res`，提取最高分座標鄰近 3x3 點進行微積分算子擬合 `dx` 與 `dy` 取出真正的小數點漂移量。
+2. 輸出新座標 `best_pt = (roi_x0 + sub_x + patch_left.shape[1]//2.0, roi_y0 + sub_y + patch_left.shape[0]//2.0)`，穩定且不會向梯度滑動。

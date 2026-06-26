@@ -1,0 +1,89 @@
+檔案修改紀錄：d:\Lightglue\lg_env\Fake_wound_image\rotate_and_rename.py
+修改時間：2026-06-11 14:41:01
+
+--- 減少的部份 ---
+無（此檔案為全新建立）
+
+--- 新增的部份 ---
+行 1-76:
+import os
+
+try:
+    import cv2
+    HAS_CV2 = True
+except ImportError:
+    HAS_CV2 = False
+    try:
+        from PIL import Image
+        HAS_PIL = True
+    except ImportError:
+        HAS_PIL = False
+
+def main():
+    # 取得當前檔案所在的資料夾作為輸入資料夾
+    input_dir = os.path.dirname(os.path.abspath(__file__))
+    # 輸出資料夾放在輸入資料夾的同級目錄下
+    output_dir = os.path.join(os.path.dirname(input_dir), 'Fake_wound_image_n')
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        print(f"建立輸出資料夾: {output_dir}")
+        
+    # 支援的圖片副檔名
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.webp')
+    
+    # 讀取該資料夾下所有圖片檔案
+    files = [f for f in os.listdir(input_dir) if f.lower().endswith(valid_extensions)]
+    
+    # 依檔名排序以維持順序性
+    files.sort()
+    
+    total_files = len(files)
+    print(f"找到 {total_files} 張圖片開始處理...")
+    
+    if total_files == 0:
+        print("沒有找到符合的圖片檔案。")
+        return
+
+    if not HAS_CV2 and not HAS_PIL:
+        print("錯誤：系統中未安裝 OpenCV (cv2) 或 Pillow (PIL) 模組，請安裝其中之一。")
+        return
+
+    success_count = 0
+    for idx, filename in enumerate(files, start=1):
+        file_path = os.path.join(input_dir, filename)
+        _, ext = os.path.splitext(filename)
+        new_filename = f"{idx}{ext}"
+        output_path = os.path.join(output_dir, new_filename)
+        
+        try:
+            if HAS_CV2:
+                # 使用 OpenCV 讀取與旋轉
+                img = cv2.imread(file_path)
+                if img is None:
+                    raise ValueError("OpenCV 無法讀取圖片")
+                h, w = img.shape[:2]
+                if w <= h:
+                    # 順時針旋轉 90 度
+                    img_rotated = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                else:
+                    img_rotated = img
+                cv2.imwrite(output_path, img_rotated)
+            else:
+                # 使用 Pillow 讀取與旋轉
+                with Image.open(file_path) as img:
+                    w, h = img.size
+                    if w <= h:
+                        # 順時針旋轉 90 度，逆時針 270 度即順時針 90 度
+                        img_rotated = img.transpose(Image.ROTATE_270)
+                    else:
+                        img_rotated = img
+                    img_rotated.save(output_path)
+            success_count += 1
+        except Exception as e:
+            print(f"處理圖片 {filename} 時發生錯誤: {e}")
+            
+    print(f"處理完成！共成功處理 {success_count}/{total_files} 張圖片，並儲存至 {output_dir}")
+
+if __name__ == '__main__':
+    main()

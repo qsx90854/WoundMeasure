@@ -1,0 +1,8 @@
+NewMeasure_v1.py 修改紀錄：
+[修改] 行數: 約 280-300 (process_measure 內部)
+移除了原有的 cv2.undistortPoints 反向映射邏輯，因為現在直接點擊在已經被校正好的影像上，座標即為 (x1, y1)。
+移除了原有的重投影誤差計算。
+
+[修改] 行數: 約 380-405 (主迴圈內)
+將 stereo_rectify_and_remap 的輸入改為 BGR 影像，並直接將回傳的 imgA_rect_bgr 與 imgB_rect_bgr 透過 cv2.cvtColor 轉成 RGB 後餵給 im_A 與 im_B 顯示。
+若 ArUco 暫時消失，則保留最後一次正確的 rect_data 進行影像 Remap。
