@@ -4,17 +4,13 @@ from utils.draw_utils import MaskDrawer
 
 
 class WoundDetector:
-    def __init__(self, model_path=None):
-        self.model = YOLOV9Seg() if model_path is None else YOLOV9Seg(model_path)
+    def __init__(self):
+        self.model = YOLOV9Seg()
         self.drawer = MaskDrawer()
-        self.last_output = None
     
     def predict(self, input_image, draw_result=True):
         output = self.model.predict(input_image)
-        self.last_output = output
         if draw_result:
-            if not output:
-                return input_image.copy()
             img = self.drawer(input_image, output[0], idx2label=['wound'])
             return img
         else:

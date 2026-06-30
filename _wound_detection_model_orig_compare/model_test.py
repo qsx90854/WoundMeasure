@@ -3,7 +3,7 @@ import cv2
 from wound_detector import WoundDetector
 
 def main():
-    test_image = cv2.imread(r'X:\wound_detection\fake_wound\resize\3.jpg')
+    test_image = cv2.imread(r'data\3.jpg')
 
     wound_detector = WoundDetector()
 

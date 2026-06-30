@@ -34,14 +34,13 @@ def generate_anchors(image_size: List[int], strides: List[int]):
 
 def sigmoid(x):
     x = np.asarray(x, dtype=np.float32)
-    # 當 x >= 0 時，計算 1 / (1 + exp(-x))
-    # 當 x < 0 時，計算 exp(x) / (1 + exp(x))
+
     return np.where(x >= 0, 
                     1.0 / (1.0 + np.exp(-np.where(x >= 0, x, 0))), 
                     np.exp(np.where(x < 0, x, 0)) / (1.0 + np.exp(np.where(x < 0, x, 0))))
 
 def nms_numpy(boxes, scores, iou_threshold):
-    """標準的單一類別 NMS (Non-Maximum Suppression) Numpy 實作"""
+
     if boxes.size == 0:
         return np.empty((0,), dtype=int)
 
@@ -51,7 +50,6 @@ def nms_numpy(boxes, scores, iou_threshold):
     y2 = boxes[:, 3]
     areas = (x2 - x1) * (y2 - y1)
     
-    # 根據分數由大到小排序
     order = scores.argsort()[::-1]
 
     keep = []
@@ -59,7 +57,6 @@ def nms_numpy(boxes, scores, iou_threshold):
         i = order[0]
         keep.append(i)
         
-        # 計算剩餘框與當前最大分框的交集
         xx1 = np.maximum(x1[i], x1[order[1:]])
         yy1 = np.maximum(y1[i], y1[order[1:]])
         xx2 = np.minimum(x2[i], x2[order[1:]])
@@ -69,28 +66,20 @@ def nms_numpy(boxes, scores, iou_threshold):
         h = np.maximum(0.0, yy2 - yy1)
         inter = w * h
         
-        # 計算 IoU
         iou = inter / (areas[i] + areas[order[1:]] - inter)
 
-        # 找出 IoU 小於閾值的索引，保留它們進入下一次迴圈
         inds = np.where(iou <= iou_threshold)[0]
         order = order[inds + 1]
 
     return np.array(keep, dtype=int)
 
 def batched_nms(boxes, scores, idxs, iou_threshold):
-    """
-    對應 torchvision.ops.batched_nms 的 Numpy 版本。
-    透過對不同類別/batch的座標加上極大偏移量，使它們不可能產生交集，從而實作批次 NMS。
-    """
+
     if boxes.size == 0:
         return np.empty((0,), dtype=int)
     
-    # 找出最大的座標值作為偏移基準
     max_coordinate = boxes.max()
-    # 為不同類別/batch產生絕對不會重疊的偏移量
     offsets = idxs * (max_coordinate + 1)
-    # 將框加上偏移量 (N, 4) + (N, 1)
     boxes_for_nms = boxes + offsets[:, None]
     
     return nms_numpy(boxes_for_nms, scores, iou_threshold)
@@ -114,33 +103,29 @@ def bbox_mc_nms(cls_dist: np.ndarray, bbox: np.ndarray, mc: np.ndarray, nms_cfg,
     return predicts_nms
 
 class Vec2Mask:
-    def __init__(self, model, image_size, strides = None):
+    def __init__(self, image_size, strides = None):
 
         if strides:
-            print(f"Found stride of model {strides}")
+            print(f":japanese_not_free_of_charge_button: Found stride of model {strides}")
             self.strides = strides
         else:
-            print("Found no stride of model, performed a dummy test for auto-anchor size")
-            self.strides = self.create_auto_anchor(model, image_size)
+            print(":teddy_bear: Found no stride of model, performed a dummy test for auto-anchor size")
+            # self.strides = self.create_auto_anchor(model, image_size)
 
         self.anchor_grid, self.scaler = generate_anchors(image_size, self.strides)
         self.image_size = image_size
 
     # TODO
-    def create_auto_anchor(self, model, image_size):
-        W, H = image_size
-        # TODO: need accelerate dummy test
-        dummy_input = np.zeros((1, 3, H, W),dtype=np.float32)
-        input_name = model.get_inputs()[0].name
-        outputs = model.run(None, {input_name: dummy_input})
-        det_output = [[outputs[0],outputs[1],outputs[2]],
-                      [outputs[3],outputs[4],outputs[5]],
-                      [outputs[6],outputs[7],outputs[8]]]
-        strides = []
-        for predict_head in det_output:
-            _, _, *anchor_num = predict_head[2].shape
-            strides.append(W // anchor_num[1])
-        return strides
+    # def create_auto_anchor(self, model: YOLO, image_size):
+        # W, H = image_size
+        # # TODO: need accelerate dummy test
+        # dummy_input = torch.zeros(1, 3, H, W)
+        # dummy_output = model(dummy_input)
+        # strides = []
+        # for predict_head in dummy_output["Main"]:
+        #     _, _, *anchor_num = predict_head[2].shape
+        #     strides.append(W // anchor_num[1])
+        # return strides
 
     def update(self, image_size):
         """

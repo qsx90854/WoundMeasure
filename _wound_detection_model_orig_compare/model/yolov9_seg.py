@@ -4,10 +4,7 @@ import onnxruntime as ort
 
 from typing import List, Optional, Tuple
 
-from pathlib import Path
 from utils.bounding_box_utils import Vec2Mask, bbox_mc_nms, sigmoid
-
-
 
 class NMSConfig:
     min_confidence: float = 0.5
@@ -71,29 +68,28 @@ class PostProcess:
 
 
 class YOLOV9Seg:
-    def __init__(self, model_path=Path('model/assets/v9-t-seg.onnx')):
-        """init ONNX Runtime Session
-
-        Args:
-            model_path (Path):  ONNX model path. Defaults to Path('model/assets/v9-t-seg.onnx').
-        """        
-
-        self.model_path = Path(model_path)
-
-        # 1. build inference Session
-        self.session = ort.InferenceSession(self.model_path)
+    def __init__(self, model_path='model/assets/v9-c-seg.onnx', providers=['CPUExecutionProvider']):
+        """
+        初始化 ONNX Runtime Session
+        :param model_path: ONNX 模型檔案路徑 (例如: 'best.onnx')
+        """
+        # 1. 建立推論 Session
+        self.session = ort.InferenceSession(model_path)
         
-        # 2. model input info
+        # 2. 獲取模型的輸入與輸出資訊
         self.inputs_info = self.session.get_inputs()
         
-        # 3. input name and shape for session.run()
+        # 3. 紀錄輸入/輸出名稱，這在執行 session.run() 時必須用到
         self.input_name = self.inputs_info[0].name
         self.input_shape = self.inputs_info[0].shape[2:]
+        
+        # 印出模型資訊，方便 Debug 與確認 Shape
+        # print(f"✅ 模型 {model_path} 載入成功！")
+        # print(f"👉 輸入節點: {[(inp.name, inp.shape, inp.type) for inp in self.inputs_info]}")
+        # print(f"👉 輸出節點: {[(out.name, out.shape, out.type) for out in self.outputs_info]}")
 
-        strides = [8, 16, 32] if self.model_path.stem == 'v9-c-seg' else None
-        self.vec2box = Vec2Mask(self.session, self.input_shape, strides)
+        self.vec2box = Vec2Mask(self.input_shape, [8, 16, 32])
         self.post_process = PostProcess(self.vec2box, NMSConfig)
-        self.output_shapes = [out.shape for out in self.session.get_outputs()]
 
     def letterbox(self, input_image, background_color = (114, 114, 114)):
         img_height, img_width, _ = input_image.shape

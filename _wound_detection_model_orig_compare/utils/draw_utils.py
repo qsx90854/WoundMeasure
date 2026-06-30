@@ -55,10 +55,7 @@ class MaskDrawer:
                 
                 cv2.rectangle(img, (x_min, y_min), (x_max, y_max), color, thickness)
                 
-                if idx2label and 0 <= cls_id < len(idx2label):
-                    class_text = str(idx2label[cls_id])
-                else:
-                    class_text = str(cls_id)
+                class_text = str(idx2label[cls_id] if idx2label else cls_id)
                 label_text = f"{class_text} {conf_val:.0%}"
                 
                 (text_w, text_h), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)

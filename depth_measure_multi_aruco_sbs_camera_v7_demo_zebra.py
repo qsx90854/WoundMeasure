@@ -112,6 +112,12 @@ GRAD_SIFT_MIN_GROUP_INLIERS   = 3                          # minimum inliers for
 GRAD_SIFT_GUIDED_RADIUS_PX    = 10.0                       # guided fallback: search right refs near RT/plane-predicted location
 GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback uses geometry, so descriptor ambiguity can be looser
 UI_LOOP_SLEEP_SEC             = 0.03                       # idle UI loop delay; lower is smoother but uses more CPU
+IDEAL_BASELINE_MM             = 45.0                       # preferred baseline for pair selection
+PAIR_SCORE_REPROJ_W           = 1.00                       # pair selection weight: reprojection error
+PAIR_SCORE_BASELINE_W         = 0.18                       # pair selection weight: baseline away from ideal
+PAIR_SCORE_BLUR_W             = 0.18                       # pair selection weight: blur penalty
+PAIR_SCORE_COVER_W            = 0.12                       # pair selection weight: weak ArUco coverage
+PAIR_SCORE_MARKER_W           = 0.08                       # pair selection weight: too few shared markers
 # ===================================================
 
 def load_json_camera_params(json_path):
@@ -816,6 +822,55 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             return float('inf')
         return np.mean(errors)
 
+    sharpness_cache = {}
+
+    def get_frame_sharpness(idx):
+        if idx not in sharpness_cache:
+            gray = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2GRAY)
+            sharpness_cache[idx] = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        return sharpness_cache[idx]
+
+    def marker_coverage_ratio(corners_dict):
+        if not corners_dict:
+            return 0.0
+        pts = np.vstack([np.asarray(v, dtype=np.float32).reshape(-1, 2) for v in corners_dict.values()])
+        if len(pts) < 3:
+            return 0.0
+        hull = cv2.convexHull(pts.astype(np.float32))
+        area = float(cv2.contourArea(hull))
+        h, w = frames[0].shape[:2]
+        return max(0.0, min(1.0, area / float(w * h)))
+
+    def compute_pair_quality_score(err, item_s, item_e, baseline_mm):
+        shared_markers = set(item_s['corners'].keys()).intersection(item_e['corners'].keys())
+        shared_count = len(shared_markers)
+        sharp_s = get_frame_sharpness(item_s['idx'])
+        sharp_e = get_frame_sharpness(item_e['idx'])
+        sharp_min = max(min(sharp_s, sharp_e), 1e-6)
+        blur_penalty = min(3.0, 120.0 / sharp_min)
+        cover_s = marker_coverage_ratio(item_s['corners'])
+        cover_e = marker_coverage_ratio(item_e['corners'])
+        cover = min(cover_s, cover_e)
+        coverage_penalty = max(0.0, 0.08 - cover) / 0.08
+        marker_penalty = 1.0 / max(shared_count, 1)
+        baseline_penalty = abs(baseline_mm - IDEAL_BASELINE_MM) / max(IDEAL_BASELINE_MM, 1e-6)
+        score = (
+            PAIR_SCORE_REPROJ_W * float(err)
+            + PAIR_SCORE_BASELINE_W * baseline_penalty
+            + PAIR_SCORE_BLUR_W * blur_penalty
+            + PAIR_SCORE_COVER_W * coverage_penalty
+            + PAIR_SCORE_MARKER_W * marker_penalty
+        )
+        metrics = {
+            'score': float(score),
+            'err': float(err),
+            'baseline': float(baseline_mm),
+            'shared_markers': int(shared_count),
+            'sharpness_min': float(sharp_min),
+            'coverage': float(cover),
+        }
+        return float(score), metrics
+
     # 多階段漸進式匹配評估
     best_start = None
     best_end = None
@@ -954,7 +1009,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 if MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM:
                     err = compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L)
                     if err != float('inf'):
-                        pairs.append((err, item_s, item_e, R_rel_cand, t_rel_cand, bsl))
+                        pair_score, pair_metrics = compute_pair_quality_score(err, item_s, item_e, bsl)
+                        pairs.append((pair_score, err, item_s, item_e, R_rel_cand, t_rel_cand, bsl, pair_metrics))
                         
         if not pairs:
             log_and_print(f"⚠️ 第 {stage_idx + 1} 階段：無合格的匹配對 (Baseline: {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)")
@@ -963,10 +1019,17 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         # 依誤差由小到大排序
         pairs.sort(key=lambda x: x[0])
         best_cand = pairs[0]
-        best_err = best_cand[0]
+        best_score = best_cand[0]
+        best_err = best_cand[1]
+        best_metrics = best_cand[7]
+        log_and_print(
+            f"🎯 [pair quality] score={best_score:.3f} | reproj={best_err:.3f}px | "
+            f"baseline={best_metrics['baseline']:.2f}mm | shared={best_metrics['shared_markers']} | "
+            f"sharp={best_metrics['sharpness_min']:.1f} | coverage={best_metrics['coverage']:.3f}"
+        )
         
         if best_err < 0.2:
-            best_start, best_end, R_rel, t_rel, baseline = best_cand[1], best_cand[2], best_cand[3], best_cand[4], best_cand[5]
+            best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
             log_and_print(f"🎉 第 {stage_idx + 1} 階段搜尋成功！在 {num_samples} 張抽樣下，找到誤差 < 0.2 px 的最佳配對：誤差 {best_err:.3f} px")
             stage_success = True
         else:
@@ -975,15 +1038,15 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         # 若本階段成功，或這已是最大抽樣張數的第二階段，即固定最佳與次佳解
         if stage_success or num_samples == 50:
             if not stage_success:
-                best_start, best_end, R_rel, t_rel, baseline = best_cand[1], best_cand[2], best_cand[3], best_cand[4], best_cand[5]
+                best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
                 log_and_print(f"⚠️ 達到最大抽樣張數 (50 張) 仍未找到低於 0.2 px 的配對。降級使用當前最優對，誤差為: {best_err:.3f} px")
                 
             # 次佳對選取：重投影誤差小於 0.5 px 且 baseline 大於門檻的其餘配對，最多取 5 組
             candidates_scores = []
-            for err, item_s, item_e, R_rel_c, t_rel_c, bsl in pairs:
+            for pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics in pairs:
                 if item_e['idx'] == best_end['idx'] and item_s['idx'] != best_start['idx']:
-                    if err < 0.5:
-                        candidates_scores.append((err, item_s, R_rel_c, t_rel_c, bsl))
+                    if err < 0.8:
+                        candidates_scores.append((pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics))
             
             selected_extras = candidates_scores[:5]
             break
@@ -997,13 +1060,15 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
     # 包裝次優額外右圖組
     extra_candidates_info = []
-    for err, item_s, R_rel_c, t_rel_c, bsl in selected_extras:
+    for pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics in selected_extras:
         extra_candidates_info.append({
             'idx_A': item_s['idx'],
             'frame_A': frames[item_s['idx']],
             'R_rel': R_rel_c,
             't_rel': t_rel_c,
             'baseline': bsl,
+            'pair_score': pair_score,
+            'pair_metrics': pair_metrics,
             'cornersA': undistort_corners_dict(item_s['corners'])
         })
         log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
@@ -4090,7 +4155,16 @@ def main():
                     print(f"   - 右圖 (原始未對齊匹配點 vs 3D點投影): {err_R_tri_raw:.2f} px (💡 反映特徵點偏離極線程度)")
                 
             p_dist_str = ""
-            if res['p3d'] is not None and current_cand['plane_n'] is not None:
+            if (custom_plane_fitted and res['p3d'] is not None
+                    and custom_plane_n is not None and custom_plane_c is not None):
+                p_dist = np.dot(custom_plane_n, res['p3d'] - custom_plane_c)
+                if auto_calc_active:
+                    plane_dist_history.append(p_dist)
+                    p_dist_str = f"\n傷口高度(自訂平面): {np.mean(plane_dist_history):.1f}mm"
+                else:
+                    plane_dist_history.clear()
+                    p_dist_str = f"\n傷口高度(自訂平面): {p_dist:.1f}mm"
+            elif res['p3d'] is not None and current_cand['plane_n'] is not None:
                 p_dist = (np.dot(current_cand['plane_n'], res['p3d'] - current_cand['plane_c']))
                 if auto_calc_active:
                     plane_dist_history.append(p_dist)
