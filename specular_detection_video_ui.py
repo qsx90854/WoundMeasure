@@ -11,13 +11,27 @@ from Algorithm.specular_detection import (
     SPEC_TEMPORAL_OFFSETS,
     SPEC_TEMPORAL_RESIDUAL_THRESHOLD,
     SPEC_TEMPORAL_STD_THRESHOLD,
+    compute_rt_aligned_temporal_specular_mask_bgr,
     compute_specular_mask_bgr,
     overlay_specular_mask_rgb,
 )
+from Algorithm.camera_preprocess import (
+    build_undistort_processor,
+    load_json_camera_params,
+    preprocess_gray,
+)
+from Algorithm.aruco_pose import detect_aruco_corners_bgr_for_pose
+from Algorithm import video_pose_analysis as video_pose_algo
 
 
 DISPLAY_MAX_WIDTH = 1400
 DISPLAY_MAX_HEIGHT = 820
+PARAMS_JSON_PATH = "calibration_result_Zebra_1_no_dis.json"
+ACTUAL_MARKER_SIZE_MM = 8.25
+START_FRAME_COUNT = 30
+END_FRAME_COUNT = 30
+FRAME_RANGE_MODE = "half_half"
+POSE_SELECT_MODE = "reproj_min"
 
 
 class SpecularDetectionVideoUI:
@@ -37,7 +51,14 @@ class SpecularDetectionVideoUI:
         self.current_photo = None
         self.last_display_frame = None
         self.frame_cache = {}
+        self.processed_frame_cache = {}
         self.result_cache = {}
+        self.video_data = None
+        self.processed_corners_cache = {}
+        self.KL = None
+        self.distL = None
+        self.mtxL = None
+        self.process_view = None
 
         self.status_var = tk.StringVar(value="Open a video to start.")
         self.frame_var = tk.StringVar(value="Frame: - / -")
@@ -123,13 +144,87 @@ class SpecularDetectionVideoUI:
         self.video_path = path
         self.frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
         self.video_fps = float(cap.get(cv2.CAP_PROP_FPS)) or 30.0
+        ok, first_frame = cap.read()
+        if not ok:
+            self.release_video()
+            messagebox.showerror("Open failed", "Cannot read the first frame.")
+            return
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+        if not self.prepare_zebra_pipeline(first_frame):
+            self.release_video()
+            return
+
         self.current_index = 0
         self.frame_cache.clear()
+        self.processed_frame_cache.clear()
         self.result_cache.clear()
         self.slider.configure(to=max(self.frame_count - 1, 0))
         self.set_controls_state(tk.NORMAL)
-        self.status_var.set(Path(path).name)
+        self.status_var.set(f"{Path(path).name} | zebra temporal ready")
         self.show_frame(0)
+
+    def prepare_zebra_pipeline(self, first_frame):
+        params = load_json_camera_params(PARAMS_JSON_PATH)
+        mtxL_o, distL, _mtxR_o, _distR, _extrinsic, _F_orig = params
+        if mtxL_o is None or distL is None:
+            messagebox.showerror("Calibration missing", f"Cannot load calibration JSON:\n{PARAMS_JSON_PATH}")
+            return False
+
+        h_raw, w_raw = first_frame.shape[:2]
+        newKL_o, _map1, _map2, process_view = build_undistort_processor(
+            mtxL_o, distL, (w_raw, h_raw), alpha=1.0
+        )
+        self.KL = newKL_o.copy().astype(np.float64)
+        self.distL = distL
+        self.mtxL = mtxL_o
+        self.process_view = process_view
+
+        self.status_var.set("Analyzing video poses for zebra temporal specular detection...")
+        self.root.update_idletasks()
+
+        def progress_callback(percent, status_text):
+            self.status_var.set(f"{percent:5.1f}% {status_text}")
+            self.root.update_idletasks()
+
+        self.video_data = video_pose_algo.analyze_video_frames(
+            self.video_path,
+            START_FRAME_COUNT,
+            END_FRAME_COUNT,
+            self.KL,
+            self.distL,
+            self.mtxL,
+            ACTUAL_MARKER_SIZE_MM,
+            POSE_SELECT_MODE,
+            FRAME_RANGE_MODE,
+            progress_callback=progress_callback,
+        )
+        if self.video_data is None:
+            messagebox.showerror("Pose analysis failed", "Cannot build marker_map / video poses for zebra temporal detection.")
+            return False
+        self.build_processed_aruco_corner_cache()
+        return True
+
+    def build_processed_aruco_corner_cache(self):
+        self.processed_corners_cache = {}
+        if not self.video_data:
+            return
+        frames = self.video_data.get("all_frames") or []
+        total = len(frames)
+        if total == 0:
+            return
+        for idx, raw_frame in enumerate(frames):
+            processed = self.process_view(raw_frame) if self.process_view is not None else raw_frame
+            bgr = processed[0] if isinstance(processed, tuple) else processed
+            self.processed_corners_cache[idx] = detect_aruco_corners_bgr_for_pose(
+                bgr,
+                preprocess_gray_fn=preprocess_gray,
+            )
+            if idx % 10 == 0 or idx == total - 1:
+                self.status_var.set(f"Caching ArUco corners {idx + 1}/{total}...")
+                self.root.update_idletasks()
+        self.video_data["processed_corners_cache"] = self.processed_corners_cache
+        self.video_data["processed_pose_cache"] = {}
 
     def read_frame(self, frame_index):
         if self.cap is None:
@@ -147,6 +242,23 @@ class SpecularDetectionVideoUI:
             keys = sorted(self.frame_cache.keys(), key=lambda k: abs(k - self.current_index), reverse=True)
             for key in keys[:20]:
                 self.frame_cache.pop(key, None)
+        return frame
+
+    def read_processed_frame(self, frame_index):
+        frame_index = max(0, min(int(frame_index), max(self.frame_count - 1, 0)))
+        if frame_index in self.processed_frame_cache:
+            return self.processed_frame_cache[frame_index].copy()
+        frame = self.read_frame(frame_index)
+        if frame is None:
+            return None
+        if self.process_view is not None:
+            processed = self.process_view(frame)
+            frame = processed[0] if isinstance(processed, tuple) else processed
+        self.processed_frame_cache[frame_index] = frame.copy()
+        if len(self.processed_frame_cache) > 80:
+            keys = sorted(self.processed_frame_cache.keys(), key=lambda k: abs(k - self.current_index), reverse=True)
+            for key in keys[:20]:
+                self.processed_frame_cache.pop(key, None)
         return frame
 
     def compute_temporal_mask(self, frame_index, center_bgr, spatial_mask):
@@ -186,12 +298,24 @@ class SpecularDetectionVideoUI:
         if frame_index in self.result_cache:
             return self.result_cache[frame_index].copy()
 
-        frame = self.read_frame(frame_index)
+        frame = self.read_processed_frame(frame_index)
         if frame is None:
             return None
 
-        spatial_mask = compute_specular_mask_bgr(frame)
-        temporal_mask = self.compute_temporal_mask(frame_index, frame, spatial_mask)
+        if self.video_data is not None and self.KL is not None:
+            combined_mask, spatial_mask, temporal_mask = compute_rt_aligned_temporal_specular_mask_bgr(
+                frame,
+                frame_index,
+                self.video_data,
+                self.KL,
+                ACTUAL_MARKER_SIZE_MM,
+                self.process_view,
+                return_parts=True,
+                preprocess_gray_fn=preprocess_gray,
+            )
+        else:
+            spatial_mask = compute_specular_mask_bgr(frame)
+            temporal_mask = self.compute_temporal_mask(frame_index, frame, spatial_mask)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         spatial_rgb = overlay_specular_mask_rgb(rgb, spatial_mask, None)
@@ -199,7 +323,7 @@ class SpecularDetectionVideoUI:
         temporal_rgb = overlay_specular_mask_rgb(rgb, zero_spatial, temporal_mask)
 
         spatial_panel = self.add_panel_header(cv2.cvtColor(spatial_rgb, cv2.COLOR_RGB2BGR), "Spatial Specular")
-        temporal_panel = self.add_panel_header(cv2.cvtColor(temporal_rgb, cv2.COLOR_RGB2BGR), "Temporal Specular")
+        temporal_panel = self.add_panel_header(cv2.cvtColor(temporal_rgb, cv2.COLOR_RGB2BGR), "RT Temporal Specular")
         combined = self.hconcat_with_separator(spatial_panel, temporal_panel)
         self.result_cache[frame_index] = combined.copy()
         if len(self.result_cache) > 40:
@@ -410,6 +534,15 @@ class SpecularDetectionVideoUI:
         if self.cap is not None:
             self.cap.release()
             self.cap = None
+        self.video_data = None
+        self.processed_corners_cache = {}
+        self.KL = None
+        self.distL = None
+        self.mtxL = None
+        self.process_view = None
+        self.frame_cache.clear()
+        self.processed_frame_cache.clear()
+        self.result_cache.clear()
         self.set_controls_state(tk.DISABLED)
 
     def on_close(self):

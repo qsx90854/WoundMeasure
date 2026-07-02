@@ -1,6 +1,12 @@
 import cv2
 import numpy as np
 
+from .aruco_pose import (
+    detect_aruco_corners_bgr_for_pose,
+    estimate_marker_map_pose_from_corners,
+    marker_plane_homography_from_pose,
+)
+
 
 SPEC_MASK_V_THRESHOLD = 210
 SPEC_MASK_S_THRESHOLD = 80
@@ -11,23 +17,6 @@ SPEC_TEMPORAL_OFFSETS = (-6, -3, 3, 6)
 SPEC_TEMPORAL_STD_THRESHOLD = 16.0
 SPEC_TEMPORAL_RESIDUAL_THRESHOLD = 24.0
 SPEC_TEMPORAL_BRIGHT_THRESHOLD = 150
-
-CLAHE_CLIP_LIMIT = 2.0
-CLAHE_TILE_GRID_SIZE = (8, 8)
-_CLAHE_CACHE = {}
-
-
-def _get_clahe(clip_limit=CLAHE_CLIP_LIMIT, tile_size=CLAHE_TILE_GRID_SIZE):
-    key = (clip_limit, tile_size)
-    if key not in _CLAHE_CACHE:
-        _CLAHE_CACHE[key] = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
-    return _CLAHE_CACHE[key]
-
-
-def _preprocess_gray(gray_img, enable_clahe=True):
-    if enable_clahe:
-        return _get_clahe().apply(gray_img)
-    return gray_img
 
 
 def compute_specular_mask_bgr(
@@ -91,61 +80,6 @@ def overlay_specular_mask_rgb(rgb, spatial_mask, temporal_mask=None, alpha=0.55)
     return out
 
 
-def detect_aruco_corners_bgr_for_pose(bgr, preprocess_gray_fn=None):
-    """Detect ArUco marker corners in an already processed/undistorted UI image."""
-    if bgr is None or bgr.size == 0:
-        return {}
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    gray = preprocess_gray_fn(gray, True) if preprocess_gray_fn is not None else _preprocess_gray(gray, True)
-    dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
-    if hasattr(cv2.aruco, "ArucoDetector"):
-        detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
-        corners, ids, _ = detector.detectMarkers(gray)
-    else:
-        params = cv2.aruco.DetectorParameters_create()
-        corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
-    if ids is None or len(ids) == 0:
-        return {}
-    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 80, 0.0001)
-    for c in corners:
-        cv2.cornerSubPix(gray, c, (5, 5), (-1, -1), term)
-    return {int(mid[0]): c.reshape(4, 2) for mid, c in zip(ids, corners)}
-
-
-def estimate_marker_map_pose_from_corners(corners_dict, marker_map, marker_size_mm, K):
-    """Estimate camera pose of the marker-map reference frame from detected marker corners."""
-    if not corners_dict or not marker_map:
-        return None
-    half = marker_size_mm / 2.0
-    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
-    obj_pts = []
-    img_pts = []
-    for mid, pts in corners_dict.items():
-        if mid not in marker_map:
-            continue
-        R_m2ref, t_m2ref = marker_map[mid]
-        pts_w = (R_m2ref @ canon.T).T + t_m2ref.T
-        obj_pts.append(pts_w)
-        img_pts.append(pts)
-    if not obj_pts:
-        return None
-    obj_pts = np.vstack(obj_pts).astype(np.float32)
-    img_pts = np.vstack(img_pts).astype(np.float32)
-    ok, rvec, tvec = cv2.solvePnP(obj_pts, img_pts, K, np.zeros(5), flags=cv2.SOLVEPNP_ITERATIVE)
-    if not ok:
-        return None
-    R, _ = cv2.Rodrigues(rvec)
-    return R, tvec.reshape(3, 1)
-
-
-def marker_plane_homography_from_pose(R, t, K):
-    """Homography from marker-map z=0 plane coordinates to image coordinates."""
-    H = K @ np.column_stack((R[:, 0], R[:, 1], t.reshape(3)))
-    if abs(H[2, 2]) > 1e-9:
-        H = H / H[2, 2]
-    return H
-
-
 def compute_rt_aligned_temporal_specular_mask_bgr(
     center_bgr,
     center_frame_idx,
@@ -168,8 +102,28 @@ def compute_rt_aligned_temporal_specular_mask_bgr(
         temporal_empty = np.zeros_like(base_mask) if base_mask is not None else None
         return (base_mask, base_mask, temporal_empty) if return_parts else base_mask
 
-    center_corners = detect_aruco_corners_bgr_for_pose(center_bgr, preprocess_gray_fn=preprocess_gray_fn)
-    center_pose = estimate_marker_map_pose_from_corners(center_corners, marker_map, marker_size_mm, K)
+    corners_cache = video_data.get("processed_corners_cache") or video_data.get("aruco_corners_cache")
+    pose_cache = video_data.setdefault("processed_pose_cache", {})
+
+    def get_frame_corners(frame_idx, bgr):
+        frame_idx = int(frame_idx)
+        if isinstance(corners_cache, dict) and frame_idx in corners_cache:
+            return corners_cache[frame_idx]
+        corners = detect_aruco_corners_bgr_for_pose(bgr, preprocess_gray_fn=preprocess_gray_fn)
+        if isinstance(corners_cache, dict):
+            corners_cache[frame_idx] = corners
+        return corners
+
+    def get_frame_pose(frame_idx, bgr):
+        frame_idx = int(frame_idx)
+        if frame_idx in pose_cache:
+            return pose_cache[frame_idx]
+        corners = get_frame_corners(frame_idx, bgr)
+        pose = estimate_marker_map_pose_from_corners(corners, marker_map, marker_size_mm, K)
+        pose_cache[frame_idx] = pose
+        return pose
+
+    center_pose = get_frame_pose(center_frame_idx, center_bgr)
     if center_pose is None:
         temporal_empty = np.zeros_like(base_mask) if base_mask is not None else None
         return (base_mask, base_mask, temporal_empty) if return_parts else base_mask
@@ -194,8 +148,7 @@ def compute_rt_aligned_temporal_specular_mask_bgr(
             processed = process_frame_fn(neighbor_bgr)
             neighbor_bgr = processed[0] if isinstance(processed, tuple) else processed
 
-        neighbor_corners = detect_aruco_corners_bgr_for_pose(neighbor_bgr, preprocess_gray_fn=preprocess_gray_fn)
-        neighbor_pose = estimate_marker_map_pose_from_corners(neighbor_corners, marker_map, marker_size_mm, K)
+        neighbor_pose = get_frame_pose(idx, neighbor_bgr)
         if neighbor_pose is None:
             continue
 
