@@ -28,6 +28,7 @@ from Algorithm import aruco_pose as aruco_algo
 from Algorithm import camera_preprocess as camera_algo
 from Algorithm import video_pose_analysis as video_pose_algo
 from Algorithm.specular_detection import (
+    compute_specular_mask_bgr_wound_adaptive,
     compute_rt_aligned_temporal_specular_mask_bgr,
     overlay_specular_mask_rgb,
 )
@@ -87,13 +88,7 @@ ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT = False        # 用候選點只估初始範
 EPIPOLAR_SEARCH_HALF_LEN = 55                      # 極線方向搜尋半長度 (pixels)
 EPIPOLAR_SEARCH_BAND_RADIUS = 2                    # 極線法線方向 band 半徑 (pixels)
 EPIPOLAR_SEARCH_MIN_SCORE = 0.35                   # masked ZNCC / gradient NCC 最低接受分數
-POINT_FIRST_FINAL_MIN_SCORE = 0.30                 # PointFirst ECC/最終點最低 masked descriptor 分數
-POINT_FIRST_FINAL_MIN_ZNCC = 0.15                  # PointFirst 最終 patch ZNCC 最低接受分數
 ENABLE_SIFT_PNP_ASSIST = False                      # 當僅有 1 個 ArUco 標籤時，是否啟用 SIFT 特徵點輔助 RT 與 baseline 解算
-ENABLE_POINT_FIRST_NEIGHBOR_REFINE = True           # PointFirst: final small coordinate refinement from nearby feature matches
-POINT_FIRST_NEIGHBOR_MIN_INLIERS = 4                # Minimum reliable nearby feature matches for PointFirst refinement
-POINT_FIRST_NEIGHBOR_MAX_SHIFT = 6.0                # Maximum accepted PointFirst neighbor refinement shift in pixels
-POINT_FIRST_NEIGHBOR_SCORE_TOL = 0.08               # Maximum accepted final-score drop after neighbor refinement
 EPIPOLAR_SEARCH_DESC_OK = 0.30                      # Epi-band search: normal descriptor threshold
 EPIPOLAR_SEARCH_ZNCC_OK = 0.15                      # Epi-band search: normal ZNCC threshold
 EPIPOLAR_SEARCH_DESC_STRONG = 0.50                  # Epi-band search: descriptor can rescue a weak ZNCC
@@ -223,6 +218,26 @@ def extract_wound_rect(prediction, image_shape):
     return {'box': min_area_box, 'min_area_box': min_area_box, 'bbox_box': bbox_box, 'area_px': best_area}
 
 
+def prediction_to_wound_mask(prediction, image_shape):
+    if not prediction:
+        return None
+    first = prediction[0]
+    if first is None or len(first) < 4:
+        return None
+    h, w = image_shape[:2]
+    _classes, _bboxes, scores, masks = first
+    combined = np.zeros((h, w), dtype=np.uint8)
+    for score, mask in zip(scores, masks):
+        conf_val = float(score[0] if isinstance(score, np.ndarray) else score)
+        if conf_val <= 0.01:
+            continue
+        mask_f = mask.astype(np.float32)
+        if mask_f.shape != (h, w):
+            mask_f = cv2.resize(mask_f, (w, h), interpolation=cv2.INTER_LINEAR)
+        combined[mask_f > 0.5] = 255
+    return combined if np.any(combined) else None
+
+
 def draw_wound_size_label_rgb(rgb, size_info, title="Wound", fallback_text=None):
     if not size_info and not fallback_text:
         return rgb
@@ -326,26 +341,6 @@ def draw_wound_corner_points_rgb(rgb, points, title_prefix, line_closed=False, c
     return out
 
 
-def load_json_camera_params(json_path):
-    if not os.path.exists(json_path):
-        print(f"❌ 找不到參數檔案: {json_path}"); return None, None, None, None, None, None
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    mtx_L = np.array(data['intrinsic_L']['matrix'], dtype=np.float32)
-    dist_L = np.array(data['intrinsic_L']['distortion'], dtype=np.float32)
-    mtx_R = np.array(data['intrinsic_R']['matrix'], dtype=np.float32)
-    dist_R = np.array(data['intrinsic_R']['distortion'], dtype=np.float32)
-    extrinsic = data.get('extrinsic', {})
-    R_rel = np.array(extrinsic.get('R', np.eye(3)))
-    t_rel = np.array(extrinsic.get('T', np.zeros(3))).reshape(3, 1)
-    F_orig = np.array(extrinsic.get('F')) if 'F' in extrinsic else None
-
-    # forvideo,勿修改
-    mtx_R = mtx_L
-    dist_R = dist_L
-
-    return mtx_L, dist_L, mtx_R, dist_R, extrinsic, F_orig
-
 def compute_fundamental_matrix(K_L, K_R, R_rel, t_rel):
     t = t_rel.flatten()
     tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]], dtype=np.float64)
@@ -353,7 +348,19 @@ def compute_fundamental_matrix(K_L, K_R, R_rel, t_rel):
     K_R_inv, K_L_inv = np.linalg.inv(K_R.astype(np.float64)), np.linalg.inv(K_L.astype(np.float64))
     return K_R_inv.T @ E @ K_L_inv
 
-def triangulate_point_3d(pt_A, pt_B, K_L, K_R, R_rel, t_rel):
+def triangulate_point_3d(pt_A, pt_B, K_L, K_R, R_rel, t_rel, F=None):
+    # 提供 F 時先做 Hartley-Sturm 最佳修正 (cv2.correctMatches)，
+    # 同時最小幅度微調左右點使其嚴格滿足極線幾何，優於只單邊投影右點
+    if F is not None:
+        try:
+            ptsA_in = np.array([[[float(pt_A[0]), float(pt_A[1])]]], dtype=np.float64)
+            ptsB_in = np.array([[[float(pt_B[0]), float(pt_B[1])]]], dtype=np.float64)
+            ptsA_c, ptsB_c = cv2.correctMatches(F.astype(np.float64), ptsA_in, ptsB_in)
+            if np.all(np.isfinite(ptsA_c)) and np.all(np.isfinite(ptsB_c)):
+                pt_A = ptsA_c[0, 0]
+                pt_B = ptsB_c[0, 0]
+        except cv2.error:
+            pass
     P0 = (K_L.astype(np.float64) @ np.hstack([np.eye(3), np.zeros((3, 1))])).astype(np.float32)
     P1 = (K_R.astype(np.float64) @ np.hstack([R_rel, t_rel])).astype(np.float32)
     # 強制使用 float32，避免 OpenCV 在處理整數點陣列時發生隱性記憶體錯亂 (計算出極端錯誤的負深度)
@@ -750,6 +757,81 @@ def multi_view_triangulation(P_matrices, points_2d):
         return None
     return (X[:3] / X[3])
 
+def fuse_candidate_results(res_list):
+    """
+    多候選影格量測結果融合：
+    1. 深度中位數 + MAD 剔除離群 (|z - med| > 3 * 1.4826 * MAD)
+    2. 依 (baseline / z^2)^2 加權平均 (三角測距深度不確定度 ∝ z^2 / (f * baseline))
+    res_list 每個元素需含 'p3d'，可含 'baseline'、'p3d_w'。
+    """
+    if not res_list:
+        return None
+    zs = np.array([float(r['p3d'][2]) for r in res_list], dtype=np.float64)
+    keep = np.ones(len(res_list), dtype=bool)
+    if len(res_list) >= 3:
+        med = float(np.median(zs))
+        mad = float(np.median(np.abs(zs - med)))
+        if mad > 1e-6:
+            keep = np.abs(zs - med) <= 3.0 * 1.4826 * mad
+            if not np.any(keep):
+                keep[:] = True
+    kept = [r for r, k in zip(res_list, keep) if k]
+    dropped = [r for r, k in zip(res_list, keep) if not k]
+
+    def _weights(items):
+        ws = []
+        for r in items:
+            b = float(r.get('baseline') or 0.0)
+            z = max(float(r['p3d'][2]), 1e-6)
+            ws.append((b / (z * z)) ** 2 if b > 0 else 0.0)
+        ws = np.array(ws, dtype=np.float64)
+        if not np.all(np.isfinite(ws)) or ws.sum() <= 0:
+            ws = np.ones(len(items), dtype=np.float64)
+        return ws / ws.sum()
+
+    ws = _weights(kept)
+    p3d = np.sum(np.array([r['p3d'] for r in kept], dtype=np.float64) * ws[:, None], axis=0)
+    kept_w = [r for r in kept if r.get('p3d_w') is not None]
+    p3d_w = None
+    if kept_w:
+        ws_w = _weights(kept_w)
+        p3d_w = np.sum(np.array([r['p3d_w'] for r in kept_w], dtype=np.float64) * ws_w[:, None], axis=0)
+    return {'p3d': p3d, 'd': float(np.linalg.norm(p3d)), 'p3d_w': p3d_w,
+            'kept': kept, 'dropped': dropped, 'weights': ws}
+
+def fit_plane_to_points(pts, ransac_thresh_mm=1.5, ransac_iters=200):
+    """
+    SVD 平面擬合；點數 >= 6 時先以 RANSAC 剔除離群點（誤匹配的 3D 點）。
+    回傳 (n, c, inlier_mask, residuals)，residuals 為所有輸入點到平面的有號距離 (mm)。
+    """
+    pts = np.asarray(pts, dtype=np.float64)
+    inlier_mask = np.ones(len(pts), dtype=bool)
+    if len(pts) >= 6:
+        best_inliers = None
+        rng = np.random.default_rng(0)
+        for _ in range(ransac_iters):
+            idx = rng.choice(len(pts), 3, replace=False)
+            p0, p1, p2 = pts[idx]
+            n_h = np.cross(p1 - p0, p2 - p0)
+            norm = np.linalg.norm(n_h)
+            if norm < 1e-9:
+                continue
+            n_h = n_h / norm
+            d = np.abs((pts - p0) @ n_h)
+            inl = d <= ransac_thresh_mm
+            if best_inliers is None or inl.sum() > best_inliers.sum():
+                best_inliers = inl
+        if best_inliers is not None and best_inliers.sum() >= 3:
+            inlier_mask = best_inliers
+    sub = pts[inlier_mask]
+    c = sub.mean(axis=0)
+    _, _, Vt = np.linalg.svd(sub - c)
+    n = Vt[-1]
+    if np.dot(n, c) > 0:
+        n = -n  # 法向量朝向相機
+    residuals = (pts - c) @ n
+    return n, c, inlier_mask, residuals
+
 def apply_dedrift_correction(trajectory, p_end_match):
     """
     對光流軌跡進行閉環去漂移修正
@@ -874,37 +956,6 @@ def preprocess_gray(gray_img, enable_clahe=True):
 
 def compute_global_plane(imgA_gray, K_L, marker_size_mm):
     return aruco_algo.compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print)
-    dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
-    if hasattr(cv2.aruco, 'ArucoDetector'):
-        detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
-        cA, idsA, _ = detector.detectMarkers(imgA_gray)
-    else:
-        params = cv2.aruco.DetectorParameters_create()
-        cA, idsA, _ = cv2.aruco.detectMarkers(imgA_gray, dict_4x4, parameters=params)
-    if idsA is None or len(idsA) < 1: 
-        print("⚠️ [平面擬合] 在左圖中未偵測到任何 ArUco 標籤。")
-        return None, None
-    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
-    for c in cA: cv2.cornerSubPix(imgA_gray, c, (3, 3), (-1, -1), term)
-    
-    half = marker_size_mm / 2.0
-    canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
-    objA = []
-    for c in cA:
-        ok, rv, tv = cv2.solvePnP(canon, c[0], K_L, np.zeros(5))
-        if ok:
-            R, _ = cv2.Rodrigues(rv)
-            objA.append((R @ canon.T).T + tv.T)
-    if not objA: 
-        print("⚠️ [平面擬合] 對 ArUco 標籤進行 PnP 位姿解算時全部失敗。")
-        return None, None
-    objA = np.vstack(objA).astype(np.float32)
-    c = np.mean(objA, axis=0)
-    _, _, Vt = np.linalg.svd(objA - c)
-    n = Vt[-1]
-    if np.dot(n, c) > 0: n = -n
-    log_and_print(f"✅ [平面擬合成功] 偵測到 {len(idsA)} 個標籤，擬合平面法向量: {n.flatten()}，中心點: {c.flatten()}")
-    return n, c
 
 def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None, marker_map=None, map_calibrated=False):
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
@@ -1343,6 +1394,24 @@ def project_point_to_line(pt, line):
     signed = (a * x + b * y + c) / denom
     return np.array([x - a * signed, y - b * signed], dtype=np.float32)
 
+def _masked_zncc_from_patches(patch_a, valid_a, patch_b):
+    """與 score_warped_zncc_patch_match 相同的 masked ZNCC，但直接使用已快取的左圖 patch。"""
+    if patch_a is None or patch_b is None or patch_a.shape != patch_b.shape:
+        return -1.0
+    valid = (patch_a < 245) & (patch_b < 245)
+    if valid_a is not None:
+        valid = valid_a & valid
+    if np.count_nonzero(valid) < patch_a.size * 0.55:
+        return -1.0
+    a = patch_a.astype(np.float32)[valid]
+    b = patch_b.astype(np.float32)[valid]
+    a -= float(a.mean())
+    b -= float(b.mean())
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom < 1e-6:
+        return -1.0
+    return float(np.dot(a, b) / denom)
+
 def search_match_on_epipolar_band(imgA_gray, imgB_gray, pt_A, seed_pt_B, F,
                                   patch_size=31,
                                   half_len=EPIPOLAR_SEARCH_HALF_LEN,
@@ -1353,16 +1422,23 @@ def search_match_on_epipolar_band(imgA_gray, imgB_gray, pt_A, seed_pt_B, F,
     """
     Use the existing candidate match only as a seed, then search along pt_A's
     epipolar band for the best combined descriptor and ZNCC patch match.
+    左圖 patch/描述子只依賴 pt_A 與 H_AB，整條 band 共用一份快取；
+    原始模式的 ZNCC 以單次 matchTemplate 向量化，最佳點沿極線做拋物線亞像素插值。
     """
     if seed_pt_B is None or F is None:
         return None, 0.0
-    desc_a = None
     tmpl = get_patch(imgA_gray, pt_A, patch_size)
-    if H_AB is None:
-        desc_a = _masked_patch_descriptor(tmpl)
-        if desc_a is None:
+    warped_a, warped_valid = None, None
+    if H_AB is not None:
+        if tmpl is None:
             return None, 0.0
-    elif tmpl is None:
+        warped_a, warped_valid = get_local_homography_warped_patch(imgA_gray, pt_A, seed_pt_B, H_AB, patch_size)
+        if warped_a is None:
+            return None, 0.0
+        desc_a = _masked_patch_descriptor(warped_a)
+    else:
+        desc_a = _masked_patch_descriptor(tmpl)
+    if desc_a is None:
         return None, 0.0
 
     h, w = imgB_gray.shape[:2]
@@ -1377,52 +1453,89 @@ def search_match_on_epipolar_band(imgA_gray, imgB_gray, pt_A, seed_pt_B, F,
     normal = np.array([line[0], line[1]], dtype=np.float32)
     center = project_point_to_line(seed_pt_B, line)
 
-    best_pt = None
-    best_score = -1.0
     if search_roi is not None:
         rx, ry, rw, rh = search_roi
         roi_x0, roi_y0 = float(rx), float(ry)
         roi_x1, roi_y1 = float(rx + rw), float(ry + rh)
-    else:
-        roi_x0 = roi_y0 = roi_x1 = roi_y1 = None
 
-    for s in np.arange(-half_len, half_len + 0.5, 1.0):
+    half = patch_size // 2
+    s_vals = np.arange(-half_len, half_len + 0.5, 1.0)
+    n_vals = list(range(-band_radius, band_radius + 1))
+
+    # 先蒐集通過 ROI 與影像邊界檢查的候選像素位置
+    cand_list = []  # (si, ni, x, y)
+    for si, s in enumerate(s_vals):
         base = center + direction * float(s)
-        for n in range(-band_radius, band_radius + 1):
+        for ni, n in enumerate(n_vals):
             pt = base + normal * float(n)
             x, y = int(round(pt[0])), int(round(pt[1]))
             if search_roi is not None and not (roi_x0 <= x <= roi_x1 and roi_y0 <= y <= roi_y1):
                 continue
-            if x < patch_size // 2 or y < patch_size // 2 or x >= w - patch_size // 2 or y >= h - patch_size // 2:
+            if x < half or y < half or x >= w - half or y >= h - half:
                 continue
-            if H_AB is not None:
-                desc_score = score_warped_patch_match(imgA_gray, imgB_gray, pt_A, (x, y), H_AB, patch_size)
-                zncc_score = score_warped_zncc_patch_match(imgA_gray, imgB_gray, pt_A, (x, y), H_AB, patch_size)
-            else:
-                patch_b = get_patch(imgB_gray, (x, y), patch_size)
-                desc_b = _masked_patch_descriptor(patch_b)
-                desc_score = _descriptor_similarity(desc_a, desc_b)
-                if patch_b is None or tmpl is None or patch_b.shape != tmpl.shape:
-                    zncc_score = -1.0
-                else:
-                    zncc_score = float(cv2.matchTemplate(patch_b, tmpl, cv2.TM_CCOEFF_NORMED)[0, 0])
+            cand_list.append((si, ni, x, y))
 
-            desc_pos = max(0.0, float(desc_score))
-            zncc_pos = max(0.0, float(zncc_score))
-            both_ok = desc_score >= EPIPOLAR_SEARCH_DESC_OK and zncc_score >= EPIPOLAR_SEARCH_ZNCC_OK
-            desc_rescue = desc_score >= EPIPOLAR_SEARCH_DESC_STRONG and zncc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
-            zncc_rescue = zncc_score >= EPIPOLAR_SEARCH_ZNCC_STRONG and desc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
-            if not (both_ok or desc_rescue or zncc_rescue):
-                continue
+    if not cand_list:
+        return None, -1.0
 
-            # Reward agreement, but still allow a strong score to rescue a slightly weak one.
-            score = desc_pos + zncc_pos + 0.25 * min(desc_pos, zncc_pos)
-            if score > best_score:
-                best_score = score
-                best_pt = np.array([float(x), float(y)], dtype=np.float32)
+    # 原始 (無 H_AB) 模式的 ZNCC：對候選包圍盒單次 matchTemplate，再逐點取樣
+    zncc_map, map_x0, map_y0 = None, 0, 0
+    if H_AB is None and tmpl is not None:
+        xs = [cpt[2] for cpt in cand_list]
+        ys = [cpt[3] for cpt in cand_list]
+        map_x0, map_y0 = min(xs) - half, min(ys) - half
+        x1_roi, y1_roi = max(xs) + half + 1, max(ys) + half + 1
+        roi_img = imgB_gray[map_y0:y1_roi, map_x0:x1_roi]
+        if roi_img.shape[0] >= patch_size and roi_img.shape[1] >= patch_size:
+            zncc_map = cv2.matchTemplate(roi_img, tmpl, cv2.TM_CCOEFF_NORMED)
+
+    best_pt = None
+    best_score = -1.0
+    best_si, best_ni = -1, -1
+    score_grid = np.full((len(s_vals), len(n_vals)), -np.inf, dtype=np.float64)
+    for si, ni, x, y in cand_list:
+        patch_b = get_patch(imgB_gray, (x, y), patch_size)
+        if patch_b is None:
+            continue
+        desc_b = _masked_patch_descriptor(patch_b)
+        desc_score = _descriptor_similarity(desc_a, desc_b)
+        if H_AB is not None:
+            zncc_score = _masked_zncc_from_patches(warped_a, warped_valid, patch_b)
+        elif zncc_map is not None:
+            zncc_score = float(zncc_map[y - half - map_y0, x - half - map_x0])
+        else:
+            zncc_score = -1.0
+
+        desc_pos = max(0.0, float(desc_score))
+        zncc_pos = max(0.0, float(zncc_score))
+        both_ok = desc_score >= EPIPOLAR_SEARCH_DESC_OK and zncc_score >= EPIPOLAR_SEARCH_ZNCC_OK
+        desc_rescue = desc_score >= EPIPOLAR_SEARCH_DESC_STRONG and zncc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
+        zncc_rescue = zncc_score >= EPIPOLAR_SEARCH_ZNCC_STRONG and desc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
+        if not (both_ok or desc_rescue or zncc_rescue):
+            continue
+
+        # Reward agreement, but still allow a strong score to rescue a slightly weak one.
+        score = desc_pos + zncc_pos + 0.25 * min(desc_pos, zncc_pos)
+        score_grid[si, ni] = score
+        if score > best_score:
+            best_score = score
+            best_pt = np.array([float(x), float(y)], dtype=np.float32)
+            best_si, best_ni = si, ni
 
     if best_pt is None or best_score < min_score * 0.6:
         return None, best_score
+
+    # 沿極線方向做拋物線亞像素插值 (ECC 關閉時也能得到亞像素結果)
+    if 0 < best_si < len(s_vals) - 1:
+        s_m = score_grid[best_si - 1, best_ni]
+        s_p = score_grid[best_si + 1, best_ni]
+        if np.isfinite(s_m) and np.isfinite(s_p):
+            denom_p = s_m - 2.0 * best_score + s_p
+            if abs(denom_p) > 1e-9:
+                delta = 0.5 * (s_m - s_p) / denom_p
+                if abs(delta) <= 0.5:
+                    best_pt = best_pt + direction * float(delta)
+
     best_pt = project_point_to_line(best_pt, line)
     return best_pt, best_score
 
@@ -1433,7 +1546,7 @@ def point_in_roi(pt, roi):
     rx, ry, rw, rh = roi
     return (rx <= x <= rx + rw) and (ry <= y <= ry + rh)
 
-def point_first_plane_homography(cand, K_L):
+def plane_homography_from_cand(cand, K_L):
     if cand.get('plane_n') is None or cand.get('plane_c') is None:
         return None
     d_plane = float(np.dot(cand['plane_n'], cand['plane_c']))
@@ -1451,7 +1564,7 @@ def predict_right_seed_from_geometry(pt_A, cand, K_L, return_debug=False):
         d_plane = float(np.dot(cand['plane_n'], cand['plane_c']))
         debug['d_plane'] = d_plane
         if abs(d_plane) > 1e-6:
-            H_AB = point_first_plane_homography(cand, K_L)
+            H_AB = plane_homography_from_cand(cand, K_L)
             if H_AB is None:
                 seed = np.array([u, v], dtype=np.float32)
                 return (seed, "RawSeed", debug) if return_debug else (seed, "RawSeed")
@@ -1476,204 +1589,6 @@ def enforce_point_on_epipolar(pt_A, pt_B, F):
         pt_B[0] - line[0] / np.sqrt(denom) * dist,
         pt_B[1] - line[1] / np.sqrt(denom) * dist
     ], dtype=np.float32)
-
-def refine_point_first_with_neighbor_features(imgA_gray, imgB_gray, pt_A, pt_B, cand, K_L,
-                                              sift_detector, base_score, search_roi):
-    """
-    PointFirst-only post refinement: use nearby SIFT matches to estimate a small
-    local correction around the already accepted PointFirst result.
-    """
-    if not ENABLE_POINT_FIRST_NEIGHBOR_REFINE or sift_detector is None or pt_B is None:
-        return None, "", None, None, None
-
-    u, v = float(pt_A[0]), float(pt_A[1])
-    ui, vi = int(round(u)), int(round(v))
-    left_rad = LEFT_PATCH_SEARCH_RADIUS
-    v0_A = max(0, vi - left_rad)
-    v1_A = min(imgA_gray.shape[0], vi + left_rad + 1)
-    u0_A = max(0, ui - left_rad)
-    u1_A = min(imgA_gray.shape[1], ui + left_rad + 1)
-    patch_a = imgA_gray[v0_A:v1_A, u0_A:u1_A]
-    if patch_a.size == 0:
-        return None, "+NeighborRefineSkipped(NoLeftPatch)", None, None, None
-
-    gx, gy = cv2.Sobel(patch_a, cv2.CV_32F, 1, 0), cv2.Sobel(patch_a, cv2.CV_32F, 0, 1)
-    mag = cv2.sqrt(gx ** 2 + gy ** 2)
-    idx_g = np.argsort(mag.flatten())[-min(mag.size, LEFT_GRADIENT_POINTS_COUNT):]
-    kpts_a = [cv2.KeyPoint(float(u0_A + px), float(v0_A + py), 31.0)
-              for py, px in [divmod(int(idx), patch_a.shape[1]) for idx in idx_g]]
-    if not kpts_a:
-        return None, "+NeighborRefineSkipped(NoLeftFeatures)", None, None, None
-    kpts_a, des_a = sift_detector.compute(imgA_gray, kpts_a)
-    if des_a is None or len(des_a) == 0:
-        return None, "+NeighborRefineSkipped(NoLeftDesc)", None, None, None
-
-    right_rad = RIGHT_PATCH_SEARCH_RADIUS
-    uei, vei = int(round(float(pt_B[0]))), int(round(float(pt_B[1])))
-    u0_B = max(0, uei - right_rad)
-    u1_B = min(imgB_gray.shape[1], uei + right_rad + 1)
-    v0_B = max(0, vei - right_rad)
-    v1_B = min(imgB_gray.shape[0], vei + right_rad + 1)
-    patch_b = imgB_gray[v0_B:v1_B, u0_B:u1_B]
-    g_rect = (u0_B, v0_B, u1_B - u0_B, v1_B - v0_B)
-    if patch_b.size == 0:
-        return None, "+NeighborRefineSkipped(NoRightPatch)", None, None, g_rect
-
-    gxr, gyr = cv2.Sobel(patch_b, cv2.CV_32F, 1, 0), cv2.Sobel(patch_b, cv2.CV_32F, 0, 1)
-    magr = cv2.sqrt(gxr ** 2 + gyr ** 2)
-    idx_r = np.argsort(magr.flatten())[-min(magr.size, RIGHT_GRADIENT_POINTS_COUNT):]
-    kpts_b = [cv2.KeyPoint(float(u0_B + px), float(v0_B + py), 31.0)
-              for py, px in [divmod(int(idx), patch_b.shape[1]) for idx in idx_r]]
-    if not kpts_b:
-        return None, "+NeighborRefineSkipped(NoRightFeatures)", None, None, g_rect
-    kpts_b, des_b = sift_detector.compute(imgB_gray, kpts_b)
-    if des_b is None or len(des_b) == 0:
-        return None, "+NeighborRefineSkipped(NoRightDesc)", None, None, g_rect
-
-    bf = cv2.BFMatcher(cv2.NORM_L2)
-    matches = sorted(bf.match(des_a, des_b), key=lambda m: m.distance)
-    good = [m for m in matches if m.distance < 450]
-
-    pts_info = []
-    for m in good:
-        pL = np.array(kpts_a[m.queryIdx].pt, dtype=np.float32)
-        pR = np.array(kpts_b[m.trainIdx].pt, dtype=np.float32)
-        if np.linalg.norm(pL - np.array([u, v], dtype=np.float32)) <= left_rad + 20:
-            pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
-
-    if len(pts_info) >= 3:
-        offs = np.array([x['off'] for x in pts_info], dtype=np.float32)
-        med_off = np.median(offs, axis=0)
-        pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 8.0]
-
-    if len(pts_info) < POINT_FIRST_NEIGHBOR_MIN_INLIERS:
-        return None, f"+NeighborRefineSkipped(Inliers={len(pts_info)})", None, None, g_rect
-
-    ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
-    ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
-    mapped = None
-    if len(ptsA_m) >= 6:
-        H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 3.0)
-        if H_local is not None:
-            pt_h = H_local @ np.array([u, v, 1.0], dtype=np.float64)
-            if abs(pt_h[2]) > 1e-6:
-                mapped = np.array([pt_h[0] / pt_h[2], pt_h[1] / pt_h[2]], dtype=np.float32)
-    if mapped is None and len(ptsA_m) >= 3:
-        M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=3.0)
-        if M_local is not None:
-            mapped = (M_local @ np.array([u, v, 1.0], dtype=np.float64))[:2].astype(np.float32)
-    if mapped is None:
-        weights = 1.0 / (np.sum((ptsA_m - np.array([u, v], dtype=np.float32)) ** 2, axis=1) + 1e-5)
-        mapped = np.array([u, v], dtype=np.float32) + np.sum((ptsB_m - ptsA_m) * weights[:, np.newaxis], axis=0) / np.sum(weights)
-
-    mapped = enforce_point_on_epipolar((u, v), mapped, cand['F'])
-    shift = float(np.linalg.norm(mapped - np.array(pt_B, dtype=np.float32)))
-    if shift > POINT_FIRST_NEIGHBOR_MAX_SHIFT:
-        return None, f"+NeighborRefineRejected(Shift={shift:.1f})", ptsA_m, ptsB_m, g_rect
-    if search_roi is not None and not point_in_roi(mapped, search_roi):
-        return None, "+NeighborRefineRejected(OutOfROI)", ptsA_m, ptsB_m, g_rect
-
-    H_AB = point_first_plane_homography(cand, K_L)
-    if H_AB is not None:
-        refined_score = score_warped_patch_match(imgA_gray, imgB_gray, (u, v), mapped, H_AB, patch_size=31)
-        refined_zncc = score_warped_zncc_patch_match(imgA_gray, imgB_gray, (u, v), mapped, H_AB, patch_size=31)
-    else:
-        refined_score = score_patch_match(imgA_gray, imgB_gray, (u, v), mapped, patch_size=31)
-        refined_zncc = score_zncc_patch_match(imgA_gray, imgB_gray, (u, v), mapped, patch_size=31)
-    min_score = max(POINT_FIRST_FINAL_MIN_SCORE, float(base_score) - POINT_FIRST_NEIGHBOR_SCORE_TOL)
-    if refined_score < min_score or refined_zncc < POINT_FIRST_FINAL_MIN_ZNCC:
-        return None, f"+NeighborRefineRejected(score={refined_score:.2f},ZNCC={refined_zncc:.2f})", ptsA_m, ptsB_m, g_rect
-
-    suffix = f"+NeighborSIFTRefine(dx={mapped[0]-pt_B[0]:.1f},dy={mapped[1]-pt_B[1]:.1f},n={len(pts_info)},score={refined_score:.2f})"
-    return mapped, suffix, ptsA_m, ptsB_m, g_rect
-
-def run_point_first_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_ecc=True, sift_detector=None):
-    """
-    Point-first flow: RT/plane seed -> patch search on this point's epipolar band
-    -> small ECC refinement -> epipolar projection.
-    """
-    seed_pt, seed_method, seed_debug = predict_right_seed_from_geometry((u, v), cand, K_L, return_debug=True)
-    print(
-        f"   [PointFirst Seed] cand={cand.get('idx')} L=({u:.1f},{v:.1f}) "
-        f"-> Rseed=({seed_pt[0]:.1f},{seed_pt[1]:.1f}) source={seed_method} "
-        f"d_plane={seed_debug.get('d_plane')} hom_w={seed_debug.get('hom_w')}"
-    )
-    H_AB = point_first_plane_homography(cand, K_L)
-    patch_score_name = "WarpPatch" if H_AB is not None else "RawPatch"
-    h, w = imgB_gray.shape[:2]
-    rad = RIGHT_PATCH_SEARCH_RADIUS
-    roi_x0 = max(0.0, min(float(w), float(seed_pt[0]) - rad))
-    roi_y0 = max(0.0, min(float(h), float(seed_pt[1]) - rad))
-    roi_x1 = max(0.0, min(float(w), float(seed_pt[0]) + rad))
-    roi_y1 = max(0.0, min(float(h), float(seed_pt[1]) + rad))
-    roi_x = roi_x0
-    roi_y = roi_y0
-    roi_w = max(0.0, roi_x1 - roi_x0)
-    roi_h = max(0.0, roi_y1 - roi_y0)
-    search_roi = (roi_x, roi_y, roi_w, roi_h)
-    if roi_w < 2 * 31 or roi_h < 2 * 31:
-        return None, f"PointFirst-Failed({seed_method},ROITooSmall)", seed_pt, 0.0, search_roi, None, None
-    epi_pt, epi_score = search_match_on_epipolar_band(
-        imgA_gray, imgB_gray, (u, v), seed_pt, cand['F'],
-        patch_size=31,
-        half_len=rad,
-        band_radius=EPIPOLAR_SEARCH_BAND_RADIUS,
-        min_score=EPIPOLAR_SEARCH_MIN_SCORE,
-        search_roi=search_roi,
-        H_AB=H_AB
-    )
-    if epi_pt is None:
-        return None, f"PointFirst-Failed({seed_method},{patch_score_name},score={epi_score:.2f})", seed_pt, epi_score, search_roi, None, None
-
-    m_pt = epi_pt
-    if H_AB is not None:
-        best_score = score_warped_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, H_AB, patch_size=31)
-    else:
-        best_score = score_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, patch_size=31)
-    method = f"PointFirst-{seed_method}+{patch_score_name}+EpiBand({epi_score:.2f})"
-    if use_ecc:
-        m_pt_ecc, ecc_method = pyramid_ecc_refinement(imgA_gray, imgB_gray, (u, v), m_pt, 45, 91)
-        m_pt_ecc = enforce_point_on_epipolar((u, v), m_pt_ecc, cand['F'])
-        if point_in_roi(m_pt_ecc, search_roi):
-            if H_AB is not None:
-                ecc_score = score_warped_patch_match(imgA_gray, imgB_gray, (u, v), m_pt_ecc, H_AB, patch_size=31)
-            else:
-                ecc_score = score_patch_match(imgA_gray, imgB_gray, (u, v), m_pt_ecc, patch_size=31)
-            if ecc_score >= best_score - 0.08:
-                m_pt = m_pt_ecc
-                best_score = ecc_score
-                method += f"{ecc_method}[score={ecc_score:.2f}]"
-            else:
-                method += f"+ECCRejected({ecc_score:.2f}<{best_score:.2f})"
-        else:
-            method += "+ECCOutOfROI"
-    m_pt = enforce_point_on_epipolar((u, v), m_pt, cand['F'])
-    if not point_in_roi(m_pt, search_roi):
-        return None, f"{method}+OutOfROI", seed_pt, epi_score, search_roi, None, None
-    if H_AB is not None:
-        final_score = score_warped_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, H_AB, patch_size=31)
-        final_zncc = score_warped_zncc_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, H_AB, patch_size=31)
-    else:
-        final_score = score_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, patch_size=31)
-        final_zncc = score_zncc_patch_match(imgA_gray, imgB_gray, (u, v), m_pt, patch_size=31)
-    if final_score < POINT_FIRST_FINAL_MIN_SCORE:
-        return None, f"{method}+FinalScoreLow({final_score:.2f})", seed_pt, final_score, search_roi, None, None
-    if final_zncc < POINT_FIRST_FINAL_MIN_ZNCC:
-        return None, f"{method}+FinalZNCCLow({final_zncc:.2f})", seed_pt, final_score, search_roi, None, None
-    method += "+EpiAlign"
-    method += f"+FinalScore({final_score:.2f},ZNCC={final_zncc:.2f})"
-    neighbor_pt, neighbor_suffix, n_ptsA, n_ptsB, n_rect = refine_point_first_with_neighbor_features(
-        imgA_gray, imgB_gray, (u, v), m_pt, cand, K_L, sift_detector, final_score, search_roi
-    )
-    if n_rect is not None:
-        search_roi = n_rect
-    if n_ptsA is not None and n_ptsB is not None:
-        method += neighbor_suffix
-    elif neighbor_suffix:
-        method += neighbor_suffix
-    if neighbor_pt is not None:
-        m_pt = neighbor_pt
-    return m_pt, method, seed_pt, final_score, search_roi, n_ptsA, n_ptsB
 
 def snap_to_aruco_corner(x, y, corners_dict):
     pt = np.array([x, y])
@@ -1800,11 +1715,11 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
     p3d_w_offset_str = f"[{p3d_w[0]:.2f}, {p3d_w[1]:.2f}, {p3d_w[2] + wound_z_offset:.2f}]" if p3d_w is not None else "None"
     d_str = f"{d_val:.2f} mm" if d_val is not None else "None"
     
-    # 距標記平面深度
+    # 距標記平面深度 (signed：Above 表示在平面靠相機側)
     p_dist_str = "None"
     if p3d is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None:
-        p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
-        p_dist_str = f"{p_dist:.2f} mm"
+        p_dist = np.dot(cand['plane_n'], p3d - cand['plane_c'])
+        p_dist_str = f"{'Above' if p_dist > 0 else 'Below'} {abs(p_dist):.2f} mm"
         
     # 距自訂平面深度
     cp_dist_str = "None"
@@ -2136,19 +2051,20 @@ def main():
         print("❌ 影片 Pose 分析失敗，無法啟動測量工具")
         sys.exit(1)
 
-    def compute_locked_spec_mask(bgr, frame_idx=None):
-        return compute_rt_aligned_temporal_specular_mask_bgr(
-            bgr,
-            frame_idx,
-            video_data,
-            KL,
-            ACTUAL_MARKER_SIZE_MM,
-            process_view,
-            preprocess_gray_fn=preprocess_gray,
-        )
+    use_wound_adaptive_spatial_specular = False
 
-    def compute_locked_spec_masks(bgr, frame_idx=None):
-        return compute_rt_aligned_temporal_specular_mask_bgr(
+    def compute_wound_adaptive_spatial_mask(bgr, wound_prediction=None):
+        if use_wound_adaptive_spatial_specular and wound_prediction is not None:
+            wound_mask = prediction_to_wound_mask(wound_prediction, bgr.shape)
+            return compute_specular_mask_bgr_wound_adaptive(bgr, wound_mask)
+        return None
+
+    def compute_locked_spec_mask(bgr, frame_idx=None, wound_prediction=None):
+        combined_mask, spatial_mask, temporal_mask = compute_locked_spec_masks(bgr, frame_idx, wound_prediction)
+        return combined_mask
+
+    def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None):
+        combined_mask, spatial_mask, temporal_mask = compute_rt_aligned_temporal_specular_mask_bgr(
             bgr,
             frame_idx,
             video_data,
@@ -2158,6 +2074,14 @@ def main():
             return_parts=True,
             preprocess_gray_fn=preprocess_gray,
         )
+        adaptive_spatial_mask = compute_wound_adaptive_spatial_mask(bgr, wound_prediction)
+        if adaptive_spatial_mask is not None:
+            spatial_mask = adaptive_spatial_mask
+            if temporal_mask is None:
+                combined_mask = spatial_mask
+            else:
+                combined_mask = cv2.bitwise_or(spatial_mask, temporal_mask)
+        return combined_mask, spatial_mask, temporal_mask
         
     # 去畸變處理挑選出的最優左右圖
     imgA_bgr, _ = process_view(video_data['frame_B']) # 結尾最優影格作為左圖 (B)
@@ -2489,6 +2413,29 @@ def main():
             f"[Wound] Pre-inference {reason}: "
             f"left={wound_state['left_count']} right={wound_state['right_count']}"
         )
+        if use_wound_adaptive_spatial_specular:
+            recompute_locked_spec_masks_from_wound(f"wound prediction {reason}")
+
+    def recompute_locked_spec_masks_from_wound(reason="adaptive spatial"):
+        nonlocal locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask
+        nonlocal locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask
+        locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(
+            locked_L_clean,
+            locked_L_idx,
+            wound_state.get('left_pred'),
+        )
+        locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(
+            locked_R_clean,
+            locked_R_idx,
+            wound_state.get('right_pred'),
+        )
+        current_cand['spec_mask'] = locked_R_spec_mask
+        current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
+        current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
+        print(
+            f"[Specular] {'Adaptive wound spatial' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
+            f"masks refreshed ({reason})"
+        )
 
     def mark_wound_size_dirty(reason="state change"):
         wound_state['dirty'] = True
@@ -2544,7 +2491,7 @@ def main():
     ax_c15 = fig.add_axes([0.29, 0.68, 0.11, 0.04], facecolor='#1E1E1E')
     ax_c16 = fig.add_axes([0.05, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
     ax_c17 = fig.add_axes([0.17, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c18 = fig.add_axes([0.29, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
+    ax_c19 = fig.add_axes([0.29, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
     
     # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
@@ -2565,10 +2512,9 @@ def main():
     c15 = Button(ax_c15, "[ ] Show Spatial", **btn_opt_style)
     c16 = Button(ax_c16, "[ ] Show Temporal", **btn_opt_style)
     c17 = Button(ax_c17, "[ ] Reject SpecPts", **btn_opt_style)
-    c18 = Button(ax_c18, "[ ] Point First", **btn_opt_style)
-    
+    c19 = Button(ax_c19, "[ ] Adaptive Spatial", **btn_opt_style)
+
     view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
-                  'point_first_flow': False,
                   'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
                   'show_score': SHOW_SCORE_DEFAULT,
@@ -2581,6 +2527,7 @@ def main():
                   'show_spatial_specular_mask': False,
                   'show_temporal_specular_mask': False,
                   'reject_specular_candidates': False,
+                  'adaptive_spatial_specular': False,
                   'show_high_grad_points': True,
                   'show_mid_grad_points': True,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
@@ -2616,7 +2563,7 @@ def main():
     radio_mode.on_clicked(on_mode_change)
 
     # 統一設定文字顏色為白色，並將按鈕外框設為白色
-    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18]:
+    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c19]:
         c.label.set_color('white')
         c.label.set_fontsize(8)
         c.ax.patch.set_edgecolor('white')
@@ -2627,19 +2574,6 @@ def main():
     def make_on_opt(btn, key, label_text):
         def _on_opt(event):
             view_state[key] = not view_state[key]
-            old_flow_buttons = {
-                'precise': (c1, "嚴格精細匹配"),
-                'grad_sift': (c2, "梯度 SIFT 匹配"),
-                'enforce_epi': (c3, "強制極線對齊"),
-                'ecc': (c4, "啟用 ECC 精修"),
-            }
-            if key == 'point_first_flow' and view_state[key]:
-                for old_key, (old_btn, old_label) in old_flow_buttons.items():
-                    view_state[old_key] = False
-                    old_btn.label.set_text("[ ] " + old_label)
-            elif key in old_flow_buttons and view_state[key]:
-                view_state['point_first_flow'] = False
-                c18.label.set_text("[ ] Point First")
             # 根據狀態切換 [X] 或 [ ]
             prefix = "[X] " if view_state[key] else "[ ] "
             btn.label.set_text(prefix + label_text)
@@ -2648,7 +2582,7 @@ def main():
                 view_state['manual_pt_A'] = None
             request_blit_refresh()
             
-            if key in ('precise', 'grad_sift', 'enforce_epi', 'ecc', 'point_first_flow',
+            if key in ('precise', 'grad_sift', 'enforce_epi', 'ecc',
                        'enable_clahe', 'use_improved_matching', 'use_color_hist',
                        'filter_specular', 'filter_specular_hsv_mser', 'epipolar_band_search',
                        'reject_specular_candidates'):
@@ -2670,7 +2604,19 @@ def main():
     c15.on_clicked(make_on_opt(c15, 'show_spatial_specular_mask', "Show Spatial"))
     c16.on_clicked(make_on_opt(c16, 'show_temporal_specular_mask', "Show Temporal"))
     c17.on_clicked(make_on_opt(c17, 'reject_specular_candidates', "Reject SpecPts"))
-    c18.on_clicked(make_on_opt(c18, 'point_first_flow', "Point First"))
+
+    def on_adaptive_spatial_specular(event):
+        nonlocal use_wound_adaptive_spatial_specular
+        view_state['adaptive_spatial_specular'] = not view_state['adaptive_spatial_specular']
+        use_wound_adaptive_spatial_specular = view_state['adaptive_spatial_specular']
+        c19.label.set_text("[X] Adaptive Spatial" if use_wound_adaptive_spatial_specular else "[ ] Adaptive Spatial")
+        if wound_state.get('left_pred') is None and wound_state.get('right_pred') is None:
+            refresh_wound_predictions("adaptive spatial toggle")
+        else:
+            recompute_locked_spec_masks_from_wound("adaptive spatial toggle")
+        request_blit_refresh()
+
+    c19.on_clicked(on_adaptive_spatial_specular)
     def on_c10_clicked(event):
         view_state['use_rgb_sift'] = not view_state['use_rgb_sift']
         c10.label.set_text("[X] 啟用 RGB-SIFT" if view_state['use_rgb_sift'] else "[ ] 啟用 RGB-SIFT")
@@ -2732,19 +2678,13 @@ def main():
         view_state['highlighted_grad_line'] = highlight_idx
 
 
-    # ---- 執行緒通訊佇列 ----
-    calc_request_q = queue.Queue(maxsize=1)   # 最多排 1 個請求，避免積壓
-    calc_result_q  = queue.Queue()
-    calc_busy      = threading.Event()        # 用於標記背景正在計算中
-
     measure_results = {}
     last_click = None
-    point_first_seed_diag_history = {}
 
     # ---- 純計算（可在背景執行緒安全呼叫，不觸碰 Matplotlib）----
     def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
         """純計算版 do_measure，回傳結果 dict，不更新任何 UI 元件。"""
-        nonlocal locked_L, locked_R, locked_L_spec_mask, locked_R_spec_mask, current_cand, point_first_seed_diag_history
+        nonlocal locked_L, locked_R, locked_L_spec_mask, locked_R_spec_mask, current_cand
         cand = snap_cand
         left_spec_mask = locked_L_spec_mask
         if cand.get('idx') == current_cand.get('idx'):
@@ -2757,7 +2697,7 @@ def main():
                 cand['spec_spatial_mask'] = right_spec_spatial_mask
                 cand['spec_temporal_mask'] = right_spec_temporal_mask
         m_pt, method, neighbors = None, "", []
-        seed_pt_B = None
+        rt_bound_reject_reason = None
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
         trajectory_res = None
 
@@ -2783,33 +2723,13 @@ def main():
                 m_pt, method = manual_match_pt, "手動點選"
 
             if m_pt is None:
-                if not snap_view_state.get('point_first_flow', False):
-                    for mid, cA in cand['cornersA'].items():
-                        d = np.linalg.norm(cA - np.array([u, v]), axis=1)
-                        if np.min(d) < 10:
-                            best_idx = np.argmin(d)
-                            u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
-                            m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
-                            break
-                if (m_pt is None and snap_view_state.get('point_first_flow', False)
-                        and manual_match_pt is None):
-                    m_pt, method, seed_pt_B, epi_score, search_roi, n_ptsA, n_ptsB = run_point_first_matching_flow(
-                        snap_imgA_gray, cand['gray'], u, v, cand, KL, use_ecc=True, sift_detector=sift
-                    )
-                    if seed_pt_B is not None:
-                        prev_seed_diag = point_first_seed_diag_history.get(cand.get('idx'))
-                        if prev_seed_diag is not None:
-                            left_step = float(np.linalg.norm(np.array([u, v], dtype=np.float32) - prev_seed_diag['left']))
-                            seed_step = float(np.linalg.norm(np.array(seed_pt_B, dtype=np.float32) - prev_seed_diag['seed']))
-                            print(f"   [PointFirst SeedDiag] cand={cand.get('idx')} left_step={left_step:.2f}px seed_step={seed_step:.2f}px ratio={seed_step / max(left_step, 1e-6):.2f}")
-                        point_first_seed_diag_history[cand.get('idx')] = {
-                            'left': np.array([u, v], dtype=np.float32),
-                            'seed': np.array(seed_pt_B, dtype=np.float32),
-                        }
-                    if search_roi is not None:
-                        g_rect = tuple(search_roi)
-                    if n_ptsA is not None and n_ptsB is not None:
-                        g_ptsA, g_ptsB = n_ptsA, n_ptsB
+                for mid, cA in cand['cornersA'].items():
+                    d = np.linalg.norm(cA - np.array([u, v]), axis=1)
+                    if np.min(d) < 10:
+                        best_idx = np.argmin(d)
+                        u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
+                        m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
+                        break
                 if m_pt is None and snap_view_state['grad_sift']:
                     if snap_view_state.get('use_improved_matching', False):
                         m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
@@ -3171,8 +3091,12 @@ def main():
                                 if mapped_candidates:
                                     total_score = sum(s for _, s in mapped_candidates)
                                     mapped = sum(np.array(p, dtype=np.float32) * (s / total_score) for p, s in mapped_candidates)
-                                    if float(np.linalg.norm(mapped - rt_seed_pt)) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                                        mapped = rt_seed_pt.copy()
+                                    grad_dev = float(np.linalg.norm(mapped - rt_seed_pt))
+                                    if grad_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
+                                        print(f"   [Grad-SIFT] 融合映射點偏離 RT/平面預測 {grad_dev:.1f}px，放棄此匹配結果。")
+                                        rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {grad_dev:.0f}px"
+                                        mapped_candidates = []
+                                if mapped_candidates:
                                     if snap_view_state.get('use_rgb_sift', False):
                                         method_name = "RGB-SIFT"
                                     elif snap_view_state.get('use_opponent_sift', False):
@@ -3197,8 +3121,7 @@ def main():
                                         if ptsA_mid is not None:
                                             group_labels.extend(["mid"] * len(ptsA_mid))
                                         g_groups = np.array(group_labels, dtype=object)
-                if (m_pt is None and snap_view_state['precise']
-                        and not snap_view_state.get('point_first_flow', False)):
+                if (m_pt is None and snap_view_state['precise']):
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
                                                KL, cand['K_R'], cand['R_rel'], cand['t_rel'],
                                                cand['plane_n'], cand['plane_c'])
@@ -3207,8 +3130,7 @@ def main():
             m_pt_raw = m_pt.copy() if m_pt is not None else None
 
             if (m_pt is not None and method != "ArUco" and manual_match_pt is None
-                    and snap_view_state.get('epipolar_band_search', False)
-                    and not snap_view_state.get('point_first_flow', False)):
+                    and snap_view_state.get('epipolar_band_search', False)):
                 rt_seed_for_bound, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
                 epi_pt, epi_score = search_match_on_epipolar_band(
                     snap_imgA_gray, cand['gray'], (u, v), m_pt, cand['F'],
@@ -3223,32 +3145,32 @@ def main():
                     m_pt = epi_pt
                     m_pt_raw = m_pt.copy()
                     method += f"+EpiBand({epi_score:.2f})"
-                    if float(np.linalg.norm(m_pt - np.array(rt_seed_for_bound, dtype=np.float32))) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                        m_pt = np.array(rt_seed_for_bound, dtype=np.float32)
-                        m_pt_raw = m_pt.copy()
-                        method += "+RTBoundFallback"
+                    rt_dev = float(np.linalg.norm(m_pt - np.array(rt_seed_for_bound, dtype=np.float32)))
+                    if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
+                        print(f"❌ [RT邊界] Epi-band 結果偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
+                        rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
+                        m_pt = None
+                        m_pt_raw = None
                 else:
                     print(f"   [Epi-band] 沿極線重新搜尋未通過門檻，保留原始候選點 (best score={epi_score:.3f})")
 
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"
-                    and not snap_view_state.get('point_first_flow', False)):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
                     dist_e = (l_B[0]*m_pt[0] + l_B[1]*m_pt[1] + l_B[2]) / np.sqrt(denom)
                     m_pt = np.array([m_pt[0] - l_B[0]/np.sqrt(denom)*dist_e,
                                       m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
-                    method += "+璆萇?撠?"
-
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None
-                    and not snap_view_state.get('point_first_flow', False)):
-                rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
-                if float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32))) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                    m_pt = np.array(rt_seed_final, dtype=np.float32)
-                    method += "+RTBoundFallback"
                     method += "+極線對齊"
-            if (m_pt is not None and snap_view_state['ecc']
-                    and not snap_view_state.get('point_first_flow', False)):
+
+            if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+                rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
+                rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
+                if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
+                    print(f"❌ [RT邊界] 匹配點偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
+                    rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
+                    m_pt = None
+            if (m_pt is not None and snap_view_state['ecc']):
                 if snap_view_state.get('use_improved_matching', False):
                     m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 45, 91)
                     method += ecc_method
@@ -3265,8 +3187,7 @@ def main():
                                              m_pt[1] - 45.5 + warp[1, 2] + 22.5])
                             method += "+ECC精修"
                         except: method += "+ECC失敗"
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"
-                    and not snap_view_state.get('point_first_flow', False)):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
@@ -3278,12 +3199,13 @@ def main():
         d_val, p3d_val, p3d_w_val, fail_reason = None, None, None, ""
         p3d = None
         
-        if (m_pt is not None and method != "ArUco" and manual_match_pt is None
-                and not snap_view_state.get('point_first_flow', False)):
+        if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
             rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
-            if float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32))) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                m_pt = np.array(rt_seed_final, dtype=np.float32)
-                method += "+RTBoundFallback"
+            rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
+            if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
+                print(f"❌ [RT邊界] 精修後匹配點偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
+                rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
+                m_pt = None
 
         if MEASURE_MODE == "multi_dedrift":
             if m_pt is None:
@@ -3362,9 +3284,9 @@ def main():
             R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
             t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
             print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
-            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'])
+            p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'], F=cand.get('F'))
         elif p3d is None:
-            fail_reason = "無匹配點"
+            fail_reason = rt_bound_reject_reason or "無匹配點"
             print(f"❌ [計算失敗] 在右圖中找不到與左圖點 ({u:.1f}, {v:.1f}) 的匹配點。請試著點選特徵較明顯的邊緣。")
 
         # 3. 計算最後的三維座標和距離
@@ -3379,8 +3301,8 @@ def main():
                 d_val = np.linalg.norm(p3d); p3d_val = p3d
                 p_dist_str = "N/A"
                 if cand['plane_n'] is not None:
-                    p_dist = abs(np.dot(cand['plane_n'], p3d - cand['plane_c']))
-                    p_dist_str = f"{p_dist:.2f} mm"
+                    p_dist = np.dot(cand['plane_n'], p3d - cand['plane_c'])
+                    p_dist_str = f"{'Above' if p_dist > 0 else 'Below'} {abs(p_dist):.2f} mm"
                 print(f"   [計算結果] 歐式距離: {d_val:.2f} mm | 距平面深度: {p_dist_str}")
                 
                 # 計算世界座標 (以 ID 最小的 ArUco 標籤中心為原點)
@@ -3405,7 +3327,7 @@ def main():
                         p3d_w_val = p3d_w.flatten()
         else:
             if not fail_reason:
-                fail_reason = "無匹配點"
+                fail_reason = rt_bound_reject_reason or "無匹配點"
             print(f"👉 [深度計算] 左圖座標: ({u:.1f}, {v:.1f}) | 右圖匹配座標: N/A | 匹配方式: N/A")
             print(f"   [計算失敗] 原因: {fail_reason}")
 
@@ -3443,7 +3365,6 @@ def main():
             print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | MaskedScore: {masked_score:.3f} | 信心度: {confidence_score:.3f}")
 
         return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'depth': depth_z, 'error': reproj_err, 'method': method, 'neighbors': neighbors,
-                'seed_pt_B': seed_pt_B,
                 'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_groups': g_groups,
                 'g_refA': g_refA, 'g_refB': g_refB,
                 'g_refA_groups': g_refA_groups, 'g_refB_groups': g_refB_groups,
@@ -3479,18 +3400,19 @@ def main():
                     cand_vs['precise'] = False
                 res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt=None)
                 res_c['cand_idx'] = cand['idx']
+                res_c['baseline'] = cand.get('baseline')
                 if cand['idx'] == current_cand['idx']:
                     current_res = res_c
                 if res_c.get('d') is not None and res_c.get('p3d') is not None:
                     valid_results.append(res_c)
 
             if valid_results:
-                p3d_avg = np.mean(np.array([r['p3d'] for r in valid_results], dtype=np.float64), axis=0)
+                fused = fuse_candidate_results(valid_results)
                 best_res = dict(current_res) if current_res is not None else dict(valid_results[0])
-                best_res['p3d'] = p3d_avg
+                best_res['p3d'] = fused['p3d']
                 best_res['multi_res'] = valid_results
-                best_res['valid_candidate_count'] = len(valid_results)
-                best_res['candidate_frames'] = [int(r['cand_idx']) for r in valid_results]
+                best_res['valid_candidate_count'] = len(fused['kept'])
+                best_res['candidate_frames'] = [int(r['cand_idx']) for r in fused['kept']]
                 return best_res
             return current_res
 
@@ -3601,6 +3523,7 @@ def main():
                 cand_vs['precise'] = False
             res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt)
             res_c['cand_idx'] = cand['idx']
+            res_c['baseline'] = cand.get('baseline')
             if cand['idx'] == current_cand['idx']:
                 current_res = res_c
             if res_c.get('d') is not None and res_c.get('p3d') is not None:
@@ -3613,30 +3536,36 @@ def main():
 
         res = dict(current_res)
         if res_list:
-            all_p3d = np.array([r['p3d'] for r in res_list])
-            all_d = np.array([r['d'] for r in res_list])
-            
-            avg_p3d = np.mean(all_p3d, axis=0)
-            avg_d = np.mean(all_d)
-            
+            fused = fuse_candidate_results(res_list)
+            avg_p3d = fused['p3d']
+            avg_d = fused['d']
             avg_depth = avg_p3d[2]
-            avg_error = np.mean([r['error'] for r in res_list if r.get('error') is not None]) if any(r.get('error') is not None for r in res_list) else 0.0
-            
-            all_p3d_w = [r['p3d_w'] for r in res_list if r.get('p3d_w') is not None]
-            avg_p3d_w = np.mean(all_p3d_w, axis=0) if all_p3d_w else None
-            
+            kept = fused['kept']
+            avg_error = np.mean([r['error'] for r in kept if r.get('error') is not None]) if any(r.get('error') is not None for r in kept) else 0.0
+            avg_p3d_w = fused['p3d_w']
+
             res['multi_res'] = res_list
             res['multi_avg_p3d'] = avg_p3d
             res['multi_avg_d'] = avg_d
             res['multi_avg_depth'] = avg_depth
             res['multi_avg_error'] = avg_error
             res['multi_avg_p3d_w'] = avg_p3d_w
-            
-            print(f"📊 [多對平均深度] 左圖 F{current_cand['idx']} 與最多 {len(all_cands)} 個右圖進行計算：")
-            for r in res_list:
+            # 顯示與存檔統一使用融合結果（與傷口 V1 尺寸量測行為一致）
+            res['p3d'] = avg_p3d
+            res['d'] = avg_d
+            res['depth'] = avg_depth
+            if avg_p3d_w is not None:
+                res['p3d_w'] = avg_p3d_w
+            res['fused_count'] = len(kept)
+            res['fused_dropped'] = [int(r['cand_idx']) for r in fused['dropped']]
+
+            print(f"📊 [多對融合深度] 左圖 F{current_cand['idx']} 與最多 {len(all_cands)} 個右圖進行計算：")
+            for r, w in zip(kept, fused['weights']):
                 is_best = " (最優)" if r['cand_idx'] == current_cand['idx'] else ""
-                print(f"  - 右圖 F{r['cand_idx']}{is_best}: 深度 = {r['d']:.2f} mm, 3D = [{r['p3d'][0]:.2f}, {r['p3d'][1]:.2f}, {r['p3d'][2]:.2f}]")
-            print(f"  ➡️ 融合平均結果 (共 {len(res_list)} 組成功): 深度 = {avg_d:.2f} mm, 3D = [{avg_p3d[0]:.2f}, {avg_p3d[1]:.2f}, {avg_p3d[2]:.2f}]")
+                print(f"  - 右圖 F{r['cand_idx']}{is_best}: 深度 = {r['d']:.2f} mm, 權重 = {w:.2f}, 3D = [{r['p3d'][0]:.2f}, {r['p3d'][1]:.2f}, {r['p3d'][2]:.2f}]")
+            for r in fused['dropped']:
+                print(f"  - 右圖 F{r['cand_idx']}: 深度 = {r['d']:.2f} mm (MAD 離群剔除)")
+            print(f"  ➡️ 加權融合結果 (採用 {len(kept)}/{len(res_list)} 組): 深度 = {avg_d:.2f} mm, 3D = [{avg_p3d[0]:.2f}, {avg_p3d[1]:.2f}, {avg_p3d[2]:.2f}]")
         
         if custom_plane_mode:
             if res.get('p3d') is not None:
@@ -3737,11 +3666,7 @@ def main():
             sift_rect.set_visible(True)
             # 更新 Rect 中心標記
             rx, ry, rw, rh = res['g_rect']
-            seed_pt_B = res.get('seed_pt_B')
-            if seed_pt_B is not None:
-                sift_rect_center.set_data([seed_pt_B[0]], [seed_pt_B[1]])
-            else:
-                sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
+            sift_rect_center.set_data([rx + rw/2], [ry + rh/2])
             sift_rect_center.set_visible(True)
             
             if res.get('g_ptsA') is not None:
@@ -3857,39 +3782,19 @@ def main():
                     plane_dist_history.clear()
                     p_dist_str = f"\n傷口高度: {p_dist:.1f}mm"
             
-            # 高度差計算
-            h_diff_str = ""
-            if res['p3d'] is not None and current_cand.get('plane_n') is not None:
-                plane_n = current_cand['plane_n']
-                plane_c = current_cand['plane_c']
-                signed_dist = np.dot(plane_n, res['p3d'] - plane_c)
-                
-                # 計算校正法向量後的 Z 座標
-                if current_cand.get('R_rect') is not None:
-                    R_rect = current_cand['R_rect']
-                    # 將 3D 點投射到 rectification 坐標系
-                    p3d_rect = R_rect @ res['p3d'].reshape(3, 1)
-                    # 傷口表面之高度值 (對 Z 進行負號反向)
-                    z_surface = -p3d_rect[2, 0]
-                    # 加入補償值
-                    z_final = z_surface + wound_z_offset
-                    h_diff_str = f"\n3D高度(Z): {z_final:.1f}mm"
-                    
             if res['depth'] is not None:
                 # 這裡的 res['depth'] 就是左相機坐標系下的 z 座標
                 #main_text = f"深度: {res['depth']:.1f}mm{p_dist_str}{h_diff_str}\n誤差: {res['error']:.3f}px\n配對: {res['method']}\n外參來源: {pose_info_str}"
                 score_str = ""
                 if view_state.get('show_score', False) and res.get('confidence_score') is not None:
                     score_str = f"\n信心分數: {res['confidence_score']:.3f} (極線:{res['d_epi']:.1f}px, ZNCC:{res['zncc_score']:.2f})"
-                main_text = f"相機與傷口(點選處)的距離: {res['depth']:.1f}mm{p_dist_str}{h_diff_str}{score_str}\n"
+                fuse_str = f" (融合 {res['fused_count']} 組)" if res.get('fused_count') else ""
+                main_text = f"相機與傷口(點選處)的距離: {res['depth']:.1f}mm{fuse_str}{p_dist_str}{score_str}\n"
             
             
             else:
                 main_text = f"深度: 計算失敗\n外參來源: {pose_info_str}"
             
-            # 連續計算模式下的 pose 繪製
-            if current_cand.get('all_aruco_poses') and current_cand.get('main_pose_ref_id') is not None:
-                redraw_all_aruco_poses(current_cand['all_aruco_poses'], current_cand['main_pose_ref_id'])
         else:
             scatter_B.set_offsets(np.empty((0,2)))
             scatter_B_reproj.set_offsets(np.empty((0,2)))
@@ -4090,7 +3995,7 @@ def main():
     ax_btn_wound_pts = fig.add_axes([0.68, 0.74, 0.08, 0.04])
     btn_wound_pts_toggle = Button(ax_btn_wound_pts, "Pts: Rect", **btn_style)
 
-    wound_z_offset = 6.0
+    wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
     text_box.label.set_color('#E0E0E0')
@@ -4262,66 +4167,12 @@ def main():
         request_blit_refresh()
     
     def on_lock_L(event):
-        nonlocal live_L, locked_L, locked_L_clean, locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask, locked_L_idx, has_set_L, reset_pose_history, point_first_seed_diag_history
-        live_L = not live_L
-        if not live_L:
-            if len(frame_buffer) > 0:
-                locked_L = frame_buffer[-1].copy()
-                locked_L_clean = locked_L.copy()
-                locked_L_idx = None
-                locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
-                refresh_wound_predictions("left lock")
-                has_set_L = True
-                btn_lock_L.label.set_text("解鎖左圖")
-                print("🔒 左圖已鎖定當前畫面")
-                if has_set_R and not live_R:
-                    on_calc(None)
-        else:
-            btn_lock_L.label.set_text("鎖定左圖")
-            print("🔓 左圖恢復 Live")
-        point_first_seed_diag_history.clear()
-        reset_pose_history = True
-        request_blit_refresh()
-        
+        # 離線影片模式沒有 Live 串流可供重新鎖定，左圖固定為分析挑出的最優影格
+        print("⚠️ 離線影片模式不支援重新鎖定左圖，左圖固定為分析挑出的最優影格。")
+
     def on_lock_R(event):
-        nonlocal live_R, locked_R, locked_R_clean, locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask, locked_R_idx, has_set_R, reset_pose_history, point_first_seed_diag_history
-        live_R = not live_R
-        if not live_R:
-            if len(frame_buffer) > 0:
-                locked_R = frame_buffer[-1].copy()
-                locked_R_clean = locked_R.copy()
-                locked_R_idx = None
-                locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
-                refresh_wound_predictions("right lock")
-                has_set_R = True
-                btn_lock_R.label.set_text("解鎖右圖")
-                print("🔒 右圖已鎖定當前畫面")
-                if not live_L:
-                    on_calc(None)
-        else:
-            btn_lock_R.label.set_text("鎖定右圖")
-            print("🔓 右圖恢復 Live")
-            
-            # 解鎖右圖時清除自訂平面與選點
-            nonlocal custom_plane_mode, custom_plane_n, custom_plane_c, custom_plane_fitted
-            custom_plane_mode = False
-            custom_plane_fitted = False
-            custom_plane_pts_3d.clear()
-            custom_plane_pts_2d.clear()
-            custom_plane_n = None
-            custom_plane_c = None
-            for art in custom_plane_artists:
-                try: art.remove()
-                except: pass
-            custom_plane_artists.clear()
-            redraw_custom_plane_poly()
-            btn_custom_plane.label.set_text("自訂平面擬合")
-            btn_custom_plane.ax.patch.set_facecolor('#1A1A1A')
-            btn_custom_plane.ax.patch.set_edgecolor('#555555')
-            
-        point_first_seed_diag_history.clear()
-        reset_pose_history = True
-        request_blit_refresh()
+        # 離線影片模式沒有 Live 串流可供重新鎖定，右圖固定為分析挑出的最優影格
+        print("⚠️ 離線影片模式不支援重新鎖定右圖，右圖固定為分析挑出的最優影格。")
         
     def on_custom_plane(event):
         nonlocal custom_plane_mode, custom_plane_n, custom_plane_c, custom_plane_fitted, auto_calc_active
@@ -4389,25 +4240,28 @@ def main():
                 request_blit_refresh()
                 return
                 
-            # 4. SVD 擬合平面
-            pts = np.array(custom_plane_pts_3d)
-            c = np.mean(pts, axis=0)
-            _, _, Vt = np.linalg.svd(pts - c)
-            n = Vt[-1]
-            if np.dot(n, c) > 0: n = -n # 確保法向量朝向相機
-            
+            # 4. RANSAC (>=6 點時) + SVD 擬合平面，並回報各點殘差供品質判斷
+            pts = np.array(custom_plane_pts_3d, dtype=np.float64)
+            n, c, inlier_mask, resid = fit_plane_to_points(pts)
+
             custom_plane_n = n
             custom_plane_c = c
             custom_plane_fitted = True
             custom_plane_mode = False
-            
+
             btn_custom_plane.label.set_text("自訂平面擬合")
             btn_custom_plane.ax.patch.set_facecolor('#1A1A1A')
             btn_custom_plane.ax.patch.set_edgecolor('#555555')
+            n_inl = int(np.count_nonzero(inlier_mask))
+            rms = float(np.sqrt(np.mean(resid[inlier_mask] ** 2)))
             print(f"✅ 自訂平面擬合成功！")
-            print(f"  - 擬合點數: {len(pts)}")
+            print(f"  - 擬合點數: {n_inl}/{len(pts)}" + (" (RANSAC 已剔除離群點)" if n_inl < len(pts) else ""))
             print(f"  - 平面中心: {c}")
             print(f"  - 平面法向: {n}")
+            for i, r_val in enumerate(resid):
+                tag = "" if inlier_mask[i] else " ⚠️ (離群，未參與擬合)"
+                print(f"  - P{i + 1} 殘差: {r_val:+.2f} mm{tag}")
+            print(f"  - 內點 RMS 殘差: {rms:.2f} mm" + (" ⚠️ 殘差偏大，建議重新選點" if rms > 2.0 else ""))
             
             # 重新計算當前選取點，以獲得與新平面的距離
             if last_click:

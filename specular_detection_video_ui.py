@@ -1,10 +1,57 @@
+import os
+import sys
 import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+DISPLAY_MAX_WIDTH = 1400
+DISPLAY_MAX_HEIGHT = 820
+PARAMS_JSON_PATH = "calibration_result_Zebra_1_no_dis.json"
+ACTUAL_MARKER_SIZE_MM = 8.25
+START_FRAME_COUNT = 30
+END_FRAME_COUNT = 30
+FRAME_RANGE_MODE = "half_half"
+POSE_SELECT_MODE = "reproj_min"
+BASE_DIR = Path(__file__).resolve().parent
+WOUND_DETECTION_DIR = BASE_DIR / "wound_detection_model"
+WOUND_MODEL_PATH = WOUND_DETECTION_DIR / "model" / "assets" / "v9-t-seg_320.onnx"
+_WOUND_DETECTOR = None
+_WOUND_DETECTOR_ERROR_LOGGED = False
+_DLL_DIR_HANDLES = []
+
+
+def configure_native_dll_search_paths():
+    """Help Windows find native DLLs after this project environment is moved."""
+    candidate_dirs = [
+        BASE_DIR / "Lib" / "site-packages" / "onnxruntime" / "capi",
+        BASE_DIR / "Lib" / "site-packages" / "torch" / "lib",
+        BASE_DIR / "Scripts",
+    ]
+    path_parts = os.environ.get("PATH", "").split(os.pathsep)
+    changed_path = False
+    for dll_dir in candidate_dirs:
+        if not dll_dir.exists():
+            continue
+        dll_dir_str = str(dll_dir)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                handle = os.add_dll_directory(dll_dir_str)
+                _DLL_DIR_HANDLES.append(handle)
+            except OSError:
+                pass
+        if dll_dir_str not in path_parts:
+            path_parts.insert(0, dll_dir_str)
+            changed_path = True
+    if changed_path:
+        os.environ["PATH"] = os.pathsep.join(path_parts)
+
+
+configure_native_dll_search_paths()
+
 import cv2
 import numpy as np
+import onnxruntime as ort
 
 from Algorithm.specular_detection import (
     SPEC_TEMPORAL_BRIGHT_THRESHOLD,
@@ -13,6 +60,7 @@ from Algorithm.specular_detection import (
     SPEC_TEMPORAL_STD_THRESHOLD,
     compute_rt_aligned_temporal_specular_mask_bgr,
     compute_specular_mask_bgr,
+    compute_specular_mask_bgr_wound_adaptive,
     overlay_specular_mask_rgb,
 )
 from Algorithm.camera_preprocess import (
@@ -24,14 +72,77 @@ from Algorithm.aruco_pose import detect_aruco_corners_bgr_for_pose
 from Algorithm import video_pose_analysis as video_pose_algo
 
 
-DISPLAY_MAX_WIDTH = 1400
-DISPLAY_MAX_HEIGHT = 820
-PARAMS_JSON_PATH = "calibration_result_Zebra_1_no_dis.json"
-ACTUAL_MARKER_SIZE_MM = 8.25
-START_FRAME_COUNT = 30
-END_FRAME_COUNT = 30
-FRAME_RANGE_MODE = "half_half"
-POSE_SELECT_MODE = "reproj_min"
+def clear_failed_onnxruntime_imports():
+    for name in list(sys.modules):
+        if name == "onnxruntime" or name.startswith("onnxruntime."):
+            sys.modules.pop(name, None)
+
+
+def get_wound_detector():
+    """Lazy-load the wound segmentation model used by zebra.py."""
+    global _WOUND_DETECTOR, _WOUND_DETECTOR_ERROR_LOGGED
+    if _WOUND_DETECTOR is not None:
+        return _WOUND_DETECTOR
+    if not WOUND_MODEL_PATH.exists():
+        if not _WOUND_DETECTOR_ERROR_LOGGED:
+            print(f"[Wound] Cannot find model: {WOUND_MODEL_PATH}")
+            _WOUND_DETECTOR_ERROR_LOGGED = True
+        return None
+
+    old_cwd = Path.cwd()
+    wound_dir_str = str(WOUND_DETECTION_DIR)
+    try:
+        configure_native_dll_search_paths()
+        if wound_dir_str not in sys.path:
+            sys.path.insert(0, wound_dir_str)
+        os.chdir(WOUND_DETECTION_DIR)
+        from wound_detector import WoundDetector
+
+        _WOUND_DETECTOR = WoundDetector(WOUND_MODEL_PATH)
+        model = _WOUND_DETECTOR.model
+        print(f"[Wound] Loaded {model.model_path} input_shape={model.input_shape}")
+        return _WOUND_DETECTOR
+    except Exception as exc:
+        clear_failed_onnxruntime_imports()
+        if not _WOUND_DETECTOR_ERROR_LOGGED:
+            print(f"[Wound] Failed to load wound detector: {exc}")
+            print(f"[Wound] Python executable: {sys.executable}")
+            print(f"[Wound] ONNX Runtime DLL dir: {BASE_DIR / 'Lib' / 'site-packages' / 'onnxruntime' / 'capi'}")
+            _WOUND_DETECTOR_ERROR_LOGGED = True
+        return None
+    finally:
+        os.chdir(old_cwd)
+
+
+def predict_wound_regions_bgr(bgr):
+    detector = get_wound_detector()
+    if detector is None:
+        return None
+    try:
+        return detector.predict(bgr.copy(), draw_result=False)
+    except Exception as exc:
+        print(f"[Wound] Inference failed: {exc}")
+        return None
+
+
+def prediction_to_wound_mask(prediction, image_shape):
+    if not prediction:
+        return None
+    first = prediction[0]
+    if first is None or len(first) < 4:
+        return None
+    h, w = image_shape[:2]
+    _classes, _bboxes, scores, masks = first
+    combined = np.zeros((h, w), dtype=np.uint8)
+    for score, mask in zip(scores, masks):
+        conf_val = float(score[0] if isinstance(score, np.ndarray) else score)
+        if conf_val <= 0.01:
+            continue
+        mask_f = mask.astype(np.float32)
+        if mask_f.shape != (h, w):
+            mask_f = cv2.resize(mask_f, (w, h), interpolation=cv2.INTER_LINEAR)
+        combined[mask_f > 0.5] = 255
+    return combined if np.any(combined) else None
 
 
 class SpecularDetectionVideoUI:
@@ -53,6 +164,8 @@ class SpecularDetectionVideoUI:
         self.frame_cache = {}
         self.processed_frame_cache = {}
         self.result_cache = {}
+        self.wound_prediction_cache = {}
+        self.wound_mask_status_cache = {}
         self.video_data = None
         self.processed_corners_cache = {}
         self.KL = None
@@ -64,6 +177,7 @@ class SpecularDetectionVideoUI:
         self.frame_var = tk.StringVar(value="Frame: - / -")
         self.time_var = tk.StringVar(value="00:00 / 00:00")
         self.export_enabled = tk.BooleanVar(value=False)
+        self.adaptive_spatial_enabled = tk.BooleanVar(value=False)
         self.export_fps_var = tk.StringVar(value="10")
 
         self._build_ui()
@@ -97,7 +211,14 @@ class SpecularDetectionVideoUI:
         self.export_button = ttk.Button(toolbar, text="Save MP4", command=self.export_video, state=tk.DISABLED)
         self.export_button.grid(row=0, column=7, padx=(0, 14))
 
-        ttk.Label(toolbar, textvariable=self.status_var).grid(row=0, column=8, sticky="w")
+        ttk.Checkbutton(
+            toolbar,
+            text="Adaptive Spatial",
+            variable=self.adaptive_spatial_enabled,
+            command=self.on_adaptive_spatial_toggle,
+        ).grid(row=0, column=8, padx=(0, 14))
+
+        ttk.Label(toolbar, textvariable=self.status_var).grid(row=0, column=9, sticky="w")
 
         video_area = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         video_area.grid(row=1, column=0, sticky="nsew")
@@ -159,6 +280,7 @@ class SpecularDetectionVideoUI:
         self.frame_cache.clear()
         self.processed_frame_cache.clear()
         self.result_cache.clear()
+        self.wound_prediction_cache.clear()
         self.slider.configure(to=max(self.frame_count - 1, 0))
         self.set_controls_state(tk.NORMAL)
         self.status_var.set(f"{Path(path).name} | zebra temporal ready")
@@ -261,6 +383,49 @@ class SpecularDetectionVideoUI:
                 self.processed_frame_cache.pop(key, None)
         return frame
 
+    def get_wound_prediction(self, frame_index, frame):
+        frame_index = int(frame_index)
+        if frame_index in self.wound_prediction_cache:
+            return self.wound_prediction_cache[frame_index]
+        prediction = predict_wound_regions_bgr(frame)
+        self.wound_prediction_cache[frame_index] = prediction
+        if len(self.wound_prediction_cache) > 80:
+            keys = sorted(self.wound_prediction_cache.keys(), key=lambda k: abs(k - self.current_index), reverse=True)
+            for key in keys[:20]:
+                self.wound_prediction_cache.pop(key, None)
+        return prediction
+
+    def compute_adaptive_spatial_mask(self, frame_index, frame):
+        frame_index = int(frame_index)
+        if not self.adaptive_spatial_enabled.get():
+            self.wound_mask_status_cache[frame_index] = {
+                "adaptive_enabled": False,
+                "ai_prediction_used": False,
+                "has_wound_mask": False,
+            }
+            return None
+        prediction = self.get_wound_prediction(frame_index, frame)
+        wound_mask = prediction_to_wound_mask(prediction, frame.shape)
+        self.wound_mask_status_cache[frame_index] = {
+            "adaptive_enabled": True,
+            "ai_prediction_used": True,
+            "has_wound_mask": wound_mask is not None,
+        }
+        if wound_mask is None:
+            return None
+        return compute_specular_mask_bgr_wound_adaptive(frame, wound_mask)
+
+    def get_wound_mask_log_status(self, frame_index):
+        frame_index = int(frame_index)
+        status = self.wound_mask_status_cache.get(frame_index)
+        if status is not None:
+            return status
+        return {
+            "adaptive_enabled": bool(self.adaptive_spatial_enabled.get()),
+            "ai_prediction_used": False,
+            "has_wound_mask": False,
+        }
+
     def compute_temporal_mask(self, frame_index, center_bgr, spatial_mask):
         if center_bgr is None:
             return None
@@ -316,11 +481,16 @@ class SpecularDetectionVideoUI:
         else:
             spatial_mask = compute_specular_mask_bgr(frame)
             temporal_mask = self.compute_temporal_mask(frame_index, frame, spatial_mask)
+            combined_mask = spatial_mask if temporal_mask is None else cv2.bitwise_or(spatial_mask, temporal_mask)
+
+        adaptive_spatial_mask = self.compute_adaptive_spatial_mask(frame_index, frame)
+        if adaptive_spatial_mask is not None:
+            spatial_mask = adaptive_spatial_mask
+            combined_mask = spatial_mask if temporal_mask is None else cv2.bitwise_or(spatial_mask, temporal_mask)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
         spatial_rgb = overlay_specular_mask_rgb(rgb, spatial_mask, None)
-        zero_spatial = np.zeros_like(spatial_mask) if spatial_mask is not None else None
-        temporal_rgb = overlay_specular_mask_rgb(rgb, zero_spatial, temporal_mask)
+        temporal_rgb = self.overlay_temporal_mask_rgb(rgb, temporal_mask)
 
         spatial_panel = self.add_panel_header(cv2.cvtColor(spatial_rgb, cv2.COLOR_RGB2BGR), "Spatial Specular")
         temporal_panel = self.add_panel_header(cv2.cvtColor(temporal_rgb, cv2.COLOR_RGB2BGR), "RT Temporal Specular")
@@ -331,6 +501,28 @@ class SpecularDetectionVideoUI:
             for key in keys[:10]:
                 self.result_cache.pop(key, None)
         return combined
+
+    @staticmethod
+    def overlay_temporal_mask_rgb(rgb, temporal_mask, alpha=0.55):
+        if rgb is None or temporal_mask is None:
+            return rgb
+        out = rgb.copy()
+        temporal_bool = temporal_mask > 0
+        if not np.any(temporal_bool):
+            return out
+        dark_green = np.zeros_like(out)
+        dark_green[:, :] = (35, 170, 90)
+        blended = cv2.addWeighted(out, 1.0 - alpha, dark_green, alpha, 0)
+        out[temporal_bool] = blended[temporal_bool]
+        return out
+
+    def on_adaptive_spatial_toggle(self):
+        self.result_cache.clear()
+        self.wound_mask_status_cache.clear()
+        state_text = "Adaptive Spatial enabled" if self.adaptive_spatial_enabled.get() else "Adaptive Spatial disabled"
+        self.status_var.set(state_text)
+        if self.cap is not None:
+            self.show_frame(self.current_index)
 
     @staticmethod
     def add_panel_header(image, title):
@@ -458,15 +650,30 @@ class SpecularDetectionVideoUI:
         if not output_path:
             return
 
+        log_path = Path(output_path).with_suffix(".log")
         was_playing = self.is_playing
         self.is_playing = False
         self.play_button.configure(text="Play")
         writer = None
         try:
+            log_file = open(log_path, "w", encoding="utf-8")
+            log_file.write(f"video={self.video_path}\n")
+            log_file.write(f"output={output_path}\n")
+            log_file.write(f"export_fps={export_fps}\n")
+            log_file.write(f"adaptive_spatial_enabled={bool(self.adaptive_spatial_enabled.get())}\n")
+            log_file.write("frame_index,adaptive_enabled,ai_prediction_used,has_ai_wound_mask\n")
             for idx in range(self.frame_count):
                 frame = self.process_frame(idx)
                 if frame is None:
+                    log_file.write(f"{idx},{bool(self.adaptive_spatial_enabled.get())},False,False\n")
                     continue
+                mask_status = self.get_wound_mask_log_status(idx)
+                log_file.write(
+                    f"{idx},"
+                    f"{bool(mask_status.get('adaptive_enabled'))},"
+                    f"{bool(mask_status.get('ai_prediction_used'))},"
+                    f"{bool(mask_status.get('has_wound_mask'))}\n"
+                )
                 frame = self.prepare_even_frame(frame)
                 if writer is None:
                     h, w = frame.shape[:2]
@@ -478,12 +685,14 @@ class SpecularDetectionVideoUI:
                 if idx % 5 == 0 or idx == self.frame_count - 1:
                     self.status_var.set(f"Exporting {idx + 1}/{self.frame_count}...")
                     self.root.update_idletasks()
-            self.status_var.set(f"Saved: {Path(output_path).name}")
-            messagebox.showinfo("Export complete", f"Saved video:\n{output_path}")
+            self.status_var.set(f"Saved: {Path(output_path).name} + {log_path.name}")
+            messagebox.showinfo("Export complete", f"Saved video:\n{output_path}\n\nLog:\n{log_path}")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
             self.status_var.set("Export failed.")
         finally:
+            if "log_file" in locals() and not log_file.closed:
+                log_file.close()
             if writer is not None:
                 writer.release()
             if was_playing:
@@ -543,6 +752,8 @@ class SpecularDetectionVideoUI:
         self.frame_cache.clear()
         self.processed_frame_cache.clear()
         self.result_cache.clear()
+        self.wound_prediction_cache.clear()
+        self.wound_mask_status_cache.clear()
         self.set_controls_state(tk.DISABLED)
 
     def on_close(self):

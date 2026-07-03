@@ -16,6 +16,17 @@ PAIR_SCORE_BLUR_W = 0.18
 PAIR_SCORE_COVER_W = 0.12
 PAIR_SCORE_MARKER_W = 0.08
 
+# ---- 特徵極線驗證與混合 RT 精修 ----
+PAIR_SCORE_EPI_W = 0.5              # 配對評分: 特徵極線殘差權重 (px)
+PAIR_EPI_TOPK = 8                   # 只對前 K 名候選對計算特徵極線殘差後重排
+ENABLE_FEATURE_RT_REFINE = True     # 選定配對後用 SIFT + Essential matrix 精修 R 與 t 方向 (尺度 |t| 保留 ArUco 解)
+FEATURE_MATCH_RATIO = 0.75          # SIFT ratio test 閾值
+FEATURE_MIN_MATCHES = 25            # 精修所需最少匹配數 / recoverPose 內點數
+FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值 (px)
+FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
+FEATURE_MARKER_EPI_MARGIN_PX = 0.3  # 採用混合解時，標籤角點極線殘差允許的最大退步量 (px)
+FEATURE_MAX_KEYPOINTS = 2000        # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
+
 
 def log_and_print(msg):
     print(msg)
@@ -226,6 +237,129 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         h, w = frames[0].shape[:2]
         return max(0.0, min(1.0, area / float(w * h)))
 
+    # ---- 特徵極線驗證與混合 RT 精修 ----
+    sift_feat = cv2.SIFT_create(nfeatures=FEATURE_MAX_KEYPOINTS, contrastThreshold=0.01)
+    feat_cache = {}
+
+    def get_frame_features(idx):
+        if idx not in feat_cache:
+            gray = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2GRAY)
+            feat_cache[idx] = sift_feat.detectAndCompute(gray, None)
+        return feat_cache[idx]
+
+    match_cache = {}
+
+    def get_pair_matches(idx_left, idx_right):
+        """左(結尾段)→右(開頭段) 的 SIFT 匹配 (ratio + mutual)，回傳已去畸變至 K_L 座標的點對。"""
+        key = (idx_left, idx_right)
+        if key in match_cache:
+            return match_cache[key]
+        kpL, desL = get_frame_features(idx_left)
+        kpR, desR = get_frame_features(idx_right)
+        result = None
+        if desL is not None and desR is not None and len(desL) >= 8 and len(desR) >= 8:
+            bf = cv2.BFMatcher(cv2.NORM_L2)
+            knn_lr = bf.knnMatch(desL, desR, k=2)
+            knn_rl = bf.knnMatch(desR, desL, k=1)
+            reverse_best = {m[0].queryIdx: m[0].trainIdx for m in knn_rl if m}
+            good = []
+            for pair in knn_lr:
+                if len(pair) < 2:
+                    continue
+                m, n = pair
+                if m.distance < FEATURE_MATCH_RATIO * n.distance and reverse_best.get(m.trainIdx) == m.queryIdx:
+                    good.append(m)
+            if len(good) >= 8:
+                good.sort(key=lambda m: m.distance)
+                good = good[:500]
+                ptsL = np.float32([kpL[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+                ptsR = np.float32([kpR[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+                ptsL_u = cv2.undistortPoints(ptsL, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
+                ptsR_u = cv2.undistortPoints(ptsR, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
+                result = (ptsL_u, ptsR_u)
+        match_cache[key] = result
+        return result
+
+    def rt_epipolar_residual(ptsL_u, ptsR_u, R_rel_c, t_rel_c):
+        """給定 左→右 相對位姿，計算點對的中位數對稱極線距離 (px)。"""
+        t = np.asarray(t_rel_c, dtype=np.float64).flatten()
+        if np.linalg.norm(t) < 1e-9:
+            return float('inf')
+        tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
+        K_inv = np.linalg.inv(K_L.astype(np.float64))
+        F = K_inv.T @ (tx @ np.asarray(R_rel_c, dtype=np.float64)) @ K_inv
+        onesL = np.hstack([ptsL_u, np.ones((len(ptsL_u), 1))])
+        onesR = np.hstack([ptsR_u, np.ones((len(ptsR_u), 1))])
+        lR = onesL @ F.T   # 左點在右圖上的極線
+        lL = onesR @ F     # 右點在左圖上的極線
+        num = np.abs(np.sum(lR * onesR, axis=1))
+        dR = num / np.maximum(np.hypot(lR[:, 0], lR[:, 1]), 1e-12)
+        dL = num / np.maximum(np.hypot(lL[:, 0], lL[:, 1]), 1e-12)
+        return float(np.median(0.5 * (dR + dL)))
+
+    def marker_corner_pairs(corners_left_dict, corners_right_dict):
+        shared = set(corners_left_dict.keys()) & set(corners_right_dict.keys())
+        if not shared:
+            return None
+        pts_l = np.vstack([corners_left_dict[mid] for mid in shared]).astype(np.float64)
+        pts_r = np.vstack([corners_right_dict[mid] for mid in shared]).astype(np.float64)
+        return pts_l, pts_r
+
+    def refine_rt_with_features(idx_left, idx_right, R_aruco, t_aruco, corners_left_u, corners_right_u, tag=""):
+        """
+        混合 RT 精修：R 與 t 方向改用 SIFT + Essential matrix (5-point RANSAC) 的解，
+        尺度 |t| 保留 ArUco 解。僅在特徵極線殘差改善、且標籤角點極線殘差未明顯變差時採用。
+        """
+        if not ENABLE_FEATURE_RT_REFINE:
+            return R_aruco, t_aruco
+        matches_lr = get_pair_matches(idx_left, idx_right)
+        if matches_lr is None or len(matches_lr[0]) < FEATURE_MIN_MATCHES:
+            log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，保留 ArUco RT。")
+            return R_aruco, t_aruco
+        ptsL_u, ptsR_u = matches_lr
+        K64 = K_L.astype(np.float64)
+        E, mask_e = cv2.findEssentialMat(ptsL_u, ptsR_u, K64, method=cv2.RANSAC,
+                                         prob=0.999, threshold=FEATURE_E_RANSAC_THRESH_PX)
+        if E is None or E.shape != (3, 3):
+            log_and_print(f"ℹ️ [RT精修{tag}] Essential matrix 求解失敗，保留 ArUco RT。")
+            return R_aruco, t_aruco
+        n_in, R_E, t_E, _mask_rp = cv2.recoverPose(E, ptsL_u, ptsR_u, K64, mask=mask_e.copy())
+        if n_in < FEATURE_MIN_MATCHES:
+            log_and_print(f"ℹ️ [RT精修{tag}] recoverPose 內點不足 ({n_in})，保留 ArUco RT。")
+            return R_aruco, t_aruco
+
+        # 健全性檢查：特徵解與 ArUco 解的旋轉差與平移方向必須大致一致
+        R_a64 = np.asarray(R_aruco, dtype=np.float64)
+        t_a64 = np.asarray(t_aruco, dtype=np.float64).flatten()
+        R_diff = R_E @ R_a64.T
+        ang = float(np.degrees(np.arccos(np.clip((np.trace(R_diff) - 1.0) / 2.0, -1.0, 1.0))))
+        t_dot = float(np.dot(t_E.flatten(), t_a64 / max(np.linalg.norm(t_a64), 1e-9)))
+        if ang > FEATURE_ROT_DIFF_MAX_DEG or t_dot <= 0:
+            log_and_print(f"⚠️ [RT精修{tag}] 特徵解與 ArUco 解差異過大 (dR={ang:.1f}°, t·t'={t_dot:.2f})，保留 ArUco RT。")
+            return R_aruco, t_aruco
+
+        baseline_val = float(np.linalg.norm(t_a64))
+        t_hybrid = (t_E.flatten() * baseline_val).reshape(3, 1)
+
+        # 仲裁：特徵極線殘差需改善，標籤角點極線殘差不得退步超過容許量
+        feat_a = rt_epipolar_residual(ptsL_u, ptsR_u, R_a64, t_a64)
+        feat_h = rt_epipolar_residual(ptsL_u, ptsR_u, R_E, t_hybrid)
+        mk = marker_corner_pairs(corners_left_u, corners_right_u)
+        mk_a = rt_epipolar_residual(mk[0], mk[1], R_a64, t_a64) if mk else None
+        mk_h = rt_epipolar_residual(mk[0], mk[1], R_E, t_hybrid) if mk else None
+        mk_str = f"{mk_a:.3f}→{mk_h:.3f}" if mk_a is not None else "N/A"
+        marker_ok = (mk_a is None) or (mk_h <= mk_a + FEATURE_MARKER_EPI_MARGIN_PX)
+        if feat_h < feat_a and marker_ok:
+            log_and_print(
+                f"🚀 [RT精修{tag}] 採用混合解: 特徵極線 {feat_a:.3f}→{feat_h:.3f}px | "
+                f"標籤極線 {mk_str}px | dR={ang:.2f}° | E內點={n_in}/{len(ptsL_u)}"
+            )
+            return R_E.astype(np.asarray(R_aruco).dtype), t_hybrid.astype(np.asarray(t_aruco).dtype)
+        log_and_print(
+            f"ℹ️ [RT精修{tag}] 混合解未通過仲裁 (特徵 {feat_a:.3f}→{feat_h:.3f}px, 標籤 {mk_str}px)，保留 ArUco RT。"
+        )
+        return R_aruco, t_aruco
+
     def compute_pair_quality_score(err, item_s, item_e, baseline_mm):
         shared_markers = set(item_s['corners'].keys()).intersection(item_e['corners'].keys())
         shared_count = len(shared_markers)
@@ -403,12 +537,35 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             
         # 依誤差由小到大排序
         pairs.sort(key=lambda x: x[0])
+
+        # 前 K 名候選加算特徵極線殘差後重排：
+        # 標籤共面時 PnP 對面內軸旋轉的約束弱，重投影誤差小不代表離開標籤平面後極線正確，
+        # 用場景特徵到極線的距離直接驗證極線幾何品質。
+        topk = pairs[:PAIR_EPI_TOPK]
+        reranked = []
+        for cand_tuple in topk:
+            pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics = cand_tuple
+            matches_lr = get_pair_matches(item_e['idx'], item_s['idx'])
+            if matches_lr is not None:
+                epi_med = rt_epipolar_residual(matches_lr[0], matches_lr[1], R_rel_c, t_rel_c)
+                combined = pair_score + PAIR_SCORE_EPI_W * min(epi_med, 10.0)
+                pair_metrics['feat_epi_px'] = float(epi_med)
+            else:
+                # 無足夠特徵可驗證時給中性偏保守的懲罰，避免無驗證的配對反而占優
+                combined = pair_score + PAIR_SCORE_EPI_W * 2.0
+                pair_metrics['feat_epi_px'] = None
+            reranked.append((combined, cand_tuple))
+        reranked.sort(key=lambda x: x[0])
+        pairs = [t for _combined, t in reranked] + pairs[PAIR_EPI_TOPK:]
+
         best_cand = pairs[0]
         best_score = best_cand[0]
         best_err = best_cand[1]
         best_metrics = best_cand[7]
+        feat_epi = best_metrics.get('feat_epi_px')
         log_and_print(
             f"🎯 [pair quality] score={best_score:.3f} | reproj={best_err:.3f}px | "
+            f"feat_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
             f"baseline={best_metrics['baseline']:.2f}mm | shared={best_metrics['shared_markers']} | "
             f"sharp={best_metrics['sharpness_min']:.1f} | coverage={best_metrics['coverage']:.3f}"
         )
@@ -443,18 +600,33 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     # 儲存最佳配對偵錯圖片
     save_debug_pair_images(best_start, best_end, "best")
 
-    # 包裝次優額外右圖組
+    cornersA_undist = undistort_corners_dict(best_start['corners'])
+    cornersB_undist = undistort_corners_dict(best_end['corners'])
+
+    # 混合 RT 精修 (最佳對)：R 與 t 方向取特徵解、尺度保留 ArUco，未通過仲裁則維持原值
+    R_rel, t_rel = refine_rt_with_features(
+        best_end['idx'], best_start['idx'], R_rel, t_rel,
+        cornersB_undist, cornersA_undist, tag="-best"
+    )
+    baseline = float(np.linalg.norm(t_rel))
+
+    # 包裝次優額外右圖組 (同樣做混合 RT 精修)
     extra_candidates_info = []
     for pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics in selected_extras:
+        cornersA_e_undist = undistort_corners_dict(item_s['corners'])
+        R_rel_c, t_rel_c = refine_rt_with_features(
+            best_end['idx'], item_s['idx'], R_rel_c, t_rel_c,
+            cornersB_undist, cornersA_e_undist, tag=f"-F{item_s['idx']}"
+        )
         extra_candidates_info.append({
             'idx_A': item_s['idx'],
             'frame_A': frames[item_s['idx']],
             'R_rel': R_rel_c,
             't_rel': t_rel_c,
-            'baseline': bsl,
+            'baseline': float(np.linalg.norm(t_rel_c)),
             'pair_score': pair_score,
             'pair_metrics': pair_metrics,
-            'cornersA': undistort_corners_dict(item_s['corners'])
+            'cornersA': cornersA_e_undist
         })
         log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
 
@@ -469,10 +641,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     valid_poses = {}
     for item in valid_start + valid_end:
         valid_poses[item['idx']] = (item['R'], item['t'])
-        
-    cornersA_undist = undistort_corners_dict(best_start['corners'])
-    cornersB_undist = undistort_corners_dict(best_end['corners'])
-    
+
     best_reproj_err = None
     if best_start is not None and best_end is not None:
         best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)

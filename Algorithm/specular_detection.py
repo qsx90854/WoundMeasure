@@ -54,6 +54,72 @@ def compute_specular_mask_bgr(
     return mask
 
 
+def compute_specular_mask_bgr_wound_adaptive(
+    bgr,
+    wound_mask,
+    v_threshold=SPEC_MASK_V_THRESHOLD,
+    s_threshold=SPEC_MASK_S_THRESHOLD,
+    rgb_high_threshold=SPEC_MASK_RGB_HIGH_THRESHOLD,
+    whiteness_threshold=SPEC_MASK_WHITENESS_THRESHOLD,
+    dilate=SPEC_MASK_DILATE,
+):
+    """Detect specular highlights with dynamic thresholds inside the wound mask.
+
+    Pixels outside the wound area keep the fixed-threshold spatial detector.
+    """
+    fixed_mask = compute_specular_mask_bgr(
+        bgr,
+        v_threshold=v_threshold,
+        s_threshold=s_threshold,
+        rgb_high_threshold=rgb_high_threshold,
+        whiteness_threshold=whiteness_threshold,
+        dilate=dilate,
+    )
+    if bgr is None or bgr.size == 0 or wound_mask is None:
+        return fixed_mask
+
+    h, w = bgr.shape[:2]
+    wound_u8 = wound_mask.astype(np.uint8)
+    if wound_u8.shape != (h, w):
+        wound_u8 = cv2.resize(wound_u8, (w, h), interpolation=cv2.INTER_NEAREST)
+    wound_bool = wound_u8 > 0
+    if np.count_nonzero(wound_bool) < 20:
+        return fixed_mask
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    _h, s, v = cv2.split(hsv)
+    b, g, r = cv2.split(bgr)
+    max_rgb = np.maximum(np.maximum(r, g), b)
+    min_rgb = np.minimum(np.minimum(r, g), b)
+    whiteness = max_rgb.astype(np.int16) - min_rgb.astype(np.int16)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (0, 0), 9)
+    local_hot = gray.astype(np.int16) - blur.astype(np.int16)
+
+    wound_v = v[wound_bool]
+    wound_max_rgb = max_rgb[wound_bool]
+    wound_local_hot = local_hot[wound_bool]
+    dyn_v_threshold = int(np.clip(np.percentile(wound_v, 90), 170, 245))
+    dyn_rgb_high_threshold = int(np.clip(np.percentile(wound_max_rgb, 92), 180, 250))
+    dyn_local_hot_threshold = int(np.clip(np.percentile(wound_local_hot, 85), 10, 45))
+    dyn_gray_threshold = max(150, dyn_v_threshold - 20)
+
+    wound_bright_low_sat = (v >= dyn_v_threshold) & (s <= s_threshold)
+    wound_near_white = (max_rgb >= dyn_rgb_high_threshold) & (whiteness <= whiteness_threshold)
+    wound_adaptive_hot = (gray >= dyn_gray_threshold) & (local_hot >= dyn_local_hot_threshold)
+    wound_mask_dynamic = (wound_bright_low_sat | wound_near_white | wound_adaptive_hot) & wound_bool
+
+    out = fixed_mask.copy() if fixed_mask is not None else np.zeros((h, w), dtype=np.uint8)
+    out[wound_bool] = 0
+    out[wound_mask_dynamic] = 255
+    out = cv2.morphologyEx(out, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    out = cv2.morphologyEx(out, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+    if dilate > 0:
+        k = 2 * int(dilate) + 1
+        out = cv2.dilate(out, np.ones((k, k), np.uint8), iterations=1)
+    return out
+
+
 def overlay_specular_mask_rgb(rgb, spatial_mask, temporal_mask=None, alpha=0.55):
     """Overlay spatial specular mask in light blue and temporal instability in light red."""
     if rgb is None or spatial_mask is None:
@@ -89,9 +155,11 @@ def compute_rt_aligned_temporal_specular_mask_bgr(
     process_frame_fn=None,
     return_parts=False,
     preprocess_gray_fn=None,
+    base_mask=None,
 ):
     """Combine single-frame highlight detection with RT/homography-aligned temporal instability."""
-    base_mask = compute_specular_mask_bgr(center_bgr)
+    if base_mask is None:
+        base_mask = compute_specular_mask_bgr(center_bgr)
     if center_bgr is None or center_frame_idx is None or not video_data:
         temporal_empty = np.zeros_like(base_mask) if base_mask is not None else None
         return (base_mask, base_mask, temporal_empty) if return_parts else base_mask
