@@ -12,7 +12,7 @@ depth_measure_multi_aruco_sbs_camera.py
 - 動態 UI：提供右圖候選幀切換選單與匹配狀態切換
 """
 
-import os, sys, glob, json, threading, queue
+import os, sys, glob, json, threading, queue, time
 from pathlib import Path
 import numpy as np
 import cv2
@@ -27,10 +27,23 @@ import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
 from Algorithm import camera_preprocess as camera_algo
 from Algorithm import video_pose_analysis as video_pose_algo
+from Algorithm.perf_timer import StageTimer
 from Algorithm.specular_detection import (
     compute_specular_mask_bgr_wound_adaptive,
     compute_rt_aligned_temporal_specular_mask_bgr,
     overlay_specular_mask_rgb,
+)
+from Algorithm import stereo_matching as stereo_algo
+from Algorithm.stereo_matching import (
+    get_patch, score_patch_match, score_zncc_patch_match,
+    score_warped_patch_match, score_warped_zncc_patch_match,
+    get_local_homography_warped_patch, project_point_to_line,
+    search_match_on_epipolar_band, point_in_roi,
+    plane_homography_from_cand, predict_right_seed_from_geometry,
+    enforce_point_on_epipolar, pyramid_ecc_refinement, find_precise_match,
+    compute_rgb_sift_descriptors, compute_opponent_sift_descriptors,
+    check_color_histogram_similarity, run_improved_matching_flow,
+    run_grad_sift_matching_flow,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -119,6 +132,10 @@ PAIR_SCORE_BLUR_W             = 0.18                       # pair selection weig
 PAIR_SCORE_COVER_W            = 0.12                       # pair selection weight: weak ArUco coverage
 PAIR_SCORE_MARKER_W           = 0.08                       # pair selection weight: too few shared markers
 # ===================================================
+
+# 將主檔頂部的可調常數注入 stereo_matching 模組 (調參仍集中在本檔)
+for _const_name in stereo_algo.TUNABLE_CONSTANTS:
+    setattr(stereo_algo, _const_name, globals()[_const_name])
 
 def get_wound_detector():
     """Lazy-load the v9-t-seg_320 wound segmentation model."""
@@ -375,352 +392,6 @@ def epipolar_line(F, pt, img_w):
     a, b, c = l
     if abs(b) > 1e-8: return (0, int(-c/b)), (img_w-1, int(-(a*(img_w-1)+c)/b))
     return (int(-c/a), 0), (int(-c/a), img_w-1)
-
-def find_precise_match(imgA_gray, imgB_gray, pt_A, F, K_L, K_R, R_rel, t_rel, plane_normal, plane_center):
-    if plane_normal is None or plane_center is None: return None
-    h, w = imgA_gray.shape
-    d = np.dot(plane_normal, plane_center)
-    H_3D = R_rel + (t_rel @ plane_normal.reshape(1, 3)) / d
-    H_AB = K_R @ H_3D @ np.linalg.inv(K_L.astype(np.float64))
-    H_BA = np.linalg.inv(H_AB)
-    imgB_warped = cv2.warpPerspective(imgB_gray, H_BA, (w, h), flags=cv2.INTER_LINEAR)
-    patch_size = 20
-    u, v = int(round(pt_A[0])), int(round(pt_A[1]))
-    u0, u1 = max(0, u-patch_size), min(w, u+patch_size+1)
-    v0, v1 = max(0, v-patch_size), min(h, v+patch_size+1)
-    patch_l = imgA_gray[v0:v1, u0:u1]
-    if patch_l.size == 0: return None
-    search = 45
-    x0, y0 = max(0, u-search-patch_size), max(0, v-search-patch_size)
-    x1, y1 = min(w, u+search+patch_size+1), min(h, v+search+patch_size+1)
-    roi_r = imgB_warped[y0:y1, x0:x1]
-    if roi_r.shape[0] < patch_l.shape[0] or roi_r.shape[1] < patch_l.shape[1]: return None
-    res = cv2.matchTemplate(roi_r, patch_l, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, max_loc = cv2.minMaxLoc(res)
-    if max_val < 0.4: return None
-    pt_w_h = np.array([x0 + max_loc[0] + patch_size, y0 + max_loc[1] + patch_size, 1.0])
-    pt_B_h = H_AB @ pt_w_h
-    return (float(pt_B_h[0]/pt_B_h[2]), float(pt_B_h[1]/pt_B_h[2]))
-
-
-def compute_rgb_sift_descriptors(img_bgr, kpts, sift_detector):
-    """
-    計算指定 KeyPoints 在 BGR 影像的 R, G, B 通道上的 SIFT 描述子，並予以串接。
-    回傳的描述子維度為 N x 384 (128 * 3)。
-    """
-    if not kpts or img_bgr is None:
-        return None, None
-        
-    # 分離 B, G, R 通道
-    b, g, r = cv2.split(img_bgr)
-    
-    # 分別對三個通道計算 SIFT 描述子
-    _, des_r = sift_detector.compute(r, kpts)
-    _, des_g = sift_detector.compute(g, kpts)
-    _, des_b = sift_detector.compute(b, kpts)
-    
-    # 邊界狀況檢查
-    if des_r is None or des_g is None or des_b is None:
-        return None, None
-    if len(des_r) != len(kpts) or len(des_g) != len(kpts) or len(des_b) != len(kpts):
-        return None, None
-        
-    # 串接描述子 (維度: N x 384)
-    des_rgb = np.hstack([des_r, des_g, des_b])
-    return kpts, des_rgb
-
-
-def compute_opponent_sift_descriptors(img_bgr, kpts, sift_detector):
-    """
-    計算指定 KeyPoints 在 BGR 影像的 Opponent 色彩空間 (O1, O2, O3) 通道上的 SIFT 描述子並串接。
-    回傳的描述子維度為 N x 384。
-    """
-    if not kpts or img_bgr is None:
-        return None, None
-        
-    # 分離 B, G, R 通道
-    b = img_bgr[:, :, 0].astype(np.float32)
-    g = img_bgr[:, :, 1].astype(np.float32)
-    r = img_bgr[:, :, 2].astype(np.float32)
-    
-    # O1 = (R - G) / sqrt(2)
-    o1 = (r - g) / np.sqrt(2.0)
-    o1 = ((o1 + 255.0 / np.sqrt(2.0)) / (510.0 / np.sqrt(2.0)) * 255.0).astype(np.uint8)
-    
-    # O2 = (R + G - 2*B) / sqrt(6)
-    o2 = (r + g - 2.0 * b) / np.sqrt(6.0)
-    o2 = ((o2 + 510.0 / np.sqrt(6.0)) / (1020.0 / np.sqrt(6.0)) * 255.0).astype(np.uint8)
-    
-    # O3 = (R + G + B) / sqrt(3)
-    o3 = (r + g + b) / np.sqrt(3.0)
-    o3 = (o3 / (765.0 / np.sqrt(3.0)) * 255.0).astype(np.uint8)
-    
-    # 分別對三個通道計算 SIFT 描述子
-    _, des_o1 = sift_detector.compute(o1, kpts)
-    _, des_o2 = sift_detector.compute(o2, kpts)
-    _, des_o3 = sift_detector.compute(o3, kpts)
-    
-    if des_o1 is None or des_o2 is None or des_o3 is None:
-        return None, None
-    if len(des_o1) != len(kpts) or len(des_o2) != len(kpts) or len(des_o3) != len(kpts):
-        return None, None
-        
-    des_opponent = np.hstack([des_o1, des_o2, des_o3])
-    return kpts, des_opponent
-
-
-def check_color_histogram_similarity(pt_A, pt_B, cand, patch_size=16, threshold=0.45):
-    """
-    計算左圖 pt_A (從全域變數 locked_L 中取得，BGR格式)
-    與右圖 pt_B (從 cand['rgb'] 中取得，RGB格式) 的色彩直方圖巴氏距離。
-    """
-    global locked_L
-    if locked_L is None or 'rgb' not in cand:
-        return True
-        
-    h_A, w_A = locked_L.shape[:2]
-    h_B, w_B = cand['rgb'].shape[:2]
-    
-    xA, yA = int(round(pt_A[0])), int(round(pt_A[1]))
-    xB, yB = int(round(pt_B[0])), int(round(pt_B[1]))
-    
-    r = patch_size // 2
-    
-    if xA - r < 0 or xA + r >= w_A or yA - r < 0 or yA + r >= h_A:
-        return False
-    if xB - r < 0 or xB + r >= w_B or yB - r < 0 or yB + r >= h_B:
-        return False
-        
-    patch_A = locked_L[yA-r:yA+r, xA-r:xA+r]
-    patch_B = cand['rgb'][yB-r:yB+r, xB-r:xB+r]
-    
-    hsv_A = cv2.cvtColor(patch_A, cv2.COLOR_BGR2HSV)
-    hsv_B = cv2.cvtColor(patch_B, cv2.COLOR_RGB2HSV)
-    
-    hist_A = cv2.calcHist([hsv_A], [0, 1], None, [18, 16], [0, 180, 0, 256])
-    hist_B = cv2.calcHist([hsv_B], [0, 1], None, [18, 16], [0, 180, 0, 256])
-    
-    cv2.normalize(hist_A, hist_A, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-    cv2.normalize(hist_B, hist_B, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX)
-    
-    dist = cv2.compareHist(hist_A, hist_B, cv2.HISTCMP_BHATTACHARYYA)
-    return dist <= threshold
-
-
-def run_improved_matching_flow(imgA_gray, imgB_gray, u, v, cand, K_L, use_hamming, orb, sift,
-                               use_color_hist=False, use_rgb_sift=False, use_opponent_sift=False,
-                               left_spec_mask=None, right_spec_mask=None, reject_specular_candidates=False):
-    """
-    改良版局部特徵匹配流程 (高光遮罩 + Harris Corner 響應 + 收緊幾何門檻)
-    """
-    ui, vi = int(round(u)), int(round(v))
-    sobel_range = LEFT_PATCH_SEARCH_RADIUS
-    
-    # 1. 提取左圖 Patch 並進行高光遮罩與 Harris Corner 篩選
-    v0_A = max(0, vi - sobel_range)
-    v1_A = min(imgA_gray.shape[0], vi + sobel_range + 1)
-    u0_A = max(0, ui - sobel_range)
-    u1_A = min(imgA_gray.shape[1], ui + sobel_range + 1)
-    patch_g = imgA_gray[v0_A:v1_A, u0_A:u1_A]
-    
-    if patch_g.size == 0:
-        return None, "Improved-Failed", None, None, None
-        
-    # 計算高光遮罩 (灰度值 >= 220)
-    specular_mask = (patch_g >= 220)
-    if reject_specular_candidates and left_spec_mask is not None:
-        specular_mask = specular_mask | (left_spec_mask[v0_A:v1_A, u0_A:u1_A] > 0)
-    
-    # 使用 cornerMinEigenVal (Harris 響應的基礎) 提取特徵顯著度
-    corner_resp = cv2.cornerMinEigenVal(patch_g, blockSize=3, ksize=3)
-    # 排除高光遮罩
-    corner_resp[specular_mask] = -1.0
-    
-    flat = corner_resp.flatten()
-    idx_g = np.argsort(flat)
-    valid_indices = [idx for idx in idx_g if flat[idx] >= 0]
-    idx_g_selected = valid_indices[-min(len(valid_indices), LEFT_GRADIENT_POINTS_COUNT):] if len(valid_indices) > 0 else []
-    
-    if len(idx_g_selected) == 0:
-        return None, "Improved-NoFeatures", None, None, None
-        
-    kpts_inj = [cv2.KeyPoint(float(u0_A + px), float(v0_A + py), 31.0)
-                for py, px in [divmod(idx, patch_g.shape[1]) for idx in idx_g_selected]]
-                
-    if use_hamming:
-        _, des_inj = orb.compute(imgA_gray, kpts_inj)
-    else:
-        if use_rgb_sift:
-            _, des_inj = compute_rgb_sift_descriptors(locked_L, kpts_inj, sift)
-        elif use_opponent_sift:
-            _, des_inj = compute_opponent_sift_descriptors(locked_L, kpts_inj, sift)
-        else:
-            _, des_inj = sift.compute(imgA_gray, kpts_inj)
-        
-    if des_inj is None or len(des_inj) == 0:
-        return None, "Improved-NoDescriptor", None, None, None
-
-    # 2. 預估右圖投影位置
-    u_exp, v_exp = u, v
-    if cand['plane_n'] is not None and cand['plane_c'] is not None:
-        d_plane = np.dot(cand['plane_n'], cand['plane_c'])
-        if abs(d_plane) > 1e-6:
-            H_AB = cand['K_R'] @ (cand['R_rel'] + (cand['t_rel'] @ cand['plane_n'].reshape(1, 3)) / d_plane) @ np.linalg.inv(K_L)
-            pt_exp = H_AB @ np.array([u, v, 1.0])
-            if abs(pt_exp[2]) > 1e-6:
-                u_exp, v_exp = pt_exp[0]/pt_exp[2], pt_exp[1]/pt_exp[2]
-
-    # 3. 提取右圖 Patch 並進行高光遮罩與 Harris Corner 篩選
-    rad = RIGHT_PATCH_SEARCH_RADIUS
-    uei, vei = int(round(u_exp)), int(round(v_exp))
-    u0_B = max(0, uei - rad)
-    u1_B = min(imgB_gray.shape[1], uei + rad)
-    v0_B = max(0, vei - rad)
-    v1_B = min(imgB_gray.shape[0], vei + rad)
-    patch_r = imgB_gray[v0_B:v1_B, u0_B:u1_B]
-    
-    if patch_r.size == 0:
-        return None, "Improved-Failed", None, None, None
-        
-    specular_mask_r = (patch_r >= 220)
-    if reject_specular_candidates and right_spec_mask is not None:
-        specular_mask_r = specular_mask_r | (right_spec_mask[v0_B:v1_B, u0_B:u1_B] > 0)
-    corner_resp_r = cv2.cornerMinEigenVal(patch_r, blockSize=3, ksize=3)
-    corner_resp_r[specular_mask_r] = -1.0
-    
-    flatr = corner_resp_r.flatten()
-    idx_gr = np.argsort(flatr)
-    valid_indices_r = [idx for idx in idx_gr if flatr[idx] >= 0]
-    idx_gr_selected = valid_indices_r[-min(len(valid_indices_r), RIGHT_GRADIENT_POINTS_COUNT):] if len(valid_indices_r) > 0 else []
-    
-    if len(idx_gr_selected) == 0:
-        return None, "Improved-NoFeaturesB", None, None, None
-        
-    kpts_r = [cv2.KeyPoint(float(u0_B + px), float(v0_B + py), 31.0)
-              for py, px in [divmod(idx, patch_r.shape[1]) for idx in idx_gr_selected]]
-              
-    g_kptsB = [kp.pt for kp in kpts_r]
-    g_rect = (u0_B, v0_B, u1_B - u0_B, v1_B - v0_B)
-    
-    if use_hamming:
-        _, des_r = orb.compute(imgB_gray, kpts_r)
-        if des_r is None or len(des_r) == 0:
-            return None, "Improved-NoDescriptorB", None, None, g_rect
-        bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-        matches = bf.match(des_inj, des_r)
-        good = [m for m in matches if m.distance < 100]
-    else:
-        if use_rgb_sift:
-            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
-            _, des_r = compute_rgb_sift_descriptors(imgB_bgr, kpts_r, sift)
-        elif use_opponent_sift:
-            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
-            _, des_r = compute_opponent_sift_descriptors(imgB_bgr, kpts_r, sift)
-        else:
-            _, des_r = sift.compute(imgB_gray, kpts_r)
-            
-        if des_r is None or len(des_r) == 0:
-            return None, "Improved-NoDescriptorB", None, None, g_rect
-        bf = cv2.BFMatcher(cv2.NORM_L2)
-        matches = bf.match(des_inj, des_r)
-        sift_thres = 780 if (use_rgb_sift or use_opponent_sift) else 450
-        good = [m for m in matches if m.distance < sift_thres]
-        
-    # 4. 幾何過濾與 RANSAC 估計 (收緊門檻)
-    pts_info = []
-    for m in good:
-        pL, pR = np.array(kpts_inj[m.queryIdx].pt), np.array(kpts_r[m.trainIdx].pt)
-        if np.linalg.norm(pL - np.array([u, v])) < 50:
-            if use_color_hist:
-                if not check_color_histogram_similarity(pL, pR, cand, patch_size=16, threshold=0.45):
-                    continue
-            pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL})
-            
-    # 收緊的視差過濾閾值 (2.5 像素)
-    if len(pts_info) >= 3:
-        offs = np.array([x['off'] for x in pts_info])
-        med_off = np.median(offs, axis=0)
-        pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < 2.5]
-        
-    if not pts_info:
-        return None, "Improved-NoInliers", None, None, g_rect
-        
-    ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
-    ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
-    mapped = None
-    
-    # 降低 RANSAC 重投影誤差閾值至 2.0 像素
-    if len(ptsA_m) >= 6:
-        H_local, _ = cv2.findHomography(ptsA_m, ptsB_m, cv2.RANSAC, 2.0)
-        if H_local is not None:
-            pt_h = H_local @ np.array([u, v, 1.0])
-            if abs(pt_h[2]) > 1e-6:
-                mapped = np.array([pt_h[0]/pt_h[2], pt_h[1]/pt_h[2]])
-    if mapped is None and len(ptsA_m) >= 3:
-        M_local, _ = cv2.estimateAffinePartial2D(ptsA_m, ptsB_m, method=cv2.RANSAC, ransacReprojThreshold=2.0)
-        if M_local is not None:
-            pt_a = M_local @ np.array([u, v, 1.0])
-            mapped = pt_a[:2]
-    if mapped is None:
-        wts = 1.0 / (np.sum((ptsA_m - np.array([u, v]))**2, axis=1) + 1e-5)
-        mapped = np.array([u, v]) + np.sum((ptsB_m - ptsA_m) * wts[:, np.newaxis], axis=0) / np.sum(wts)
-        
-    if use_rgb_sift:
-        method_name = "RGB-SIFT (Improved)"
-    elif use_opponent_sift:
-        method_name = "Opponent-SIFT (Improved)"
-    else:
-        method_name = "Grad-SIFT (Improved)"
-    return mapped, method_name, ptsA_m, ptsB_m, g_rect
-
-
-def pyramid_ecc_refinement(imgA_gray, imgB_gray, pt_A, pt_B, patch_size_tmpl=45, patch_size_roi=91):
-    """
-    使用二層 Gaussian 金字塔 (Coarse-to-Fine) 的 ECC 亞像素級精修
-    """
-    tmpl = get_patch(imgA_gray, pt_A, patch_size_tmpl)
-    roi = get_patch(imgB_gray, pt_B, patch_size_roi)
-    
-    if tmpl is None or roi is None:
-        return pt_B, "+ECC失敗(Patch無效)"
-        
-    # 第一層 (降採樣至 1/2)
-    tmpl_down = cv2.pyrDown(tmpl)
-    roi_down = cv2.pyrDown(roi)
-    
-    # 初始平移矩陣，預估中心對齊的偏置量
-    init_offset_x = (patch_size_roi - patch_size_tmpl) / 2.0
-    init_offset_y = (patch_size_roi - patch_size_tmpl) / 2.0
-    
-    warp_down = np.eye(2, 3, dtype=np.float32)
-    warp_down[0, 2] = init_offset_x / 2.0
-    warp_down[1, 2] = init_offset_y / 2.0
-    
-    # 低解析度下進行粗對齊 (限制較少迭代次數)
-    criteria_down = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 20, 1e-3)
-    try:
-        _, warp_down = cv2.findTransformECC(tmpl_down, roi_down, warp_down, cv2.MOTION_TRANSLATION, criteria_down)
-        # 將低解析度估計的位移縮放回原圖尺寸
-        warp_up = np.eye(2, 3, dtype=np.float32)
-        warp_up[0, 2] = warp_down[0, 2] * 2.0
-        warp_up[1, 2] = warp_down[1, 2] * 2.0
-    except:
-        # 降採樣失敗則退回直接用原圖預估位移初始化
-        warp_up = np.eye(2, 3, dtype=np.float32)
-        warp_up[0, 2] = init_offset_x
-        warp_up[1, 2] = init_offset_y
-        
-    # 第二層 (原圖解析度精修)
-    criteria_up = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 50, 1e-4)
-    try:
-        _, warp_final = cv2.findTransformECC(tmpl, roi, warp_up, cv2.MOTION_TRANSLATION, criteria_up)
-        offset_shift_x = warp_final[0, 2] - init_offset_x
-        offset_shift_y = warp_final[1, 2] - init_offset_y
-        refined_pt_B = np.array([pt_B[0] + offset_shift_x, pt_B[1] + offset_shift_y])
-        return refined_pt_B, "+ECC(Improved)"
-    except:
-        return pt_B, "+ECC失敗"
-
 
 def average_rotations_svd(R_list):
     """
@@ -1264,332 +935,6 @@ def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, glob
     return (R_rel, tv_rel, float(np.linalg.norm(tv_rel)), objA, shared, cA_dict, cB_dict, curr_marker_poses, rv_rel), map_calibrated
 
 
-def get_patch(img, pt, size):
-    h, w = img.shape; x, y = int(round(pt[0])), int(round(pt[1]))
-    x0, x1 = x - size//2, x + size//2 + 1
-    y0, y1 = y - size//2, y + size//2 + 1
-    if x0 < 0 or y0 < 0 or x1 > w or y1 > h: return None
-    return img[y0:y1, x0:x1]
-
-def _masked_patch_descriptor(gray_patch):
-    """Return a normalized intensity+gradient descriptor, suppressing saturated highlights."""
-    if gray_patch is None or gray_patch.size == 0:
-        return None
-    patch = gray_patch.astype(np.float32)
-    valid = patch < 245.0
-    if np.count_nonzero(valid) < patch.size * 0.55:
-        return None
-    gx = cv2.Sobel(patch, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(patch, cv2.CV_32F, 0, 1, ksize=3)
-    grad = cv2.magnitude(gx, gy)
-    patch_z = np.zeros_like(patch, dtype=np.float32)
-    grad_z = np.zeros_like(grad, dtype=np.float32)
-    patch_z[valid] = patch[valid] - float(patch[valid].mean())
-    grad_z[valid] = grad[valid] - float(grad[valid].mean())
-    vals = np.concatenate([patch_z.reshape(-1), grad_z.reshape(-1)]).astype(np.float32)
-    norm = float(np.linalg.norm(vals))
-    if norm < 1e-6:
-        return None
-    return vals / norm
-
-def _descriptor_similarity(desc_a, desc_b):
-    if desc_a is None or desc_b is None or len(desc_a) != len(desc_b):
-        return -1.0
-    return float(np.dot(desc_a, desc_b))
-
-def score_patch_match(imgA_gray, imgB_gray, pt_A, pt_B, patch_size=31):
-    patch_a = get_patch(imgA_gray, pt_A, patch_size)
-    patch_b = get_patch(imgB_gray, pt_B, patch_size)
-    desc_a = _masked_patch_descriptor(patch_a)
-    desc_b = _masked_patch_descriptor(patch_b)
-    return _descriptor_similarity(desc_a, desc_b)
-
-def score_zncc_patch_match(imgA_gray, imgB_gray, pt_A, pt_B, patch_size=31):
-    patch_a = get_patch(imgA_gray, pt_A, patch_size)
-    patch_b = get_patch(imgB_gray, pt_B, patch_size)
-    if patch_a is None or patch_b is None or patch_a.shape != patch_b.shape:
-        return -1.0
-    score = cv2.matchTemplate(patch_b, patch_a, cv2.TM_CCOEFF_NORMED)
-    return float(score[0, 0])
-
-def _project_homography_point(H, pt):
-    p = H @ np.array([float(pt[0]), float(pt[1]), 1.0], dtype=np.float64)
-    if abs(float(p[2])) < 1e-9:
-        return None
-    return np.array([float(p[0] / p[2]), float(p[1] / p[2])], dtype=np.float64)
-
-def get_local_homography_warped_patch(imgA_gray, pt_A, pt_B, H_AB, patch_size=31):
-    """
-    Warp the left patch appearance into the right-view local orientation while
-    keeping the candidate center at pt_B in the original right image.
-    """
-    if H_AB is None:
-        return None, None
-    patch_b_half = patch_size // 2
-    p0 = _project_homography_point(H_AB, pt_A)
-    px = _project_homography_point(H_AB, (float(pt_A[0]) + 1.0, float(pt_A[1])))
-    py = _project_homography_point(H_AB, (float(pt_A[0]), float(pt_A[1]) + 1.0))
-    if p0 is None or px is None or py is None:
-        return None, None
-    J = np.column_stack((px - p0, py - p0)).astype(np.float64)
-    if abs(float(np.linalg.det(J))) < 1e-6:
-        return None, None
-    try:
-        J_inv = np.linalg.inv(J)
-    except np.linalg.LinAlgError:
-        return None, None
-
-    coords = np.arange(-patch_b_half, patch_b_half + 1, dtype=np.float32)
-    dx, dy = np.meshgrid(coords, coords)
-    offsets_r = np.stack([dx.reshape(-1), dy.reshape(-1)], axis=0).astype(np.float64)
-    offsets_l = J_inv @ offsets_r
-    map_x = (float(pt_A[0]) + offsets_l[0]).reshape(patch_size, patch_size).astype(np.float32)
-    map_y = (float(pt_A[1]) + offsets_l[1]).reshape(patch_size, patch_size).astype(np.float32)
-    hA, wA = imgA_gray.shape[:2]
-    valid = (map_x >= 0) & (map_x <= wA - 1) & (map_y >= 0) & (map_y <= hA - 1)
-    if np.count_nonzero(valid) < patch_size * patch_size * 0.55:
-        return None, None
-    warped = cv2.remap(
-        imgA_gray, map_x, map_y,
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=255
-    )
-    warped = warped.astype(np.uint8)
-    warped[~valid] = 255
-    return warped, valid
-
-def score_warped_patch_match(imgA_gray, imgB_gray, pt_A, pt_B, H_AB, patch_size=31):
-    patch_a, _valid = get_local_homography_warped_patch(imgA_gray, pt_A, pt_B, H_AB, patch_size)
-    patch_b = get_patch(imgB_gray, pt_B, patch_size)
-    if patch_a is None or patch_b is None or patch_a.shape != patch_b.shape:
-        return -1.0
-    desc_a = _masked_patch_descriptor(patch_a)
-    desc_b = _masked_patch_descriptor(patch_b)
-    return _descriptor_similarity(desc_a, desc_b)
-
-def score_warped_zncc_patch_match(imgA_gray, imgB_gray, pt_A, pt_B, H_AB, patch_size=31):
-    patch_a, valid = get_local_homography_warped_patch(imgA_gray, pt_A, pt_B, H_AB, patch_size)
-    patch_b = get_patch(imgB_gray, pt_B, patch_size)
-    if patch_a is None or patch_b is None or patch_a.shape != patch_b.shape:
-        return -1.0
-    valid = valid & (patch_a < 245) & (patch_b < 245)
-    if np.count_nonzero(valid) < patch_size * patch_size * 0.55:
-        return -1.0
-    a = patch_a.astype(np.float32)[valid]
-    b = patch_b.astype(np.float32)[valid]
-    a -= float(a.mean())
-    b -= float(b.mean())
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom < 1e-6:
-        return -1.0
-    return float(np.dot(a, b) / denom)
-
-def project_point_to_line(pt, line):
-    a, b, c = line
-    denom = a * a + b * b
-    if denom <= 1e-12:
-        return np.array(pt, dtype=np.float32)
-    x, y = float(pt[0]), float(pt[1])
-    signed = (a * x + b * y + c) / denom
-    return np.array([x - a * signed, y - b * signed], dtype=np.float32)
-
-def _masked_zncc_from_patches(patch_a, valid_a, patch_b):
-    """與 score_warped_zncc_patch_match 相同的 masked ZNCC，但直接使用已快取的左圖 patch。"""
-    if patch_a is None or patch_b is None or patch_a.shape != patch_b.shape:
-        return -1.0
-    valid = (patch_a < 245) & (patch_b < 245)
-    if valid_a is not None:
-        valid = valid_a & valid
-    if np.count_nonzero(valid) < patch_a.size * 0.55:
-        return -1.0
-    a = patch_a.astype(np.float32)[valid]
-    b = patch_b.astype(np.float32)[valid]
-    a -= float(a.mean())
-    b -= float(b.mean())
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom < 1e-6:
-        return -1.0
-    return float(np.dot(a, b) / denom)
-
-def search_match_on_epipolar_band(imgA_gray, imgB_gray, pt_A, seed_pt_B, F,
-                                  patch_size=31,
-                                  half_len=EPIPOLAR_SEARCH_HALF_LEN,
-                                  band_radius=EPIPOLAR_SEARCH_BAND_RADIUS,
-                                  min_score=EPIPOLAR_SEARCH_MIN_SCORE,
-                                  search_roi=None,
-                                  H_AB=None):
-    """
-    Use the existing candidate match only as a seed, then search along pt_A's
-    epipolar band for the best combined descriptor and ZNCC patch match.
-    左圖 patch/描述子只依賴 pt_A 與 H_AB，整條 band 共用一份快取；
-    原始模式的 ZNCC 以單次 matchTemplate 向量化，最佳點沿極線做拋物線亞像素插值。
-    """
-    if seed_pt_B is None or F is None:
-        return None, 0.0
-    tmpl = get_patch(imgA_gray, pt_A, patch_size)
-    warped_a, warped_valid = None, None
-    if H_AB is not None:
-        if tmpl is None:
-            return None, 0.0
-        warped_a, warped_valid = get_local_homography_warped_patch(imgA_gray, pt_A, seed_pt_B, H_AB, patch_size)
-        if warped_a is None:
-            return None, 0.0
-        desc_a = _masked_patch_descriptor(warped_a)
-    else:
-        desc_a = _masked_patch_descriptor(tmpl)
-    if desc_a is None:
-        return None, 0.0
-
-    h, w = imgB_gray.shape[:2]
-    line = F @ np.array([pt_A[0], pt_A[1], 1.0], dtype=np.float64)
-    a, b, c = line
-    line_norm = float(np.hypot(a, b))
-    if line_norm < 1e-9:
-        return None, 0.0
-
-    line = line / line_norm
-    direction = np.array([-line[1], line[0]], dtype=np.float32)
-    normal = np.array([line[0], line[1]], dtype=np.float32)
-    center = project_point_to_line(seed_pt_B, line)
-
-    if search_roi is not None:
-        rx, ry, rw, rh = search_roi
-        roi_x0, roi_y0 = float(rx), float(ry)
-        roi_x1, roi_y1 = float(rx + rw), float(ry + rh)
-
-    half = patch_size // 2
-    s_vals = np.arange(-half_len, half_len + 0.5, 1.0)
-    n_vals = list(range(-band_radius, band_radius + 1))
-
-    # 先蒐集通過 ROI 與影像邊界檢查的候選像素位置
-    cand_list = []  # (si, ni, x, y)
-    for si, s in enumerate(s_vals):
-        base = center + direction * float(s)
-        for ni, n in enumerate(n_vals):
-            pt = base + normal * float(n)
-            x, y = int(round(pt[0])), int(round(pt[1]))
-            if search_roi is not None and not (roi_x0 <= x <= roi_x1 and roi_y0 <= y <= roi_y1):
-                continue
-            if x < half or y < half or x >= w - half or y >= h - half:
-                continue
-            cand_list.append((si, ni, x, y))
-
-    if not cand_list:
-        return None, -1.0
-
-    # 原始 (無 H_AB) 模式的 ZNCC：對候選包圍盒單次 matchTemplate，再逐點取樣
-    zncc_map, map_x0, map_y0 = None, 0, 0
-    if H_AB is None and tmpl is not None:
-        xs = [cpt[2] for cpt in cand_list]
-        ys = [cpt[3] for cpt in cand_list]
-        map_x0, map_y0 = min(xs) - half, min(ys) - half
-        x1_roi, y1_roi = max(xs) + half + 1, max(ys) + half + 1
-        roi_img = imgB_gray[map_y0:y1_roi, map_x0:x1_roi]
-        if roi_img.shape[0] >= patch_size and roi_img.shape[1] >= patch_size:
-            zncc_map = cv2.matchTemplate(roi_img, tmpl, cv2.TM_CCOEFF_NORMED)
-
-    best_pt = None
-    best_score = -1.0
-    best_si, best_ni = -1, -1
-    score_grid = np.full((len(s_vals), len(n_vals)), -np.inf, dtype=np.float64)
-    for si, ni, x, y in cand_list:
-        patch_b = get_patch(imgB_gray, (x, y), patch_size)
-        if patch_b is None:
-            continue
-        desc_b = _masked_patch_descriptor(patch_b)
-        desc_score = _descriptor_similarity(desc_a, desc_b)
-        if H_AB is not None:
-            zncc_score = _masked_zncc_from_patches(warped_a, warped_valid, patch_b)
-        elif zncc_map is not None:
-            zncc_score = float(zncc_map[y - half - map_y0, x - half - map_x0])
-        else:
-            zncc_score = -1.0
-
-        desc_pos = max(0.0, float(desc_score))
-        zncc_pos = max(0.0, float(zncc_score))
-        both_ok = desc_score >= EPIPOLAR_SEARCH_DESC_OK and zncc_score >= EPIPOLAR_SEARCH_ZNCC_OK
-        desc_rescue = desc_score >= EPIPOLAR_SEARCH_DESC_STRONG and zncc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
-        zncc_rescue = zncc_score >= EPIPOLAR_SEARCH_ZNCC_STRONG and desc_score >= EPIPOLAR_SEARCH_WEAK_FLOOR
-        if not (both_ok or desc_rescue or zncc_rescue):
-            continue
-
-        # Reward agreement, but still allow a strong score to rescue a slightly weak one.
-        score = desc_pos + zncc_pos + 0.25 * min(desc_pos, zncc_pos)
-        score_grid[si, ni] = score
-        if score > best_score:
-            best_score = score
-            best_pt = np.array([float(x), float(y)], dtype=np.float32)
-            best_si, best_ni = si, ni
-
-    if best_pt is None or best_score < min_score * 0.6:
-        return None, best_score
-
-    # 沿極線方向做拋物線亞像素插值 (ECC 關閉時也能得到亞像素結果)
-    if 0 < best_si < len(s_vals) - 1:
-        s_m = score_grid[best_si - 1, best_ni]
-        s_p = score_grid[best_si + 1, best_ni]
-        if np.isfinite(s_m) and np.isfinite(s_p):
-            denom_p = s_m - 2.0 * best_score + s_p
-            if abs(denom_p) > 1e-9:
-                delta = 0.5 * (s_m - s_p) / denom_p
-                if abs(delta) <= 0.5:
-                    best_pt = best_pt + direction * float(delta)
-
-    best_pt = project_point_to_line(best_pt, line)
-    return best_pt, best_score
-
-def point_in_roi(pt, roi):
-    if pt is None or roi is None:
-        return True
-    x, y = float(pt[0]), float(pt[1])
-    rx, ry, rw, rh = roi
-    return (rx <= x <= rx + rw) and (ry <= y <= ry + rh)
-
-def plane_homography_from_cand(cand, K_L):
-    if cand.get('plane_n') is None or cand.get('plane_c') is None:
-        return None
-    d_plane = float(np.dot(cand['plane_n'], cand['plane_c']))
-    if abs(d_plane) <= 1e-6:
-        return None
-    return cand['K_R'] @ (
-        cand['R_rel'] + (cand['t_rel'] @ cand['plane_n'].reshape(1, 3)) / d_plane
-    ) @ np.linalg.inv(K_L)
-
-def predict_right_seed_from_geometry(pt_A, cand, K_L, return_debug=False):
-    """Predict a right-image seed from RT and the marker/global plane when available."""
-    u, v = float(pt_A[0]), float(pt_A[1])
-    debug = {'source': 'RawSeed', 'd_plane': None, 'hom_w': None}
-    if cand.get('plane_n') is not None and cand.get('plane_c') is not None:
-        d_plane = float(np.dot(cand['plane_n'], cand['plane_c']))
-        debug['d_plane'] = d_plane
-        if abs(d_plane) > 1e-6:
-            H_AB = plane_homography_from_cand(cand, K_L)
-            if H_AB is None:
-                seed = np.array([u, v], dtype=np.float32)
-                return (seed, "RawSeed", debug) if return_debug else (seed, "RawSeed")
-            pt_h = H_AB @ np.array([u, v, 1.0], dtype=np.float64)
-            debug['hom_w'] = float(pt_h[2])
-            if abs(pt_h[2]) > 1e-9:
-                debug['source'] = 'PlaneSeed'
-                seed = np.array([pt_h[0] / pt_h[2], pt_h[1] / pt_h[2]], dtype=np.float32)
-                return (seed, "PlaneSeed", debug) if return_debug else (seed, "PlaneSeed")
-    seed = np.array([u, v], dtype=np.float32)
-    return (seed, "RawSeed", debug) if return_debug else (seed, "RawSeed")
-
-def enforce_point_on_epipolar(pt_A, pt_B, F):
-    if pt_B is None or F is None:
-        return pt_B
-    line = F @ np.array([pt_A[0], pt_A[1], 1.0], dtype=np.float64)
-    denom = float(line[0] * line[0] + line[1] * line[1])
-    if denom < 1e-9:
-        return pt_B
-    dist = (line[0] * pt_B[0] + line[1] * pt_B[1] + line[2]) / np.sqrt(denom)
-    return np.array([
-        pt_B[0] - line[0] / np.sqrt(denom) * dist,
-        pt_B[1] - line[1] / np.sqrt(denom) * dist
-    ], dtype=np.float32)
-
 def snap_to_aruco_corner(x, y, corners_dict):
     pt = np.array([x, y])
     for corners in corners_dict.values():
@@ -1916,7 +1261,7 @@ def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx
     import queue
 
     root = tk.Tk()
-    root.title("影片分析進度")
+    root.title("分析進度")
     
     # 視窗置中
     window_width = 450
@@ -1930,7 +1275,7 @@ def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx
     root.resizable(False, False)
 
     # 狀態文字與進度變數
-    status_var = tk.StringVar(value="準備分析影片...")
+    status_var = tk.StringVar(value="準備開始...")
     progress_var = tk.DoubleVar(value=0.0)
 
     # UI 元件
@@ -1997,6 +1342,83 @@ def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx
         raise result_container["error"]
     return result_container["data"]
 
+
+def precompute_masks_with_progress_window(extra_cands, compute_masks_fn):
+    """次佳影格高光遮罩預計算：顯示獨立讀取條視窗（階段處理中），算完自動關閉。"""
+    if not extra_cands:
+        return
+    import tkinter as tk
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("影片分析進度")
+
+    window_width = 450
+    window_height = 150
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    x_c = (screen_width - window_width) // 2
+    y_c = (screen_height - window_height) // 2
+    root.geometry(f"{window_width}x{window_height}+{x_c}+{y_c}")
+    root.configure(bg="#2D2D2D")
+    root.resizable(False, False)
+
+    status_var = tk.StringVar(value="階段處理中...")
+    progress_var = tk.DoubleVar(value=0.0)
+
+    title_label = tk.Label(root, text="🎥 Processing...", font=("Microsoft JhengHei", 12, "bold"), fg="#FFFFFF", bg="#2D2D2D", pady=10)
+    title_label.pack()
+    status_label = tk.Label(root, textvariable=status_var, font=("Microsoft JhengHei", 10), fg="#E0E0E0", bg="#2D2D2D", wraplength=400)
+    status_label.pack(pady=5)
+
+    style = ttk.Style()
+    style.theme_use('default')
+    style.configure("TProgressbar", thickness=15, troughcolor="#404040", background="#28A745")
+    progress_bar = ttk.Progressbar(root, length=380, mode="determinate", variable=progress_var, style="TProgressbar")
+    progress_bar.pack(pady=10)
+
+    update_queue = queue.Queue()
+
+    def worker():
+        try:
+            total = len(extra_cands)
+            for i, cand_bg in enumerate(extra_cands):
+                update_queue.put(((i / total) * 100.0, f"階段處理中 ({i + 1}/{total})..."))
+                try:
+                    if cand_bg.get('spec_mask') is None and cand_bg.get('rgb') is not None:
+                        _m, _sm, _tm = compute_masks_fn(
+                            cv2.cvtColor(cand_bg['rgb'], cv2.COLOR_RGB2BGR), cand_bg.get('idx'))
+                        cand_bg['spec_mask'] = _m
+                        cand_bg['spec_spatial_mask'] = _sm
+                        cand_bg['spec_temporal_mask'] = _tm
+                except Exception as exc:
+                    print(f"⚠️ [遮罩預計算] F{cand_bg.get('idx')} 失敗: {exc}")
+        finally:
+            update_queue.put("DONE")
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    def check_queue():
+        try:
+            while True:
+                msg = update_queue.get_nowait()
+                if msg == "DONE":
+                    root.destroy()
+                    return
+                percent, text = msg
+                progress_var.set(percent)
+                status_var.set(text)
+                root.update_idletasks()
+        except queue.Empty:
+            pass
+        root.after(100, check_queue)
+
+    root.after(100, check_queue)
+    root.mainloop()
+    print("✅ [遮罩預計算] 次佳影格高光遮罩預計算完成")
+
+
 def main():
     import collections, time
     
@@ -2020,6 +1442,8 @@ def main():
         VIDEO_PATH = selected_path
         log_and_print(f"📂 已載入指定影片：{VIDEO_PATH}")
     
+    startup_timer = StageTimer("啟動流程 (選定影片 → UI 就緒)")
+
     # 1. 讀取相機內參
     mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = camera_algo.load_json_camera_params(PARAMS_JSON_PATH)
     
@@ -2043,6 +1467,7 @@ def main():
         mtxL_o, distL, (w_alg, h_raw), alpha=1.0
     )
     KL = newKL_o.copy().astype(np.float64)
+    startup_timer.stage("相機參數+去畸變映射表")
     
     # 預先建立去畸變查找表
     log_and_print("🔄 正在分析影片中開頭與結尾影格的 ArUco 標籤與最優姿態對...")
@@ -2050,8 +1475,9 @@ def main():
     if video_data is None:
         print("❌ 影片 Pose 分析失敗，無法啟動測量工具")
         sys.exit(1)
+    startup_timer.stage("影片分析(ArUco配對+RT解算)")
 
-    use_wound_adaptive_spatial_specular = False
+    use_wound_adaptive_spatial_specular = True
 
     def compute_wound_adaptive_spatial_mask(bgr, wound_prediction=None):
         if use_wound_adaptive_spatial_specular and wound_prediction is not None:
@@ -2090,6 +1516,7 @@ def main():
     imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
     imgA_gray = preprocess_gray(imgA_gray, ENABLE_CLAHE_DEFAULT)
     h, w = imgA_gray.shape
+    startup_timer.stage("最優影格去畸變+灰階")
     
     # 使用分析得到的相對 R, t 和 baseline
     R_r = video_data['R_rel']
@@ -2113,6 +1540,7 @@ def main():
     locked_R_idx = video_data['idx_A']
     locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
     locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
+    startup_timer.stage("全域平面+左右高光遮罩")
     live_L = False
     live_R = False
     has_set_L = True
@@ -2150,7 +1578,7 @@ def main():
     extra_candidates_list = []
     for extra in video_data.get('extra_candidates', []):
         imgB_extra_bgr, _ = process_view(extra['frame_A'])
-        extra_spec_mask, extra_spec_spatial_mask, extra_spec_temporal_mask = compute_locked_spec_masks(imgB_extra_bgr, extra['idx_A'])
+        # 高光遮罩延遲計算：開啟 Reject SpecPts 後第一次用到該影格時才在 compute_measure 內計算並回填
         extra_cand = {
             'idx': extra['idx_A'],
             'rgb': cv2.cvtColor(imgB_extra_bgr, cv2.COLOR_BGR2RGB),
@@ -2168,9 +1596,9 @@ def main():
             'pose_valid': True,
             'baseline': extra['baseline'],
             'pose_info': f"ArUco 次優對 (Bsl: {extra['baseline']:.1f}mm)",
-            'spec_mask': extra_spec_mask,
-            'spec_spatial_mask': extra_spec_spatial_mask,
-            'spec_temporal_mask': extra_spec_temporal_mask,
+            'spec_mask': None,
+            'spec_spatial_mask': None,
+            'spec_temporal_mask': None,
         }
         # 若背景中未成功提取，才在主線程中提取特徵
         if not extra_cand['kpB'] or extra_cand['desB'] is None:
@@ -2179,6 +1607,12 @@ def main():
         extra_candidates_list.append(extra_cand)
         
     candidates = [current_cand]
+    startup_timer.stage(f"次佳影格處理({len(extra_candidates_list)} 個)")
+
+    # 進 UI 前預先算好次佳影格高光遮罩 (Reject SpecPts 預設開啟)，
+    # 期間以獨立讀取條視窗顯示「階段處理中」，避免第一次點擊卡住
+    precompute_masks_with_progress_window(extra_candidates_list, compute_locked_spec_masks)
+    startup_timer.stage("高光遮罩預計算")
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
     fig.canvas.manager.set_window_title("MeasureTool")
@@ -2364,6 +1798,13 @@ def main():
         """UI 元件有治變時呼叫，主迴圈下一幀會重新全圖儲存新背景。"""
         blit_state['needs_refresh'] = True
 
+    # 顯示影像轉換快取：locked_L/locked_R 與疊圖狀態沒變時，重繪直接重用上次轉換結果
+    display_cache = {'key': None, 'disp_A': None, 'disp_B': None, 'version': 0}
+
+    def mark_display_dirty():
+        """locked_L/locked_R 內容或疊圖來源 (遮罩/傷口預測) 改變時呼叫，使顯示快取失效。"""
+        display_cache['version'] += 1
+
     wound_state = {
         'show': False,
         'left_pred': None,
@@ -2398,6 +1839,7 @@ def main():
                     frame_parts.append(f"L{i + 1}:N/A")
             size_msg += " | " + " ".join(frame_parts)
         print(f"[Wound] V1 size refresh {reason}: {size_msg}")
+        mark_display_dirty()
 
     def refresh_wound_predictions(reason="selected"):
         wound_state['left_pred'] = predict_wound_regions_bgr(locked_L_clean)
@@ -2413,6 +1855,7 @@ def main():
             f"[Wound] Pre-inference {reason}: "
             f"left={wound_state['left_count']} right={wound_state['right_count']}"
         )
+        mark_display_dirty()
         if use_wound_adaptive_spatial_specular:
             recompute_locked_spec_masks_from_wound(f"wound prediction {reason}")
 
@@ -2436,6 +1879,7 @@ def main():
             f"[Specular] {'Adaptive wound spatial' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
             f"masks refreshed ({reason})"
         )
+        mark_display_dirty()
 
     def mark_wound_size_dirty(reason="state change"):
         wound_state['dirty'] = True
@@ -2511,11 +1955,11 @@ def main():
     c14 = Button(ax_c14, "[X] Epi-band Search" if ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT else "[ ] Epi-band Search", **btn_opt_style)
     c15 = Button(ax_c15, "[ ] Show Spatial", **btn_opt_style)
     c16 = Button(ax_c16, "[ ] Show Temporal", **btn_opt_style)
-    c17 = Button(ax_c17, "[ ] Reject SpecPts", **btn_opt_style)
-    c19 = Button(ax_c19, "[ ] Adaptive Spatial", **btn_opt_style)
+    c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
+    c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
 
     view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
-                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+                  'use_hamming': True, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
                   'show_score': SHOW_SCORE_DEFAULT,
                   'use_color_hist': False,
@@ -2526,13 +1970,20 @@ def main():
                   'epipolar_band_search': ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT,
                   'show_spatial_specular_mask': False,
                   'show_temporal_specular_mask': False,
-                  'reject_specular_candidates': False,
-                  'adaptive_spatial_specular': False,
-                  'show_high_grad_points': True,
-                  'show_mid_grad_points': True,
+                  'reject_specular_candidates': True,
+                  'adaptive_spatial_specular': True,
+                  'show_high_grad_points': False,
+                  'show_mid_grad_points': False,
+                  'show_aruco_overlay': False,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+
+    # HighPts / MidPts 預設關閉：初始同步散點顯示狀態
+    for _artist in (scatter_grad_ref_A, scatter_grad_ref_B, scatter_grad_inject, scatter_grad_match):
+        _artist.set_visible(view_state['show_high_grad_points'])
+    for _artist in (scatter_mid_grad_ref_A, scatter_mid_grad_ref_B, scatter_mid_grad_inject, scatter_mid_grad_match):
+        _artist.set_visible(view_state['show_mid_grad_points'])
 
     # 建立測量模式單選框，置於中間空白處
     ax_mode = fig.add_axes([0.42, 0.86, 0.13, 0.10], facecolor='#1E1E1E')
@@ -2680,22 +2131,31 @@ def main():
 
     measure_results = {}
     last_click = None
+    spec_mask_lock = threading.Lock()  # 高光遮罩計算互斥：背景預計算 vs 點擊時延遲計算
 
     # ---- 純計算（可在背景執行緒安全呼叫，不觸碰 Matplotlib）----
-    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None):
+    def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, left_cache=None):
         """純計算版 do_measure，回傳結果 dict，不更新任何 UI 元件。"""
         nonlocal locked_L, locked_R, locked_L_spec_mask, locked_R_spec_mask, current_cand
         cand = snap_cand
+        t_cm_start = time.perf_counter()
+        t_prof = {}
         left_spec_mask = locked_L_spec_mask
         if cand.get('idx') == current_cand.get('idx'):
             right_spec_mask = locked_R_spec_mask
         else:
             right_spec_mask = cand.get('spec_mask')
-            if right_spec_mask is None and cand.get('rgb') is not None:
-                right_spec_mask, right_spec_spatial_mask, right_spec_temporal_mask = compute_locked_spec_masks(cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR), cand.get('idx'))
-                cand['spec_mask'] = right_spec_mask
-                cand['spec_spatial_mask'] = right_spec_spatial_mask
-                cand['spec_temporal_mask'] = right_spec_temporal_mask
+            # 延遲計算：只有實際會用到遮罩 (Reject SpecPts 開啟) 時才計算；
+            # 與背景預計算執行緒以 spec_mask_lock 互斥，先到先算、後到直接取用
+            if (right_spec_mask is None and cand.get('rgb') is not None
+                    and snap_view_state.get('reject_specular_candidates', False)):
+                with spec_mask_lock:
+                    right_spec_mask = cand.get('spec_mask')
+                    if right_spec_mask is None:
+                        right_spec_mask, right_spec_spatial_mask, right_spec_temporal_mask = compute_locked_spec_masks(cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR), cand.get('idx'))
+                        cand['spec_mask'] = right_spec_mask
+                        cand['spec_spatial_mask'] = right_spec_spatial_mask
+                        cand['spec_temporal_mask'] = right_spec_temporal_mask
         m_pt, method, neighbors = None, "", []
         rt_bound_reject_reason = None
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
@@ -2731,6 +2191,7 @@ def main():
                         m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
                         break
                 if m_pt is None and snap_view_state['grad_sift']:
+                    _t_blk = time.perf_counter()
                     if snap_view_state.get('use_improved_matching', False):
                         m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
                             snap_imgA_gray, cand['gray'], u, v, cand, KL,
@@ -2740,397 +2201,41 @@ def main():
                             snap_view_state.get('use_opponent_sift', False),
                             left_spec_mask,
                             right_spec_mask,
-                            snap_view_state.get('reject_specular_candidates', False)
+                            snap_view_state.get('reject_specular_candidates', False),
+                            left_bgr=locked_L
                         )
                     else:
-                        ui, vi = int(round(u)), int(round(v))
-                        sobel_range = LEFT_PATCH_SEARCH_RADIUS
-                        v0_A = max(0, vi - sobel_range)
-                        v1_A = min(snap_imgA_gray.shape[0], vi + sobel_range + 1)
-                        u0_A = max(0, ui - sobel_range)
-                        u1_A = min(snap_imgA_gray.shape[1], ui + sobel_range + 1)
-                        patch_g = snap_imgA_gray[v0_A:v1_A, u0_A:u1_A]
-                        if patch_g.size > 0:
-                            gx, gy = cv2.Sobel(patch_g, cv2.CV_32F, 1, 0), cv2.Sobel(patch_g, cv2.CV_32F, 0, 1)
-                            mag = cv2.sqrt(gx**2 + gy**2)
-                            if snap_view_state.get('filter_specular_hsv_mser', False):
-                                # 1. 結合 HSV 進行高光判斷
-                                patch_L_color = locked_L[v0_A:v1_A, u0_A:u1_A]
-                                patch_L_hsv = cv2.cvtColor(patch_L_color, cv2.COLOR_BGR2HSV)
-                                H_L, S_L, V_L = cv2.split(patch_L_hsv)
-                                
-                                # 2. 自適應雙閾值
-                                mean_v = np.mean(V_L)
-                                std_v = np.std(V_L)
-                                high_light_mask = (V_L > 190) & (S_L < 60) & (V_L > (mean_v + 1.0 * std_v))
-                                
-                                # 3. 連通域斑點過濾與動態形狀膨脹
-                                excluded_mask = np.zeros_like(high_light_mask, dtype=np.uint8)
-                                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(high_light_mask.astype(np.uint8))
-                                for label_idx in range(1, num_labels):
-                                    area = stats[label_idx, cv2.CC_STAT_AREA]
-                                    if area >= 2: # 濾除微小噪聲
-                                        k_size = 3 if area < 10 else (5 if area < 50 else 7)
-                                        comp_mask = (labels == label_idx).astype(np.uint8)
-                                        kernel = np.ones((k_size, k_size), dtype=np.uint8)
-                                        dilated_comp = cv2.dilate(comp_mask, kernel)
-                                        excluded_mask = cv2.bitwise_or(excluded_mask, dilated_comp)
-                                        
-                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
-                                mag[excluded_mask == 1] = -99999.0
-                            elif snap_view_state.get('filter_specular', False):
-                                thresh = np.percentile(patch_g, 80)
-                                high_light_mask = (patch_g >= thresh)
-                                kernel = np.ones((3, 3), dtype=np.uint8)
-                                excluded_mask = cv2.dilate(high_light_mask.astype(np.uint8), kernel)
-                                locked_L[v0_A:v1_A, u0_A:u1_A][excluded_mask == 1] = [0, 0, 0]
-                                mag[excluded_mask == 1] = -99999.0
-                            if snap_view_state.get('reject_specular_candidates', False) and left_spec_mask is not None:
-                                spec_patch = left_spec_mask[v0_A:v1_A, u0_A:u1_A] > 0
-                                mag[spec_patch] = -99999.0
-                            flat = mag.flatten()
-                            valid_left_idx = np.where(flat > -99990.0)[0]
-                            sorted_left_idx = valid_left_idx[np.argsort(flat[valid_left_idx])] if len(valid_left_idx) > 0 else np.array([], dtype=np.int64)
-                            idx_g_high = sorted_left_idx[-min(len(sorted_left_idx), LEFT_GRADIENT_POINTS_COUNT):]
-                            mid_count_l = min(len(sorted_left_idx), LEFT_MID_GRADIENT_POINTS_COUNT)
-                            mid_start_l = max(0, len(sorted_left_idx) // 2 - mid_count_l // 2)
-                            idx_g_mid = sorted_left_idx[mid_start_l:mid_start_l + mid_count_l]
-                            kpts_inj_high = [cv2.KeyPoint(float(u0_A + px), float(v0_A + py), 31.0)
-                                             for py, px in [divmod(int(idx), patch_g.shape[1]) for idx in idx_g_high]]
-                            kpts_inj_mid = [cv2.KeyPoint(float(u0_A + px), float(v0_A + py), 31.0)
-                                            for py, px in [divmod(int(idx), patch_g.shape[1]) for idx in idx_g_mid]]
-                            u_exp, v_exp = u, v
-                            if cand['plane_n'] is not None:
-                                H_AB = cand['K_R'] @ (cand['R_rel'] + (cand['t_rel'] @ cand['plane_n'].reshape(1,3))/np.dot(cand['plane_n'], cand['plane_c'])) @ np.linalg.inv(KL)
-                                pt_exp = H_AB @ np.array([u, v, 1.0]); u_exp, v_exp = pt_exp[0]/pt_exp[2], pt_exp[1]/pt_exp[2]
-                            rt_seed_pt = np.array([float(u_exp), float(v_exp)], dtype=np.float32)
-                            rad = RIGHT_PATCH_SEARCH_RADIUS; uei, vei = int(round(u_exp)), int(round(v_exp))
-                            v0_B = max(0, vei - rad)
-                            v1_B = min(cand['gray'].shape[0], vei + rad)
-                            u0_B = max(0, uei - rad)
-                            u1_B = min(cand['gray'].shape[1], uei + rad)
-                            patch_r = cand['gray'][v0_B:v1_B, u0_B:u1_B]
-                            if patch_r.size > 0:
-                                gxr, gyr = cv2.Sobel(patch_r, cv2.CV_32F, 1, 0), cv2.Sobel(patch_r, cv2.CV_32F, 0, 1)
-                                magr = cv2.sqrt(gxr**2 + gyr**2)
-                                if snap_view_state.get('filter_specular_hsv_mser', False):
-                                    # 1. 結合 HSV 進行高光判斷
-                                    patch_R_color = locked_R[v0_B:v1_B, u0_B:u1_B]
-                                    patch_R_hsv = cv2.cvtColor(patch_R_color, cv2.COLOR_BGR2HSV)
-                                    H_R, S_R, V_R = cv2.split(patch_R_hsv)
-                                    
-                                    # 2. 自適應雙閾值
-                                    mean_v_r = np.mean(V_R)
-                                    std_v_r = np.std(V_R)
-                                    high_light_mask_r = (V_R > 190) & (S_R < 60) & (V_R > (mean_v_r + 1.0 * std_v_r))
-                                    
-                                    # 3. 連通域斑點過濾與動態形狀膨脹
-                                    excluded_mask_r = np.zeros_like(high_light_mask_r, dtype=np.uint8)
-                                    num_labels_r, labels_r, stats_r, centroids_r = cv2.connectedComponentsWithStats(high_light_mask_r.astype(np.uint8))
-                                    for label_idx in range(1, num_labels_r):
-                                        area = stats_r[label_idx, cv2.CC_STAT_AREA]
-                                        if area >= 2:
-                                            k_size = 3 if area < 10 else (5 if area < 50 else 7)
-                                            comp_mask = (labels_r == label_idx).astype(np.uint8)
-                                            kernel = np.ones((k_size, k_size), dtype=np.uint8)
-                                            dilated_comp = cv2.dilate(comp_mask, kernel)
-                                            excluded_mask_r = cv2.bitwise_or(excluded_mask_r, dilated_comp)
-                                            
-                                    if cand['idx'] == current_cand['idx']:
-                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
-                                    magr[excluded_mask_r == 1] = -99999.0
-                                elif snap_view_state.get('filter_specular', False):
-                                    thresh_r = np.percentile(patch_r, 80)
-                                    high_light_mask_r = (patch_r >= thresh_r)
-                                    kernel_r = np.ones((3, 3), dtype=np.uint8)
-                                    excluded_mask_r = cv2.dilate(high_light_mask_r.astype(np.uint8), kernel_r)
-                                    if cand['idx'] == current_cand['idx']:
-                                        locked_R[v0_B:v1_B, u0_B:u1_B][excluded_mask_r == 1] = [0, 0, 0]
-                                    magr[excluded_mask_r == 1] = -99999.0
-                                if snap_view_state.get('reject_specular_candidates', False) and right_spec_mask is not None:
-                                    spec_patch_r = right_spec_mask[v0_B:v1_B, u0_B:u1_B] > 0
-                                    magr[spec_patch_r] = -99999.0
-                                flatr = magr.flatten()
-                                valid_right_idx = np.where(flatr > -99990.0)[0]
-                                sorted_right_idx = valid_right_idx[np.argsort(flatr[valid_right_idx])] if len(valid_right_idx) > 0 else np.array([], dtype=np.int64)
-                                idx_gr_high = sorted_right_idx[-min(len(sorted_right_idx), RIGHT_GRADIENT_POINTS_COUNT):]
-                                mid_count_r = min(len(sorted_right_idx), RIGHT_MID_GRADIENT_POINTS_COUNT)
-                                mid_start_r = max(0, len(sorted_right_idx) // 2 - mid_count_r // 2)
-                                idx_gr_mid = sorted_right_idx[mid_start_r:mid_start_r + mid_count_r]
-                                kpts_r_high = [cv2.KeyPoint(float(u0_B + px), float(v0_B + py), 31.0)
-                                               for py, px in [divmod(int(idx), patch_r.shape[1]) for idx in idx_gr_high]]
-                                kpts_r_mid = [cv2.KeyPoint(float(u0_B + px), float(v0_B + py), 31.0)
-                                              for py, px in [divmod(int(idx), patch_r.shape[1]) for idx in idx_gr_mid]]
-                                g_refA = np.array([kp.pt for kp in (kpts_inj_high + kpts_inj_mid)], dtype=np.float32)
-                                g_refB = np.array([kp.pt for kp in (kpts_r_high + kpts_r_mid)], dtype=np.float32)
-                                g_refA_groups = np.array(
-                                    (["high"] * len(kpts_inj_high)) + (["mid"] * len(kpts_inj_mid)),
-                                    dtype=object
-                                )
-                                g_refB_groups = np.array(
-                                    (["high"] * len(kpts_r_high)) + (["mid"] * len(kpts_r_mid)),
-                                    dtype=object
-                                )
-                                g_kptsB = [kp.pt for kp in (kpts_r_high + kpts_r_mid)]
-                                g_rect = (u0_B, v0_B, u1_B-u0_B, v1_B-v0_B)
-                                print(
-                                    f"   [Grad-SIFT refs] "
-                                    f"L_high={len(kpts_inj_high)}/{LEFT_GRADIENT_POINTS_COUNT}, "
-                                    f"L_mid={len(kpts_inj_mid)}/{LEFT_MID_GRADIENT_POINTS_COUNT}, "
-                                    f"R_high={len(kpts_r_high)}/{RIGHT_GRADIENT_POINTS_COUNT}, "
-                                    f"R_mid={len(kpts_r_mid)}/{RIGHT_MID_GRADIENT_POINTS_COUNT}, "
-                                    f"valid_L={len(sorted_left_idx)}, valid_R={len(sorted_right_idx)}"
-                                )
-
-                                def compute_group_descriptors(kpts_left, kpts_right):
-                                    if not kpts_left or not kpts_right:
-                                        return None, None, None, None
-                                    if snap_view_state.get('use_hamming', False):
-                                        kpts_left_desc, des_left = orb.compute(snap_imgA_gray, kpts_left)
-                                        kpts_right_desc, des_right = orb.compute(cand['gray'], kpts_right)
-                                    else:
-                                        if snap_view_state.get('use_rgb_sift', False):
-                                            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
-                                            kpts_left_desc, des_left = compute_rgb_sift_descriptors(locked_L, kpts_left, sift)
-                                            kpts_right_desc, des_right = compute_rgb_sift_descriptors(imgB_bgr, kpts_right, sift)
-                                        elif snap_view_state.get('use_opponent_sift', False):
-                                            imgB_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
-                                            kpts_left_desc, des_left = compute_opponent_sift_descriptors(locked_L, kpts_left, sift)
-                                            kpts_right_desc, des_right = compute_opponent_sift_descriptors(imgB_bgr, kpts_right, sift)
-                                        else:
-                                            kpts_left_desc, des_left = sift.compute(snap_imgA_gray, kpts_left)
-                                            kpts_right_desc, des_right = sift.compute(cand['gray'], kpts_right)
-                                    return kpts_left_desc, des_left, kpts_right_desc, des_right
-
-                                def map_from_gradient_group(kpts_left, kpts_right, group_name):
-                                    kpts_left_desc, des_left, kpts_right_desc, des_right = compute_group_descriptors(kpts_left, kpts_right)
-                                    if des_left is None or des_right is None or len(des_left) == 0 or len(des_right) == 0:
-                                        print(f"   [Grad-SIFT {group_name}] no descriptors: left_kpts={len(kpts_left)}, right_kpts={len(kpts_right)}")
-                                        return None, None, None, 0.0
-                                    kpts_left = kpts_left_desc
-                                    kpts_right = kpts_right_desc
-                                    if len(kpts_left) != len(des_left):
-                                        n_left_desc = min(len(kpts_left), len(des_left))
-                                        kpts_left = kpts_left[:n_left_desc]
-                                        des_left = des_left[:n_left_desc]
-                                    if len(kpts_right) != len(des_right):
-                                        n_right_desc = min(len(kpts_right), len(des_right))
-                                        kpts_right = kpts_right[:n_right_desc]
-                                        des_right = des_right[:n_right_desc]
-                                    if snap_view_state.get('use_hamming', False):
-                                        bf = cv2.BFMatcher(cv2.NORM_HAMMING)
-                                        match_thres = 100
-                                    else:
-                                        bf = cv2.BFMatcher(cv2.NORM_L2)
-                                        match_thres = 780 if (snap_view_state.get('use_rgb_sift', False) or snap_view_state.get('use_opponent_sift', False)) else 450
-
-                                    knn_lr = bf.knnMatch(des_left, des_right, k=2)
-                                    knn_rl = bf.knnMatch(des_right, des_left, k=1)
-                                    reverse_best = {
-                                        m.queryIdx: m.trainIdx
-                                        for pair in knn_rl for m in pair[:1]
-                                    }
-                                    good = []
-                                    reject_dist = 0
-                                    reject_ratio = 0
-                                    reject_mutual = 0
-                                    for pair in knn_lr:
-                                        if not pair:
-                                            continue
-                                        m = pair[0]
-                                        if m.distance >= match_thres:
-                                            reject_dist += 1
-                                            continue
-                                        if len(pair) > 1 and m.distance >= GRAD_SIFT_RATIO_TEST * pair[1].distance:
-                                            reject_ratio += 1
-                                            continue
-                                        if reverse_best.get(m.trainIdx) != m.queryIdx:
-                                            reject_mutual += 1
-                                            continue
-                                        good.append(m)
-
-                                    guided_added = 0
-                                    if len(good) < GRAD_SIFT_MIN_GROUP_INLIERS:
-                                        used_query = {m.queryIdx for m in good}
-                                        best_by_train = {m.trainIdx: m for m in good}
-                                        pts_right_arr = np.array([kp.pt for kp in kpts_right], dtype=np.float32)
-                                        for qi, kp_left in enumerate(kpts_left):
-                                            if qi in used_query:
-                                                continue
-                                            pL = np.array(kp_left.pt, dtype=np.float32)
-                                            if np.linalg.norm(pL - np.array([u, v], dtype=np.float32)) >= 50:
-                                                continue
-                                            local_seed = rt_seed_pt + (pL - np.array([u, v], dtype=np.float32))
-                                            spatial_d = np.linalg.norm(pts_right_arr - local_seed, axis=1)
-                                            cand_idx = np.where(spatial_d <= GRAD_SIFT_GUIDED_RADIUS_PX)[0]
-                                            if cand.get('F') is not None and len(cand_idx) > 0:
-                                                epi_line = cand['F'] @ np.array([pL[0], pL[1], 1.0], dtype=np.float64)
-                                                denom = float(np.hypot(epi_line[0], epi_line[1]))
-                                                if denom > 1e-8:
-                                                    epi_d = np.abs(
-                                                        epi_line[0] * pts_right_arr[cand_idx, 0]
-                                                        + epi_line[1] * pts_right_arr[cand_idx, 1]
-                                                        + epi_line[2]
-                                                    ) / denom
-                                                    cand_idx = cand_idx[epi_d <= GRAD_SIFT_EPIPOLAR_TOL_PX]
-                                            if len(cand_idx) == 0:
-                                                continue
-                                            if snap_view_state.get('use_hamming', False):
-                                                dists = np.array([
-                                                    cv2.norm(des_left[qi], des_right[ri], cv2.NORM_HAMMING)
-                                                    for ri in cand_idx
-                                                ], dtype=np.float32)
-                                            else:
-                                                diff = des_right[cand_idx].astype(np.float32) - des_left[qi].astype(np.float32)
-                                                dists = np.linalg.norm(diff, axis=1)
-                                            order = np.argsort(dists)
-                                            best_pos = int(order[0])
-                                            best_ri = int(cand_idx[best_pos])
-                                            best_dist = float(dists[best_pos])
-                                            second_dist = float(dists[int(order[1])]) if len(order) > 1 else float("inf")
-                                            if best_dist >= match_thres:
-                                                continue
-                                            if np.isfinite(second_dist) and best_dist >= GRAD_SIFT_GUIDED_RATIO_TEST * second_dist:
-                                                continue
-                                            new_match = cv2.DMatch(_queryIdx=int(qi), _trainIdx=best_ri, _imgIdx=0, _distance=best_dist)
-                                            prev = best_by_train.get(best_ri)
-                                            if prev is None or new_match.distance < prev.distance:
-                                                best_by_train[best_ri] = new_match
-                                        guided_good = list(best_by_train.values())
-                                        guided_added = max(0, len(guided_good) - len(good))
-                                        good = guided_good
-
-                                    pts_info = []
-                                    reject_epi = 0
-                                    reject_seed = 0
-                                    reject_color = 0
-                                    for m in good:
-                                        pL, pR = np.array(kpts_left[m.queryIdx].pt), np.array(kpts_right[m.trainIdx].pt)
-                                        if np.linalg.norm(pL - np.array([u, v])) < 50:
-                                            if cand.get('F') is not None:
-                                                epi_line = cand['F'] @ np.array([pL[0], pL[1], 1.0], dtype=np.float64)
-                                                denom = float(np.hypot(epi_line[0], epi_line[1]))
-                                                if denom > 1e-8:
-                                                    epi_dist = abs(float(epi_line[0] * pR[0] + epi_line[1] * pR[1] + epi_line[2])) / denom
-                                                    if epi_dist > GRAD_SIFT_EPIPOLAR_TOL_PX:
-                                                        reject_epi += 1
-                                                        continue
-                                            local_seed = rt_seed_pt + (pL - np.array([u, v], dtype=np.float32))
-                                            if float(np.linalg.norm(pR - local_seed)) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                                                reject_seed += 1
-                                                continue
-                                            if snap_view_state.get('use_color_hist', False):
-                                                if not check_color_histogram_similarity(pL, pR, cand, patch_size=16, threshold=0.45):
-                                                    reject_color += 1
-                                                    continue
-                                            pts_info.append({'pL': pL, 'pR': pR, 'off': pR - pL, 'dist': float(m.distance)})
-                                    if len(pts_info) >= 3:
-                                        offs = np.array([x['off'] for x in pts_info])
-                                        med_off = np.median(offs, axis=0)
-                                        pts_info = [x for x in pts_info if np.linalg.norm(x['off'] - med_off) < GRAD_SIFT_OFFSET_MEDIAN_TOL_PX]
-                                    if len(pts_info) < GRAD_SIFT_MIN_GROUP_INLIERS:
-                                        print(
-                                            f"   [Grad-SIFT {group_name}] rejected: "
-                                            f"left_kpts={len(kpts_left)}, right_kpts={len(kpts_right)}, "
-                                            f"knn={len(knn_lr)}, good={len(good)}, inliers={len(pts_info)}, "
-                                            f"guided_add={guided_added}, "
-                                            f"dist={reject_dist}, ratio={reject_ratio}, mutual={reject_mutual}, "
-                                            f"epi={reject_epi}, seed={reject_seed}, color={reject_color}"
-                                        )
-                                        return None, None, None, 0.0
-
-                                    ptsA_m = np.array([x['pL'] for x in pts_info], dtype=np.float32)
-                                    ptsB_m = np.array([x['pR'] for x in pts_info], dtype=np.float32)
-                                    wts = 1.0 / (np.sum((ptsA_m - np.array([u, v]))**2, axis=1) + 1e-5)
-                                    weighted_group = np.array([u, v]) + np.sum((ptsB_m - ptsA_m) * wts[:, np.newaxis], axis=0) / np.sum(wts)
-                                    mapped_group = None
-                                    inlier_mask = np.ones(len(ptsA_m), dtype=bool)
-                                    if len(ptsA_m) >= 3:
-                                        M_local, inliers = cv2.estimateAffinePartial2D(
-                                            ptsA_m, ptsB_m, method=cv2.RANSAC,
-                                            ransacReprojThreshold=GRAD_SIFT_RANSAC_REPROJ_PX
-                                        )
-                                        if M_local is not None:
-                                            if inliers is not None:
-                                                inlier_mask = inliers.ravel().astype(bool)
-                                                if np.count_nonzero(inlier_mask) >= GRAD_SIFT_MIN_GROUP_INLIERS:
-                                                    ptsA_m = ptsA_m[inlier_mask]
-                                                    ptsB_m = ptsB_m[inlier_mask]
-                                                    pts_info = [x for x, keep in zip(pts_info, inlier_mask) if keep]
-                                                else:
-                                                    print(f"   [Grad-SIFT {group_name}] rejected by RANSAC: inliers={np.count_nonzero(inlier_mask)}")
-                                                    return None, None, None, 0.0
-                                            pt_a = M_local @ np.array([u, v, 1.0])
-                                            mapped_group = pt_a[:2]
-                                    if mapped_group is not None:
-                                        center_b = np.mean(ptsB_m, axis=0)
-                                        radius_b = max(float(np.percentile(np.linalg.norm(ptsB_m - center_b, axis=1), 90)), 3.0)
-                                        if float(np.linalg.norm(mapped_group - center_b)) > radius_b * 1.25:
-                                            mapped_group = weighted_group
-                                    if mapped_group is None:
-                                        mapped_group = weighted_group
-                                    if float(np.linalg.norm(mapped_group - rt_seed_pt)) > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                                        print(f"   [Grad-SIFT {group_name}] rejected by final RT bound")
-                                        return None, None, None, 0.0
-                                    offset_spread = float(np.median(np.linalg.norm((ptsB_m - ptsA_m) - np.median(ptsB_m - ptsA_m, axis=0), axis=1)))
-                                    mean_dist = float(np.mean([x['dist'] for x in pts_info]))
-                                    score = len(pts_info) / (1.0 + offset_spread + mean_dist / max(match_thres, 1.0))
-                                    print(
-                                        f"   [Grad-SIFT {group_name}] accepted: "
-                                        f"inliers={len(pts_info)}, guided_add={guided_added}, spread={offset_spread:.2f}, score={score:.2f}"
-                                    )
-                                    return mapped_group, ptsA_m, ptsB_m, score
-
-                                mapped_high, ptsA_high, ptsB_high, score_high = map_from_gradient_group(kpts_inj_high, kpts_r_high, "HIGH")
-                                mapped_mid, ptsA_mid, ptsB_mid, score_mid = map_from_gradient_group(kpts_inj_mid, kpts_r_mid, "MID")
-                                mapped_candidates = [
-                                    (mapped_high, score_high),
-                                    (mapped_mid, score_mid),
-                                ]
-                                mapped_candidates = [(p, s) for p, s in mapped_candidates if p is not None and s > 0]
-                                if mapped_candidates:
-                                    total_score = sum(s for _, s in mapped_candidates)
-                                    mapped = sum(np.array(p, dtype=np.float32) * (s / total_score) for p, s in mapped_candidates)
-                                    grad_dev = float(np.linalg.norm(mapped - rt_seed_pt))
-                                    if grad_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
-                                        print(f"   [Grad-SIFT] 融合映射點偏離 RT/平面預測 {grad_dev:.1f}px，放棄此匹配結果。")
-                                        rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {grad_dev:.0f}px"
-                                        mapped_candidates = []
-                                if mapped_candidates:
-                                    if snap_view_state.get('use_rgb_sift', False):
-                                        method_name = "RGB-SIFT"
-                                    elif snap_view_state.get('use_opponent_sift', False):
-                                        method_name = "Opponent-SIFT"
-                                    else:
-                                        method_name = "Grad-SIFT"
-                                    if mapped_high is not None and mapped_mid is not None:
-                                        method_name += "+MidGradInterp"
-                                    elif mapped_mid is not None:
-                                        method_name += "+MidGrad"
-                                    else:
-                                        method_name += "+HighGrad"
-                                    m_pt, method = mapped, method_name
-                                    ptsA_groups = [pts for pts in (ptsA_high, ptsA_mid) if pts is not None]
-                                    ptsB_groups = [pts for pts in (ptsB_high, ptsB_mid) if pts is not None]
-                                    if ptsA_groups and ptsB_groups:
-                                        g_ptsA = np.vstack(ptsA_groups)
-                                        g_ptsB = np.vstack(ptsB_groups)
-                                        group_labels = []
-                                        if ptsA_high is not None:
-                                            group_labels.extend(["high"] * len(ptsA_high))
-                                        if ptsA_mid is not None:
-                                            group_labels.extend(["mid"] * len(ptsA_mid))
-                                        g_groups = np.array(group_labels, dtype=object)
+                        gs = run_grad_sift_matching_flow(
+                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                            snap_view_state, orb, sift,
+                            locked_L, locked_R,
+                            left_spec_mask, right_spec_mask,
+                            is_best_cand=(cand['idx'] == current_cand['idx']),
+                            left_cache=left_cache
+                        )
+                        m_pt = gs['m_pt']
+                        if gs['method']:
+                            method = gs['method']
+                        g_ptsA, g_ptsB, g_groups = gs['g_ptsA'], gs['g_ptsB'], gs['g_groups']
+                        g_refA, g_refB = gs['g_refA'], gs['g_refB']
+                        g_refA_groups, g_refB_groups = gs['g_refA_groups'], gs['g_refB_groups']
+                        g_kptsB, g_rect = gs['g_kptsB'], gs['g_rect']
+                        if gs['reject_reason']:
+                            rt_bound_reject_reason = gs['reject_reason']
+                    t_prof['Grad/Improved匹配'] = time.perf_counter() - _t_blk
                 if (m_pt is None and snap_view_state['precise']):
+                    _t_blk = time.perf_counter()
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
                                                KL, cand['K_R'], cand['R_rel'], cand['t_rel'],
                                                cand['plane_n'], cand['plane_c'])
                     if res_p: m_pt, method = np.array(res_p), "Precise"
+                    t_prof['Precise匹配'] = time.perf_counter() - _t_blk
             
             m_pt_raw = m_pt.copy() if m_pt is not None else None
 
             if (m_pt is not None and method != "ArUco" and manual_match_pt is None
                     and snap_view_state.get('epipolar_band_search', False)):
+                _t_blk = time.perf_counter()
                 rt_seed_for_bound, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
                 epi_pt, epi_score = search_match_on_epipolar_band(
                     snap_imgA_gray, cand['gray'], (u, v), m_pt, cand['F'],
@@ -3153,6 +2258,7 @@ def main():
                         m_pt_raw = None
                 else:
                     print(f"   [Epi-band] 沿極線重新搜尋未通過門檻，保留原始候選點 (best score={epi_score:.3f})")
+                t_prof['Epi-band搜尋'] = time.perf_counter() - _t_blk
 
             if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
@@ -3171,6 +2277,7 @@ def main():
                     rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
                     m_pt = None
             if (m_pt is not None and snap_view_state['ecc']):
+                _t_blk = time.perf_counter()
                 if snap_view_state.get('use_improved_matching', False):
                     m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 45, 91)
                     method += ecc_method
@@ -3187,6 +2294,7 @@ def main():
                                              m_pt[1] - 45.5 + warp[1, 2] + 22.5])
                             method += "+ECC精修"
                         except: method += "+ECC失敗"
+                t_prof['ECC精修'] = time.perf_counter() - _t_blk
             if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
@@ -3211,10 +2319,12 @@ def main():
             if m_pt is None:
                 print("⚠️ [閉環光流] 雙幀直接匹配失敗，無法取得閉環真值點，退回雙幀直接模式。")
             else:
+                _t_blk = time.perf_counter()
                 trajectory = track_feature_and_verify(
                     video_data['all_frames'], video_data['idx_B'], video_data['idx_A'],
                     (u, v), video_data['valid_poses'], KL, distL
                 )
+                t_prof['光流追蹤'] = time.perf_counter() - _t_blk
                 if len(trajectory) >= 3:
                     p_end_flow = np.array(trajectory[-1][1])
                     drift = np.linalg.norm(p_end_flow - np.array(m_pt))
@@ -3250,10 +2360,12 @@ def main():
                     print("⚠️ [閉環光流] 有效追蹤影格數不足 3，退回雙影格匹配。")
                     
         elif MEASURE_MODE == "multi_pure":
+            _t_blk = time.perf_counter()
             trajectory = track_feature_and_verify(
                 video_data['all_frames'], video_data['idx_B'], video_data['idx_A'],
                 (u, v), video_data['valid_poses'], KL, distL
             )
+            t_prof['光流追蹤'] = time.perf_counter() - _t_blk
             if len(trajectory) < 3:
                 fail_reason = "追蹤影格數不足"
                 print("⚠️ [純光流] 有效追蹤影格數不足 3，無法進行多視角三角化。")
@@ -3284,7 +2396,9 @@ def main():
             R_str = np.array2string(cand['R_rel'].flatten(), precision=4, suppress_small=True)
             t_str = np.array2string(cand['t_rel'].flatten(), precision=2, suppress_small=True)
             print(f"   [當前外參] R_rel: {R_str} | t_rel: {t_str}")
+            _t_blk = time.perf_counter()
             p3d = triangulate_point_3d((u, v), m_pt, KL, cand['K_R'], cand['R_rel'], cand['t_rel'], F=cand.get('F'))
+            t_prof['三角化'] = time.perf_counter() - _t_blk
         elif p3d is None:
             fail_reason = rt_bound_reject_reason or "無匹配點"
             print(f"❌ [計算失敗] 在右圖中找不到與左圖點 ({u:.1f}, {v:.1f}) 的匹配點。請試著點選特徵較明顯的邊緣。")
@@ -3340,6 +2454,7 @@ def main():
             reproj_err = float(np.linalg.norm(m_pt - pt_reproj_B))
 
         # 品質與信心分數評估指標計算
+        _t_blk = time.perf_counter()
         d_epi = 999.0
         zncc_score = 0.0
         masked_score = -1.0
@@ -3364,6 +2479,9 @@ def main():
             confidence_score = float(max(0.0, zncc_score) * max(0.0, masked_score) * geom_factor)
             print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | MaskedScore: {masked_score:.3f} | 信心度: {confidence_score:.3f}")
 
+        t_prof['品質評估'] = time.perf_counter() - _t_blk
+        _detail = " | ".join(f"{k} {v * 1000.0:.0f}ms" for k, v in t_prof.items())
+        print(f"⏱️ [F{cand.get('idx')}] 單影格量測 {(time.perf_counter() - t_cm_start) * 1000.0:.0f} ms（{_detail}）")
         return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'depth': depth_z, 'error': reproj_err, 'method': method, 'neighbors': neighbors,
                 'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_groups': g_groups,
                 'g_refA': g_refA, 'g_refB': g_refB,
@@ -3393,12 +2511,13 @@ def main():
             all_cands = [current_cand] + extra_candidates_list
             valid_results = []
             current_res = None
+            corner_left_cache = {}  # 同一角點在各候選影格間重用左圖特徵
             for cand in all_cands:
                 cand_vs = dict(snap_vs)
                 if DISABLE_EXTRA_CANDS_ECC_PRECISE and cand['idx'] != current_cand['idx']:
                     cand_vs['ecc'] = False
                     cand_vs['precise'] = False
-                res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt=None)
+                res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt=None, left_cache=corner_left_cache)
                 res_c['cand_idx'] = cand['idx']
                 res_c['baseline'] = cand.get('baseline')
                 if cand['idx'] == current_cand['idx']:
@@ -3494,8 +2613,10 @@ def main():
         print("\n" + "=" * 80)
         print(f"🖱️ [新點選量測] 左圖點選座標: ({float(u):.1f}, {float(v):.1f})")
         print("=" * 80)
+        click_timer = StageTimer("點擊量測流程")
         locked_L = locked_L_clean.copy()
         locked_R = locked_R_clean.copy()
+        mark_display_dirty()  # locked 影像重置 (量測中可能被高光過濾塗黑)
         if len(plane_dist_history) > 0:
             plane_dist_history.clear()
         for l in view_state['lines']: l.remove()
@@ -3509,10 +2630,12 @@ def main():
         snap_vs = dict(view_state)
         left_img_gray = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
         left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
+        click_timer.stage("左圖灰階+CLAHE前處理")
         
         all_cands = [current_cand] + extra_candidates_list
         res_list = []
         current_res = None
+        click_left_cache = {}  # 左圖特徵/描述子在各候選影格間重用 (同一點選點必然相同)
         for cand in all_cands:
             cand_role = "BEST" if cand['idx'] == current_cand['idx'] else "EXTRA"
             print(f"-------- Right F{cand['idx']} [{cand_role}] --------")
@@ -3521,7 +2644,8 @@ def main():
             if DISABLE_EXTRA_CANDS_ECC_PRECISE and cand['idx'] != current_cand['idx']:
                 cand_vs['ecc'] = False
                 cand_vs['precise'] = False
-            res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt)
+            res_c = compute_measure(u, v, cand, left_img_gray, cand_vs, manual_match_pt, left_cache=click_left_cache)
+            click_timer.stage(f"右圖F{cand['idx']} 匹配+三角化")
             res_c['cand_idx'] = cand['idx']
             res_c['baseline'] = cand.get('baseline')
             if cand['idx'] == current_cand['idx']:
@@ -3531,7 +2655,8 @@ def main():
                 
         if current_res is None:
             print(f"-------- Right F{current_cand['idx']} [BEST-RETRY] --------")
-            current_res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt)
+            current_res = compute_measure(u, v, current_cand, left_img_gray, snap_vs, manual_match_pt, left_cache=click_left_cache)
+            click_timer.stage(f"F{current_cand['idx']} 重試")
             current_res['cand_idx'] = current_cand['idx']
 
         res = dict(current_res)
@@ -3566,6 +2691,7 @@ def main():
             for r in fused['dropped']:
                 print(f"  - 右圖 F{r['cand_idx']}: 深度 = {r['d']:.2f} mm (MAD 離群剔除)")
             print(f"  ➡️ 加權融合結果 (採用 {len(kept)}/{len(res_list)} 組): 深度 = {avg_d:.2f} mm, 3D = [{avg_p3d[0]:.2f}, {avg_p3d[1]:.2f}, {avg_p3d[2]:.2f}]")
+        click_timer.stage("多影格融合")
         
         if custom_plane_mode:
             if res.get('p3d') is not None:
@@ -3593,8 +2719,11 @@ def main():
             VIDEO_PATH, res, current_cand, wound_z_offset, 
             custom_plane_n, custom_plane_c, custom_plane_fitted, MEASURE_MODE
         )
+        click_timer.stage("結果整理+數據存檔")
         
         apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
+        click_timer.stage("UI 更新繪製")
+        click_timer.report()
 
 
     def apply_measure_result(res, avg, summary):
@@ -3788,8 +2917,7 @@ def main():
                 score_str = ""
                 if view_state.get('show_score', False) and res.get('confidence_score') is not None:
                     score_str = f"\n信心分數: {res['confidence_score']:.3f} (極線:{res['d_epi']:.1f}px, ZNCC:{res['zncc_score']:.2f})"
-                fuse_str = f" (融合 {res['fused_count']} 組)" if res.get('fused_count') else ""
-                main_text = f"相機與傷口(點選處)的距離: {res['depth']:.1f}mm{fuse_str}{p_dist_str}{score_str}\n"
+                main_text = f"相機與傷口(點選處)的距離: {res['depth']:.1f}mm{p_dist_str}{score_str}\n"
             
             
             else:
@@ -3962,7 +3090,7 @@ def main():
     btn_hide_R = Button(ax_btn_hide_R, "顯示右圖", **btn_style)
     
     ax_btn_norm = fig.add_axes([0.88, 0.92, 0.08, 0.04])
-    btn_norm_toggle = Button(ax_btn_norm, '使用 L2', **btn_style)
+    btn_norm_toggle = Button(ax_btn_norm, '使用 HAMMING', **btn_style)
     
     ax_btn_calc = fig.add_axes([0.58, 0.86, 0.08, 0.04])
     btn_calc = Button(ax_btn_calc, "單次計算深度", **btn_style)
@@ -3977,10 +3105,10 @@ def main():
     btn_custom_plane = Button(ax_btn_custom_plane, "自訂平面擬合", **btn_style)
     
     ax_btn_high_grad_pts = fig.add_axes([0.58, 0.80, 0.08, 0.04])
-    btn_high_grad_pts = Button(ax_btn_high_grad_pts, "HighPts: On", **btn_style)
+    btn_high_grad_pts = Button(ax_btn_high_grad_pts, "HighPts: Off", **btn_style)
     
     ax_btn_mid_grad_pts = fig.add_axes([0.68, 0.80, 0.08, 0.04])
-    btn_mid_grad_pts = Button(ax_btn_mid_grad_pts, "MidPts: On", **btn_style)
+    btn_mid_grad_pts = Button(ax_btn_mid_grad_pts, "MidPts: Off", **btn_style)
     
     ax_btn_rt_diff = fig.add_axes([0.78, 0.80, 0.08, 0.04])
     btn_rt_diff = Button(ax_btn_rt_diff, "RT Diff", **btn_style)
@@ -3994,6 +3122,9 @@ def main():
 
     ax_btn_wound_pts = fig.add_axes([0.68, 0.74, 0.08, 0.04])
     btn_wound_pts_toggle = Button(ax_btn_wound_pts, "Pts: Rect", **btn_style)
+
+    ax_btn_aruco_overlay = fig.add_axes([0.78, 0.74, 0.08, 0.04])
+    btn_aruco_overlay = Button(ax_btn_aruco_overlay, "ArUco標記: Off", **btn_style)
 
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
@@ -4018,7 +3149,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -4033,7 +3164,7 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
@@ -4275,6 +3406,24 @@ def main():
             do_measure(last_click[0], last_click[1])
         else:
             do_measure(active_u, active_v)
+    def apply_aruco_overlay_visibility():
+        visible = view_state['show_aruco_overlay']
+        for _ax in (ax_A, ax_B):
+            for _a in getattr(_ax, 'art', []):
+                _a.set_visible(visible)
+            # 重投影框 (洋紅: 左投右 / 橘: 右投左) 一併控制
+            for _a in getattr(_ax, 'reproj_art', []):
+                _a.set_visible(visible)
+
+    def on_aruco_overlay_toggle(event):
+        view_state['show_aruco_overlay'] = not view_state['show_aruco_overlay']
+        btn_aruco_overlay.label.set_text("ArUco標記: On" if view_state['show_aruco_overlay'] else "ArUco標記: Off")
+        apply_aruco_overlay_visibility()
+        request_blit_refresh()
+
+    btn_aruco_overlay.on_clicked(on_aruco_overlay_toggle)
+    apply_aruco_overlay_visibility()  # 預設隱藏 ArUco 偵測框與 ID 標籤
+
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
     btn_calc.on_clicked(on_calc)
@@ -4289,7 +3438,46 @@ def main():
     btn_custom_plane.on_clicked(on_custom_plane)
     btn_rt_diff.on_clicked(on_rt_diff)
     btn_return_menu.on_clicked(on_return_menu)
+    # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單不受影響）----
+    panel_defs = [
+        ('#00BFFF', [ax_c1, ax_c2, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
+                     ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19]),
+        ('#00FF88', [ax_mode]),
+        ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
+                     ax_btn_calc, ax_btn_auto_calc, ax_btn_grad, ax_btn_custom_plane,
+                     ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
+                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay]),
+        ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
+    ]
+    panel_visible = [False, False, False, False]
+    panel_dot_buttons = []
+
+    def make_panel_toggle(idx):
+        def _toggle(event):
+            panel_visible[idx] = not panel_visible[idx]
+            for ax_p in panel_defs[idx][1]:
+                ax_p.set_visible(panel_visible[idx])
+            panel_dot_buttons[idx].label.set_color(
+                panel_defs[idx][0] if panel_visible[idx] else '#555555')
+            request_blit_refresh()
+        return _toggle
+
+    for _i, (_color, _axes_list) in enumerate(panel_defs):
+        for _ax_p in _axes_list:
+            _ax_p.set_visible(panel_visible[_i])
+        _ax_dot = fig.add_axes([0.005 + _i * 0.025, 0.965, 0.02, 0.03])
+        _dot = Button(_ax_dot, '●', color='#1E1E1E', hovercolor='#333333')
+        _dot.label.set_color(_color if panel_visible[_i] else '#555555')
+        _dot.label.set_fontsize(11)
+        _ax_dot.patch.set_edgecolor('none')
+        for _spine in _ax_dot.spines.values():
+            _spine.set_visible(False)
+        panel_dot_buttons.append(_dot)
+        _dot.on_clicked(make_panel_toggle(_i))
+
+    startup_timer.stage("UI 元件建立")
     refresh_wound_predictions("initial selection")
+    startup_timer.stage("傷口模型預載+推論")
 
     # ---- Blit 初始化 ----
     # 切斷 im_A/im_B 的 stale propagation callback：
@@ -4307,6 +3495,8 @@ def main():
     fig.canvas.draw()
     blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
     blit_state['needs_refresh'] = False
+    startup_timer.stage("首次繪製")
+    startup_timer.report()
 
     import time as _time
     _fps_t0 = _time.perf_counter()
@@ -4326,33 +3516,46 @@ def main():
             fig.canvas.flush_events()
             _time.sleep(UI_LOOP_SLEEP_SEC)
             continue
-        # 依前處理開關，動態切換顯示畫面（使肉眼可見差異）
-        if view_state['enable_clahe']:
-            gray_A = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
-            gray_A_enh = preprocess_gray(gray_A, True)
-            disp_A = cv2.cvtColor(gray_A_enh, cv2.COLOR_GRAY2RGB)
-            
-            gray_B = cv2.cvtColor(locked_R, cv2.COLOR_BGR2GRAY)
-            gray_B_enh = preprocess_gray(gray_B, True)
-            disp_B = cv2.cvtColor(gray_B_enh, cv2.COLOR_GRAY2RGB)
-        else:
-            disp_A = cv2.cvtColor(locked_L, cv2.COLOR_BGR2RGB)
-            disp_B = cv2.cvtColor(locked_R, cv2.COLOR_BGR2RGB)
+        # 依前處理開關，動態切換顯示畫面（使肉眼可見差異）。
+        # 影像內容 (version) 與疊圖相關開關沒變時，直接重用上次的轉換結果。
+        disp_key = (
+            display_cache['version'],
+            view_state['enable_clahe'],
+            view_state.get('show_spatial_specular_mask', False),
+            view_state.get('show_temporal_specular_mask', False),
+            wound_state.get('show', False),
+            wound_state.get('corner_source'),
+        )
+        if disp_key != display_cache['key']:
+            if view_state['enable_clahe']:
+                gray_A = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
+                gray_A_enh = preprocess_gray(gray_A, True)
+                disp_A = cv2.cvtColor(gray_A_enh, cv2.COLOR_GRAY2RGB)
 
-        if view_state.get('show_spatial_specular_mask', False) or view_state.get('show_temporal_specular_mask', False):
-            empty_L = np.zeros_like(locked_L_spec_mask) if locked_L_spec_mask is not None else None
-            empty_R = np.zeros_like(locked_R_spec_mask) if locked_R_spec_mask is not None else None
-            spatial_A = locked_L_spec_spatial_mask if view_state.get('show_spatial_specular_mask', False) else empty_L
-            temporal_A = locked_L_spec_temporal_mask if view_state.get('show_temporal_specular_mask', False) else empty_L
-            spatial_B = locked_R_spec_spatial_mask if view_state.get('show_spatial_specular_mask', False) else empty_R
-            temporal_B = locked_R_spec_temporal_mask if view_state.get('show_temporal_specular_mask', False) else empty_R
-            disp_A = overlay_specular_mask_rgb(disp_A, spatial_A, temporal_A)
-            disp_B = overlay_specular_mask_rgb(disp_B, spatial_B, temporal_B)
+                gray_B = cv2.cvtColor(locked_R, cv2.COLOR_BGR2GRAY)
+                gray_B_enh = preprocess_gray(gray_B, True)
+                disp_B = cv2.cvtColor(gray_B_enh, cv2.COLOR_GRAY2RGB)
+            else:
+                disp_A = cv2.cvtColor(locked_L, cv2.COLOR_BGR2RGB)
+                disp_B = cv2.cvtColor(locked_R, cv2.COLOR_BGR2RGB)
 
-        disp_A, disp_B = apply_wound_overlay_if_enabled(disp_A, disp_B)
-            
-        im_A.set_data(disp_A)
-        im_B.set_data(disp_B)
+            if view_state.get('show_spatial_specular_mask', False) or view_state.get('show_temporal_specular_mask', False):
+                empty_L = np.zeros_like(locked_L_spec_mask) if locked_L_spec_mask is not None else None
+                empty_R = np.zeros_like(locked_R_spec_mask) if locked_R_spec_mask is not None else None
+                spatial_A = locked_L_spec_spatial_mask if view_state.get('show_spatial_specular_mask', False) else empty_L
+                temporal_A = locked_L_spec_temporal_mask if view_state.get('show_temporal_specular_mask', False) else empty_L
+                spatial_B = locked_R_spec_spatial_mask if view_state.get('show_spatial_specular_mask', False) else empty_R
+                temporal_B = locked_R_spec_temporal_mask if view_state.get('show_temporal_specular_mask', False) else empty_R
+                disp_A = overlay_specular_mask_rgb(disp_A, spatial_A, temporal_A)
+                disp_B = overlay_specular_mask_rgb(disp_B, spatial_B, temporal_B)
+
+            disp_A, disp_B = apply_wound_overlay_if_enabled(disp_A, disp_B)
+            display_cache['key'] = disp_key
+            display_cache['disp_A'] = disp_A
+            display_cache['disp_B'] = disp_B
+
+        im_A.set_data(display_cache['disp_A'])
+        im_B.set_data(display_cache['disp_B'])
 
         # ---- Blit 渲染 ----
         if blit_state['needs_refresh'] or blit_state['bg'] is None:

@@ -5,6 +5,7 @@ import numpy as np
 
 from .aruco_pose import average_rotations_svd, compute_global_plane as _compute_global_plane
 from .camera_preprocess import preprocess_gray
+from .perf_timer import StageTimer
 
 RECORD_SAVE_DIR = "test_video_Zebra"
 MIN_BASELINE_MM = 8.0
@@ -37,8 +38,9 @@ def compute_global_plane(imgA_gray, K_L, marker_size_mm):
 
 
 def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None):
+    timer = StageTimer("影片分析明細")
     if progress_callback:
-        progress_callback(2, "正在開啟影片檔案...")
+        progress_callback(2, "階段 1/6：載入影片...")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"❌ 無法開啟影片: {video_path}")
@@ -55,15 +57,16 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         frames.append(frame)
         if progress_callback and len(frames) % 30 == 0:
             load_percent = min(2 + (len(frames) / max(1, total_frames)) * 10, 12)
-            progress_callback(load_percent, f"正在載入影片影格 ({len(frames)}/{total_frames})...")
+            progress_callback(load_percent, f"階段 1/6：載入影片 ({len(frames)}/{total_frames})...")
             
     cap.release()
     if progress_callback:
-        progress_callback(12, f"影片載入完成，共 {len(frames)} 影格。")
+        progress_callback(12, "階段 1/6：載入完成")
     
     if len(frames) == 0:
         print("❌ 影片無有效影格")
         return None
+    timer.stage(f"影格載入({len(frames)} 幀)")
         
     mid_idx = len(frames) // 2
     if range_mode == "half_half":
@@ -123,7 +126,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                     percent = stage_base + (i / len(idxs)) * 7.5
                 else:
                     percent = stage_base + 7.5 + (i / len(idxs)) * 7.5
-                progress_callback(min(percent, 98.0), f"正在分析第 {stage_idx + 1}/5 階段 - {seg_name} 偵測標籤 ({i + 1}/{len(idxs)})...")
+                progress_callback(min(percent, 98.0), f"階段 2/6：分析影像 ({i + 1}/{len(idxs)})...")
         return info
 
     def sample_range(r, n):
@@ -593,6 +596,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             selected_extras = candidates_scores[:5]
             break
             
+    timer.stage("ArUco偵測+配對搜尋(含極線重排)")
     if best_start is None or best_end is None:
         log_and_print("❌ [漸進式匹配] 無法在該影片中計算出任何影像對，分析失敗。")
         return None
@@ -633,6 +637,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     if not selected_extras:
         log_and_print(f"ℹ️ [次佳配對] 未找到任何符合條件 of 額外次佳配對影格 (門檻 0.5 px, Baseline 介於 {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)。")
 
+    timer.stage("混合RT精修+次佳打包")
     log_and_print(f"✅ 挑選結果：")
     log_and_print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
     log_and_print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
@@ -647,7 +652,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
         
     if progress_callback:
-        progress_callback(92, "正在進行去畸變影像校正...")
+        progress_callback(92, "階段 3/6：影像校正...")
         
     # 預先在背景執行去畸變、平面擬合與 SIFT 特徵提取，優化 UI 載入速度
     h_raw, w_raw = frames[0].shape[:2]
@@ -661,13 +666,14 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     imgB_bgr = local_process_view(frames[best_start['idx']])  # 開頭最優影格作為右圖 (A)
     
     if progress_callback:
-        progress_callback(94, "正在擬合世界坐標系參考平面...")
+        progress_callback(94, "階段 4/6：基準計算...")
     imgA_gray = cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2GRAY)
     imgA_gray = preprocess_gray(imgA_gray, True)
     global_plane_n, global_plane_c = compute_global_plane(imgA_gray, K_L, marker_size_mm)
+    timer.stage("去畸變+全域平面擬合")
     
     if progress_callback:
-        progress_callback(96, "正在提取最佳影像組 SIFT 特徵...")
+        progress_callback(96, "階段 5/6：資料準備...")
     sift = cv2.SIFT_create(contrastThreshold=0.005)
     imgB_gray = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY)
     kb, db = sift.detectAndCompute(imgB_gray, None)
@@ -676,15 +682,17 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     for idx_extra, extra in enumerate(extra_candidates_info):
         if progress_callback:
             progress = min(97 + int((idx_extra / max(1, len(extra_candidates_info))) * 3), 99)
-            progress_callback(progress, f"正在提取次佳影像 SIFT 特徵 ({idx_extra+1}/{len(extra_candidates_info)})...")
+            progress_callback(progress, f"階段 5/6：資料準備 ({idx_extra+1}/{len(extra_candidates_info)})...")
         imgB_extra_bgr = local_process_view(extra['frame_A'])
         imgB_extra_gray = cv2.cvtColor(imgB_extra_bgr, cv2.COLOR_BGR2GRAY)
         kb_e, db_e = sift.detectAndCompute(imgB_extra_gray, None)
         extra['kpB'] = kb_e
         extra['desB'] = db_e
         
+    timer.stage("SIFT特徵提取(最佳+次佳)")
+    timer.report(print_fn=log_and_print)
     if progress_callback:
-        progress_callback(100, "分析完成，即將載入主量測介面...")
+        progress_callback(100, "階段 6/6：完成")
         
     return {
         'frame_A': frames[best_start['idx']],
