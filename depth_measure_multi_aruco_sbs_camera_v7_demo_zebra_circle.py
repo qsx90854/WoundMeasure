@@ -117,6 +117,54 @@ RIGHT_GRADIENT_POINTS_COUNT   = 300                       # 右圖周圍取梯�
 LEFT_MID_GRADIENT_POINTS_COUNT = 150                       # 左圖周圍取梯度中等的特徵點數量
 RIGHT_MID_GRADIENT_POINTS_COUNT = 300                      # 右圖周圍取梯度中等的特徵點數量
 
+CIRCLE_LABEL_MATCH_ENABLED = True              # Experimental: snap/match circular labels pasted on the target.
+CIRCLE_LABEL_SNAP_RADIUS_PX = 18.0             # Max click distance for snapping the left point to a circle center.
+CIRCLE_LABEL_MIN_RADIUS_PX = 15                 # Expected circle label radius range after resizing/undistortion.
+CIRCLE_LABEL_MAX_RADIUS_PX = 100
+CIRCLE_LABEL_MIN_AREA_PX = 2000
+CIRCLE_LABEL_MAX_AREA_PX = 15000
+CIRCLE_LABEL_MERGE_DISTANCE_PX = 6.0
+CIRCLE_LABEL_LIGHT_RING_MIN_FRACTION = 0.30    # Outside of a true label should still look like the bright target surface.
+CIRCLE_LABEL_LOW_SAT_RING_MIN_FRACTION = 0.20
+CIRCLE_LABEL_INK_MIN_FRACTION = 0.26
+CIRCLE_LABEL_MIN_ELLIPSE_AXIS_RATIO = 0.45
+CIRCLE_LABEL_MIN_ELLIPSE_SUPPORT = 0.55
+CIRCLE_LABEL_ELLIPSE_VOTE_TOL = 0.28
+CIRCLE_LABEL_DEBUG_REASON_ORDER = (
+    'accepted',
+    'area',
+    'points',
+    'perimeter',
+    'bbox aspect',
+    'radius',
+    'border',
+    'ellipse axis',
+    'ellipse vote',
+    'empty ring',
+    'ink fraction',
+    'light ring',
+    'low-sat ring',
+    'fill ratio',
+    'unknown',
+)
+CIRCLE_LABEL_DEBUG_REASON_COLORS_RGB = {
+    'accepted': (0, 255, 80),
+    'area': (255, 64, 64),
+    'points': (255, 150, 40),
+    'perimeter': (255, 225, 40),
+    'bbox aspect': (175, 85, 255),
+    'radius': (40, 175, 255),
+    'border': (80, 90, 255),
+    'ellipse axis': (255, 50, 210),
+    'ellipse vote': (0, 220, 170),
+    'empty ring': (255, 255, 255),
+    'ink fraction': (130, 255, 40),
+    'light ring': (255, 130, 180),
+    'low-sat ring': (80, 255, 255),
+    'fill ratio': (190, 125, 35),
+    'unknown': (180, 180, 180),
+}
+
 GRAD_SIFT_RATIO_TEST          = 0.78                       # v1 Grad-SIFT KNN ratio test threshold
 GRAD_SIFT_EPIPOLAR_TOL_PX     = 3.0                        # max point-to-epipolar-line distance for local SIFT matches
 GRAD_SIFT_OFFSET_MEDIAN_TOL_PX = 8.0                       # reject local matches whose disparity differs too much from median
@@ -136,6 +184,316 @@ PAIR_SCORE_MARKER_W           = 0.08                       # pair selection weig
 # 將主檔頂部的可調常數注入 stereo_matching 模組 (調參仍集中在本檔)
 for _const_name in stereo_algo.TUNABLE_CONSTANTS:
     setattr(stereo_algo, _const_name, globals()[_const_name])
+
+def _empty_points():
+    return np.empty((0, 2), dtype=np.float32)
+
+def merge_circle_candidates(candidates, merge_dist=CIRCLE_LABEL_MERGE_DISTANCE_PX):
+    if not candidates:
+        return _empty_points(), np.empty((0,), dtype=np.float32)
+
+    merged = []
+    for center, radius, score in sorted(candidates, key=lambda item: item[2], reverse=True):
+        center = np.asarray(center, dtype=np.float32)
+        duplicate = False
+        for item in merged:
+            if np.linalg.norm(center - item['center']) <= merge_dist:
+                duplicate = True
+                if score > item['score']:
+                    item['center'] = center
+                    item['radius'] = float(radius)
+                    item['score'] = float(score)
+                break
+        if not duplicate:
+            merged.append({'center': center, 'radius': float(radius), 'score': float(score)})
+
+    centers = np.array([item['center'] for item in merged], dtype=np.float32)
+    radii = np.array([item['radius'] for item in merged], dtype=np.float32)
+    return centers, radii
+
+def ellipse_contour_vote_score(contour, ellipse, vote_tol=CIRCLE_LABEL_ELLIPSE_VOTE_TOL):
+    (cx, cy), (axis_a, axis_b), angle_deg = ellipse
+    major = max(float(axis_a), float(axis_b))
+    minor = min(float(axis_a), float(axis_b))
+    if major <= 1e-6 or minor <= 1e-6:
+        return 0.0, 0.0
+
+    pts = contour.reshape(-1, 2).astype(np.float32)
+    dx = pts[:, 0] - float(cx)
+    dy = pts[:, 1] - float(cy)
+    a = major / 2.0
+    b = minor / 2.0
+
+    supports = []
+    for theta in (np.deg2rad(angle_deg), np.deg2rad(angle_deg + 90.0)):
+        cos_t, sin_t = np.cos(theta), np.sin(theta)
+        xr = cos_t * dx + sin_t * dy
+        yr = -sin_t * dx + cos_t * dy
+        rho = np.sqrt((xr / a) ** 2 + (yr / b) ** 2)
+        supports.append(float(np.mean(np.abs(rho - 1.0) <= vote_tol)))
+    support = max(supports)
+    axis_ratio = minor / major
+    return support, axis_ratio
+
+def build_circle_label_ink_mask(bgr):
+    if bgr is None or bgr.size == 0:
+        return None, None, None
+
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY) if bgr.ndim == 3 else bgr.copy()
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV) if bgr.ndim == 3 else cv2.cvtColor(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    dark_or_colored_label = (
+        (gray < 118) |
+        ((sat > 90) & (gray < 150) & (val < 210))
+    )
+    ink_mask = dark_or_colored_label.astype(np.uint8) * 255
+    ink_mask = cv2.morphologyEx(ink_mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    return gray, hsv, ink_mask
+
+def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy):
+    h, w = gray.shape[:2]
+    sat = hsv[:, :, 1]
+    info = {'contour': cnt, 'ellipse': None, 'accepted': False, 'reason': ''}
+
+    area = float(cv2.contourArea(cnt))
+    if area < CIRCLE_LABEL_MIN_AREA_PX or area > CIRCLE_LABEL_MAX_AREA_PX:
+        info['reason'] = 'area'
+        return None, info
+    if len(cnt) < 5:
+        info['reason'] = 'points'
+        return None, info
+    perim = float(cv2.arcLength(cnt, True))
+    if perim <= 1e-6:
+        info['reason'] = 'perimeter'
+        return None, info
+
+    x_box, y_box, bw, bh = cv2.boundingRect(cnt)
+    aspect = bw / max(1.0, float(bh))
+    if aspect < 0.40 or aspect > 2.50:
+        info['reason'] = 'bbox aspect'
+        return None, info
+
+    ellipse = cv2.fitEllipse(cnt)
+    info['ellipse'] = ellipse
+    (x, y), (axis_a, axis_b), angle = ellipse
+    major = max(float(axis_a), float(axis_b))
+    minor = min(float(axis_a), float(axis_b))
+    radius = 0.25 * (major + minor)
+    if radius < CIRCLE_LABEL_MIN_RADIUS_PX or radius > CIRCLE_LABEL_MAX_RADIUS_PX:
+        info['reason'] = 'radius'
+        return None, info
+    if x < radius or y < radius or x > w - radius or y > h - radius:
+        info['reason'] = 'border'
+        return None, info
+    axis_ratio = minor / max(major, 1e-6)
+    if axis_ratio < CIRCLE_LABEL_MIN_ELLIPSE_AXIS_RATIO:
+        info['reason'] = 'ellipse axis'
+        return None, info
+    support, vote_axis_ratio = ellipse_contour_vote_score(cnt, ellipse)
+    if support < CIRCLE_LABEL_MIN_ELLIPSE_SUPPORT:
+        info['reason'] = 'ellipse vote'
+        return None, info
+
+    dist2 = (xx - x) ** 2 + (yy - y) ** 2
+    inner = dist2 <= (radius * 0.95) ** 2
+    ring = (dist2 >= (radius * 1.20) ** 2) & (dist2 <= (radius * 2.40) ** 2)
+    if np.count_nonzero(inner) == 0 or np.count_nonzero(ring) == 0:
+        info['reason'] = 'empty ring'
+        return None, info
+
+    ink_fraction = float(np.count_nonzero(ink_mask[inner]) / np.count_nonzero(inner))
+    ring_light_fraction = float(np.count_nonzero(gray[ring] > 105) / np.count_nonzero(ring))
+    ring_low_sat_fraction = float(np.count_nonzero(sat[ring] < 115) / np.count_nonzero(ring))
+    if ink_fraction < CIRCLE_LABEL_INK_MIN_FRACTION:
+        info['reason'] = 'ink fraction'
+        return None, info
+    if ring_light_fraction < CIRCLE_LABEL_LIGHT_RING_MIN_FRACTION:
+        info['reason'] = 'light ring'
+        return None, info
+    if ring_low_sat_fraction < CIRCLE_LABEL_LOW_SAT_RING_MIN_FRACTION:
+        info['reason'] = 'low-sat ring'
+        return None, info
+
+    ellipse_area = np.pi * (major / 2.0) * (minor / 2.0)
+    fill_ratio = area / (ellipse_area + 1e-6)
+    if fill_ratio < 0.24 or fill_ratio > 1.35:
+        info['reason'] = 'fill ratio'
+        return None, info
+
+    score = support + vote_axis_ratio + ink_fraction + ring_light_fraction + ring_low_sat_fraction
+    info.update({
+        'accepted': True,
+        'reason': 'accepted',
+        'center': (float(x), float(y)),
+        'radius': float(radius),
+        'support': float(support),
+        'axis_ratio': float(vote_axis_ratio),
+        'ink_fraction': ink_fraction,
+        'ring_light_fraction': ring_light_fraction,
+        'ring_low_sat_fraction': ring_low_sat_fraction,
+        'fill_ratio': float(fill_ratio),
+    })
+    return ((x, y), radius, score), info
+
+def collect_circle_label_contours(bgr):
+    gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
+    if gray is None:
+        return {'gray': None, 'mask': None, 'contours': [], 'centers': _empty_points(), 'radii': np.empty((0,), dtype=np.float32)}
+
+    contours, _ = cv2.findContours(ink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    yy, xx = np.indices(gray.shape)
+    candidates = []
+    contour_infos = []
+    for cnt in contours:
+        candidate, info = evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy)
+        contour_infos.append(info)
+        if candidate is not None:
+            candidates.append(candidate)
+
+    centers, radii = merge_circle_candidates(candidates)
+    return {'gray': gray, 'mask': ink_mask, 'contours': contour_infos, 'centers': centers, 'radii': radii}
+
+def detect_circle_label_centers(bgr):
+    debug = collect_circle_label_contours(bgr)
+    return debug['centers'], debug['radii']
+
+def circle_label_debug_reason(info):
+    if info.get('accepted'):
+        return 'accepted'
+    return info.get('reason') or 'unknown'
+
+def circle_label_debug_color(reason):
+    return CIRCLE_LABEL_DEBUG_REASON_COLORS_RGB.get(
+        reason,
+        CIRCLE_LABEL_DEBUG_REASON_COLORS_RGB['unknown']
+    )
+
+def draw_circle_label_debug_legend(overlay, reason_counts):
+    if not reason_counts:
+        return overlay
+
+    ordered_reasons = [
+        reason for reason in CIRCLE_LABEL_DEBUG_REASON_ORDER
+        if reason in reason_counts
+    ]
+    extra_reasons = sorted(
+        reason for reason in reason_counts
+        if reason not in CIRCLE_LABEL_DEBUG_REASON_ORDER
+    )
+    items = ordered_reasons + extra_reasons
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.35
+    thickness = 1
+    row_h = 15
+    pad = 7
+    title = "contour filter"
+    labels = [f"{reason}: {reason_counts[reason]}" for reason in items]
+    max_text_w = cv2.getTextSize(title, font, font_scale, thickness)[0][0]
+    for label in labels:
+        max_text_w = max(max_text_w, cv2.getTextSize(label, font, font_scale, thickness)[0][0])
+
+    panel_w = min(overlay.shape[1] - 8, max_text_w + 34)
+    panel_h = min(overlay.shape[0] - 8, pad * 2 + row_h * (len(items) + 1))
+    if panel_w <= 0 or panel_h <= 0:
+        return overlay
+
+    panel = overlay.copy()
+    cv2.rectangle(panel, (4, 4), (4 + panel_w, 4 + panel_h), (0, 0, 0), -1)
+    overlay = cv2.addWeighted(panel, 0.58, overlay, 0.42, 0)
+
+    y = 4 + pad + 8
+    cv2.putText(overlay, title, (10, y), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    y += row_h
+    max_rows = max(0, (panel_h - pad * 2 - row_h) // row_h)
+    for reason in items[:max_rows]:
+        color = circle_label_debug_color(reason)
+        cv2.rectangle(overlay, (10, y - 9), (20, y + 1), color, -1)
+        cv2.putText(
+            overlay,
+            f"{reason}: {reason_counts[reason]}",
+            (26, y),
+            font,
+            font_scale,
+            (255, 255, 255),
+            thickness,
+            cv2.LINE_AA
+        )
+        y += row_h
+    return overlay
+
+def draw_circle_label_contour_debug_overlay(bgr, debug):
+    if bgr is None:
+        return None
+    overlay = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB) if bgr.ndim == 3 else cv2.cvtColor(bgr, cv2.COLOR_GRAY2RGB)
+    overlay = overlay.copy()
+
+    reason_counts = {}
+    for info in debug.get('contours', []):
+        cnt = info.get('contour')
+        if cnt is None:
+            continue
+        reason = circle_label_debug_reason(info)
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        color = circle_label_debug_color(reason)
+        cv2.drawContours(overlay, [cnt], -1, color, 1, cv2.LINE_AA)
+        ellipse = info.get('ellipse')
+        if ellipse is not None:
+            cv2.ellipse(overlay, ellipse, color, 1, cv2.LINE_AA)
+        if info.get('accepted') and info.get('center') is not None:
+            x, y = info['center']
+            cv2.drawMarker(
+                overlay, (int(round(x)), int(round(y))), (255, 255, 0),
+                markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1,
+                line_type=cv2.LINE_AA
+            )
+
+    overlay = draw_circle_label_debug_legend(overlay, reason_counts)
+    return overlay
+
+def find_nearest_circle_center(point, centers, max_dist):
+    centers = np.asarray(centers if centers is not None else _empty_points(), dtype=np.float32)
+    if centers.size == 0:
+        return None, None
+    point = np.asarray(point, dtype=np.float32)
+    dists = np.linalg.norm(centers - point, axis=1)
+    idx = int(np.argmin(dists))
+    if float(dists[idx]) <= max_dist:
+        return centers[idx].copy(), float(dists[idx])
+    return None, None
+
+def circle_label_search_rect(left_point, cand, K_L, image_shape):
+    seed_pt, seed_method = predict_right_seed_from_geometry(left_point, cand, K_L)
+    if seed_pt is None or not np.all(np.isfinite(seed_pt)):
+        return None, None, seed_method
+
+    h, w = image_shape[:2]
+    rad = float(RIGHT_PATCH_SEARCH_RADIUS)
+    x0 = max(0.0, float(seed_pt[0]) - rad)
+    y0 = max(0.0, float(seed_pt[1]) - rad)
+    x1 = min(float(w - 1), float(seed_pt[0]) + rad)
+    y1 = min(float(h - 1), float(seed_pt[1]) + rad)
+    if x1 <= x0 or y1 <= y0:
+        return np.asarray(seed_pt, dtype=np.float32), None, seed_method
+    return np.asarray(seed_pt, dtype=np.float32), (x0, y0, x1 - x0, y1 - y0), seed_method
+
+def find_circle_center_in_rect(centers, rect, preferred_point=None):
+    centers = np.asarray(centers if centers is not None else _empty_points(), dtype=np.float32)
+    if centers.size == 0 or rect is None:
+        return None
+    x, y, rw, rh = rect
+    mask = (
+        (centers[:, 0] >= x) & (centers[:, 0] <= x + rw) &
+        (centers[:, 1] >= y) & (centers[:, 1] <= y + rh)
+    )
+    if not np.any(mask):
+        return None
+    roi_centers = centers[mask]
+    if preferred_point is None:
+        preferred_point = np.array([x + rw / 2.0, y + rh / 2.0], dtype=np.float32)
+    dists = np.linalg.norm(roi_centers - np.asarray(preferred_point, dtype=np.float32), axis=1)
+    return roi_centers[int(np.argmin(dists))].copy()
 
 def get_wound_detector():
     """Lazy-load the v9-t-seg_320 wound segmentation model."""
@@ -1576,6 +1934,13 @@ def main():
     locked_R_idx = video_data['idx_A']
     locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
     locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
+    if CIRCLE_LABEL_MATCH_ENABLED:
+        circle_centers_L, circle_radii_L = detect_circle_label_centers(locked_L_clean)
+        circle_centers_R, circle_radii_R = detect_circle_label_centers(locked_R_clean)
+        print(f"[CircleLabel] detected left={len(circle_centers_L)} right={len(circle_centers_R)} centers")
+    else:
+        circle_centers_L, circle_radii_L = _empty_points(), np.empty((0,), dtype=np.float32)
+        circle_centers_R, circle_radii_R = _empty_points(), np.empty((0,), dtype=np.float32)
     startup_timer.stage("全域平面+左右高光遮罩")
     live_L = False
     live_R = False
@@ -1605,6 +1970,8 @@ def main():
     current_cand['spec_mask'] = locked_R_spec_mask
     current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
     current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
+    current_cand['circle_centers'] = circle_centers_R
+    current_cand['circle_radii'] = circle_radii_R
     
     # 若背景計算因任何理由未獲得特徵，則降級在主線程中計算
     if not current_cand['kpB'] or current_cand['desB'] is None:
@@ -1636,6 +2003,12 @@ def main():
             'spec_spatial_mask': None,
             'spec_temporal_mask': None,
         }
+        if CIRCLE_LABEL_MATCH_ENABLED:
+            extra_cand['circle_centers'], extra_cand['circle_radii'] = detect_circle_label_centers(imgB_extra_bgr)
+            print(f"[CircleLabel] detected right F{extra_cand['idx']}={len(extra_cand['circle_centers'])} centers")
+        else:
+            extra_cand['circle_centers'] = _empty_points()
+            extra_cand['circle_radii'] = np.empty((0,), dtype=np.float32)
         # 若背景中未成功提取，才在主線程中提取特徵
         if not extra_cand['kpB'] or extra_cand['desB'] is None:
             kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
@@ -1782,6 +2155,18 @@ def main():
     scatter_grad_match = ax_B.scatter([], [], s=18, c='#0047AB', alpha=0.9, zorder=4)
     scatter_mid_grad_inject = ax_A.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
     scatter_mid_grad_match = ax_B.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
+    scatter_circle_A = ax_A.scatter(
+        circle_centers_L[:, 0] if len(circle_centers_L) else [],
+        circle_centers_L[:, 1] if len(circle_centers_L) else [],
+        s=75, facecolors='none', edgecolors='#00E5FF', marker='o', linewidths=1.4,
+        alpha=0.95, zorder=4.5
+    )
+    scatter_circle_B = ax_B.scatter(
+        current_cand['circle_centers'][:, 0] if len(current_cand.get('circle_centers', _empty_points())) else [],
+        current_cand['circle_centers'][:, 1] if len(current_cand.get('circle_centers', _empty_points())) else [],
+        s=75, facecolors='none', edgecolors='#FFE066', marker='o', linewidths=1.4,
+        alpha=0.95, zorder=4.5
+    )
     epi_line, = ax_B.plot([], [], 'yellow', lw=1, alpha=0.6, zorder=4)
     sift_rect = Rectangle((0, 0), 0, 0, linewidth=1, edgecolor='magenta', facecolor='none', linestyle='--', alpha=0.8, zorder=4)
     ax_B.add_patch(sift_rect)
@@ -2193,6 +2578,7 @@ def main():
                         cand['spec_spatial_mask'] = right_spec_spatial_mask
                         cand['spec_temporal_mask'] = right_spec_temporal_mask
         m_pt, method, neighbors = None, "", []
+        direct_match_methods = ("ArUco", "CircleLabel")
         rt_bound_reject_reason = None
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
         trajectory_res = None
@@ -2219,13 +2605,31 @@ def main():
                 m_pt, method = manual_match_pt, "手動點選"
 
             if m_pt is None:
-                for mid, cA in cand['cornersA'].items():
-                    d = np.linalg.norm(cA - np.array([u, v]), axis=1)
-                    if np.min(d) < 10:
-                        best_idx = np.argmin(d)
-                        u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
-                        m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
-                        break
+                if snap_view_state.get('circle_label_match_active', False):
+                    seed_pt, circle_rect, seed_method = circle_label_search_rect((u, v), cand, KL, cand['gray'].shape)
+                    if circle_rect is not None:
+                        g_rect = circle_rect
+                        circle_match = find_circle_center_in_rect(cand.get('circle_centers'), circle_rect, seed_pt)
+                        if circle_match is not None:
+                            m_pt = circle_match.astype(np.float32)
+                            method = "CircleLabel"
+                            g_ptsA = np.array([[u, v]], dtype=np.float32)
+                            g_ptsB = np.array([m_pt], dtype=np.float32)
+                            g_groups = np.array(["circle"])
+                            print(
+                                f"[CircleLabel] right circle matched in ROI via {seed_method}: "
+                                f"({m_pt[0]:.1f}, {m_pt[1]:.1f})"
+                            )
+                        else:
+                            print(f"[CircleLabel] no right circle center inside predicted ROI ({seed_method})")
+                if m_pt is None:
+                    for mid, cA in cand['cornersA'].items():
+                        d = np.linalg.norm(cA - np.array([u, v]), axis=1)
+                        if np.min(d) < 10:
+                            best_idx = np.argmin(d)
+                            u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
+                            m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
+                            break
                 if m_pt is None and snap_view_state['grad_sift']:
                     _t_blk = time.perf_counter()
                     if snap_view_state.get('use_improved_matching', False):
@@ -2269,7 +2673,7 @@ def main():
             
             m_pt_raw = m_pt.copy() if m_pt is not None else None
 
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None
+            if (m_pt is not None and method not in direct_match_methods and manual_match_pt is None
                     and snap_view_state.get('epipolar_band_search', False)):
                 _t_blk = time.perf_counter()
                 rt_seed_for_bound, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
@@ -2296,7 +2700,7 @@ def main():
                     print(f"   [Epi-band] 沿極線重新搜尋未通過門檻，保留原始候選點 (best score={epi_score:.3f})")
                 t_prof['Epi-band搜尋'] = time.perf_counter() - _t_blk
 
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method not in direct_match_methods):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
@@ -2305,14 +2709,14 @@ def main():
                                       m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
                     method += "+極線對齊"
 
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+            if (m_pt is not None and method not in direct_match_methods and manual_match_pt is None):
                 rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
                 rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
                 if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
                     print(f"❌ [RT邊界] 匹配點偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
                     rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
                     m_pt = None
-            if (m_pt is not None and snap_view_state['ecc']):
+            if (m_pt is not None and snap_view_state['ecc'] and method not in direct_match_methods):
                 _t_blk = time.perf_counter()
                 if snap_view_state.get('use_improved_matching', False):
                     m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 45, 91)
@@ -2331,7 +2735,7 @@ def main():
                             method += "+ECC精修"
                         except: method += "+ECC失敗"
                 t_prof['ECC精修'] = time.perf_counter() - _t_blk
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method not in direct_match_methods):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
@@ -2343,7 +2747,7 @@ def main():
         d_val, p3d_val, p3d_w_val, fail_reason = None, None, None, ""
         p3d = None
         
-        if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+        if (m_pt is not None and method not in direct_match_methods and manual_match_pt is None):
             rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
             rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
             if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
@@ -2645,7 +3049,19 @@ def main():
 
     def do_measure(u, v, manual_match_pt=None):
         """同步計算並立即更新 UI"""
-        nonlocal last_click, locked_L, locked_R; last_click = (u, v)
+        nonlocal last_click, locked_L, locked_R
+        circle_snap_active = False
+        circle_snap_dist = None
+        if CIRCLE_LABEL_MATCH_ENABLED and manual_match_pt is None:
+            snapped_center, snap_dist = find_nearest_circle_center(
+                (u, v), circle_centers_L, CIRCLE_LABEL_SNAP_RADIUS_PX
+            )
+            if snapped_center is not None:
+                u, v = float(snapped_center[0]), float(snapped_center[1])
+                circle_snap_active = True
+                circle_snap_dist = snap_dist
+                print(f"[CircleLabel] snapped left click to circle center ({u:.1f}, {v:.1f}), dist={snap_dist:.1f}px")
+        last_click = (u, v)
         print("\n" + "=" * 80)
         print(f"🖱️ [新點選量測] 左圖點選座標: ({float(u):.1f}, {float(v):.1f})")
         print("=" * 80)
@@ -2664,6 +3080,8 @@ def main():
         clear_flow_lines()
         
         snap_vs = dict(view_state)
+        snap_vs['circle_label_match_active'] = circle_snap_active
+        snap_vs['circle_label_snap_dist'] = circle_snap_dist
         left_img_gray = cv2.cvtColor(locked_L, cv2.COLOR_BGR2GRAY)
         left_img_gray = preprocess_gray(left_img_gray, snap_vs['enable_clahe'])
         click_timer.stage("左圖灰階+CLAHE前處理")
@@ -2811,6 +3229,8 @@ def main():
         scatter_grad_match.set_offsets(np.empty((0,2)))
         scatter_mid_grad_inject.set_offsets(np.empty((0,2)))
         scatter_mid_grad_match.set_offsets(np.empty((0,2)))
+        scatter_circle_A.set_offsets(circle_centers_L if len(circle_centers_L) else _empty_points())
+        scatter_circle_B.set_offsets(current_cand.get('circle_centers', _empty_points()))
         
         if res.get('g_refA') is not None and res.get('g_refB') is not None:
             refA_groups = res.get('g_refA_groups')
@@ -3177,6 +3597,9 @@ def main():
     ax_btn_aruco_overlay = fig.add_axes([0.78, 0.74, 0.08, 0.04])
     btn_aruco_overlay = Button(ax_btn_aruco_overlay, "ArUco標記: Off", **btn_style)
 
+    ax_btn_contour_debug = fig.add_axes([0.88, 0.74, 0.08, 0.04])
+    btn_contour_debug = Button(ax_btn_contour_debug, "Show Contours", **btn_style)
+
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
@@ -3200,7 +3623,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -3215,13 +3638,14 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
     btn_return_menu.ax.patch.set_edgecolor('#28A745')
         
     btn_grad_toggle.label.set_fontsize(7) # 特長文字微調
+    btn_contour_debug.label.set_fontsize(7)
     
     def on_grad_toggle(event):
         view_state['show_grad_lines'] = not view_state['show_grad_lines']
@@ -3315,6 +3739,40 @@ def main():
         diff_fig.show()
         valid_mean = float(np.mean(diff[valid > 0])) if np.any(valid > 0) else 0.0
         print(f"📊 [RT Diff] 已產生相減圖 | d_plane={d_plane:.3f} | valid diff mean={valid_mean:.2f}")
+
+    def on_show_contours(event):
+        left_debug = collect_circle_label_contours(locked_L_clean)
+        right_bgr = locked_R_clean
+        right_debug = collect_circle_label_contours(right_bgr)
+
+        left_overlay = draw_circle_label_contour_debug_overlay(locked_L_clean, left_debug)
+        right_overlay = draw_circle_label_contour_debug_overlay(right_bgr, right_debug)
+
+        dbg_fig, dbg_axes = plt.subplots(2, 2, figsize=(13, 8), facecolor='#1E1E1E')
+        try:
+            dbg_fig.canvas.manager.set_window_title("Circle Label Contour Debug")
+        except Exception:
+            pass
+
+        panels = [
+            (dbg_axes[0, 0], left_debug['mask'], "Left binary mask", 'gray'),
+            (dbg_axes[0, 1], left_overlay, f"Left contours: {len(left_debug['centers'])} accepted", None),
+            (dbg_axes[1, 0], right_debug['mask'], "Right binary mask", 'gray'),
+            (dbg_axes[1, 1], right_overlay, f"Right contours: {len(right_debug['centers'])} accepted", None),
+        ]
+        for ax_dbg, img_dbg, title, cmap in panels:
+            ax_dbg.set_facecolor('#1E1E1E')
+            if img_dbg is not None:
+                ax_dbg.imshow(img_dbg, cmap=cmap)
+            ax_dbg.set_title(title, color='white')
+            ax_dbg.axis('off')
+
+        dbg_fig.tight_layout()
+        dbg_fig.show()
+        print(
+            f"[CircleLabel Debug] left accepted={len(left_debug['centers'])}/{len(left_debug['contours'])}, "
+            f"right accepted={len(right_debug['centers'])}/{len(right_debug['contours'])}"
+        )
         
     def on_return_menu(event):
         view_state['restart'] = True
@@ -3488,6 +3946,7 @@ def main():
     btn_norm_toggle.on_clicked(on_norm_toggle)
     btn_custom_plane.on_clicked(on_custom_plane)
     btn_rt_diff.on_clicked(on_rt_diff)
+    btn_contour_debug.on_clicked(on_show_contours)
     btn_return_menu.on_clicked(on_return_menu)
     # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單與自訂傷口平面不受影響）----
     panel_defs = [
@@ -3625,6 +4084,7 @@ def main():
         ax_A.draw_artist(scatter_mid_grad_ref_A)
         ax_A.draw_artist(scatter_grad_inject)
         ax_A.draw_artist(scatter_mid_grad_inject)
+        ax_A.draw_artist(scatter_circle_A)
         for a in custom_plane_artists:
             ax_A.draw_artist(a)
         
@@ -3636,6 +4096,7 @@ def main():
             ax_B.draw_artist(scatter_mid_grad_ref_B)
             ax_B.draw_artist(scatter_grad_match)
             ax_B.draw_artist(scatter_mid_grad_match)
+            ax_B.draw_artist(scatter_circle_B)
             ax_B.draw_artist(epi_line)
             ax_B.draw_artist(sift_rect)
             ax_B.draw_artist(sift_rect_center)
