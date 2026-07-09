@@ -76,6 +76,8 @@ LOOP_CLOSURE_FAIL_THRESHOLD = 5.0                  # 閉環失敗退回雙目門
 
 MAX_EXTRA_PAIRS       = 5                          # 除了最優對之外，最多再存 N 組次優配對
 MAX_REPROJ_ERR_THRES  = 0.5                        # 次優配對的重投影誤差上限門檻 M (px)
+FUSE_DEPTH_TOL_REL    = 0.03                       # 融合一致性閘門: 候選與最優對深度相對差容許
+FUSE_DEPTH_TOL_ABS_MM = 5.0                        # 融合一致性閘門: 絕對差容許 (取兩者較大)
 
 CAMERA_WIDTH          = 1920                       # 相機解析度寬
 CAMERA_HEIGHT         = 1080                       # 相機解析度高
@@ -428,26 +430,48 @@ def multi_view_triangulation(P_matrices, points_2d):
         return None
     return (X[:3] / X[3])
 
-def fuse_candidate_results(res_list):
+def fuse_candidate_results(res_list, best_idx=None):
     """
     多候選影格量測結果融合：
-    1. 深度中位數 + MAD 剔除離群 (|z - med| > 3 * 1.4826 * MAD)
-    2. 依 (baseline / z^2)^2 加權平均 (三角測距深度不確定度 ∝ z^2 / (f * baseline))
-    res_list 每個元素需含 'p3d'，可含 'baseline'、'p3d_w'。
+    1. 候選一致性閘門：與最優對 (best_idx) 深度差超過容許值
+       max(FUSE_DEPTH_TOL_ABS_MM, FUSE_DEPTH_TOL_REL * z_best) 的候選不參與融合
+       (兩個候選時 MAD 無法運作，靠此閘門擋掉與最優對不一致的壞樣本)
+    2. 深度中位數 + MAD 剔除離群 (|z - med| > 3 * 1.4826 * MAD, n>=3)
+    3. 依 (baseline / z^2)^2 加權平均 (三角測距深度不確定度 ∝ z^2 / (f * baseline))
+    res_list 每個元素需含 'p3d'，可含 'baseline'、'p3d_w'、'cand_idx'。
     """
     if not res_list:
         return None
-    zs = np.array([float(r['p3d'][2]) for r in res_list], dtype=np.float64)
-    keep = np.ones(len(res_list), dtype=bool)
-    if len(res_list) >= 3:
+    dropped = []
+    pool = list(res_list)
+    if best_idx is not None:
+        ref = next((r for r in pool if r.get('cand_idx') == best_idx), None)
+        if ref is not None:
+            z_ref = float(ref['p3d'][2])
+            tol = max(FUSE_DEPTH_TOL_ABS_MM, FUSE_DEPTH_TOL_REL * abs(z_ref))
+            gated = []
+            for r in pool:
+                dz = abs(float(r['p3d'][2]) - z_ref)
+                if dz <= tol:
+                    gated.append(r)
+                else:
+                    r['drop_reason'] = f"深度偏離最優對 {dz:.1f}mm (>容許 {tol:.1f}mm)"
+                    dropped.append(r)
+            pool = gated
+    zs = np.array([float(r['p3d'][2]) for r in pool], dtype=np.float64)
+    keep = np.ones(len(pool), dtype=bool)
+    if len(pool) >= 3:
         med = float(np.median(zs))
         mad = float(np.median(np.abs(zs - med)))
         if mad > 1e-6:
             keep = np.abs(zs - med) <= 3.0 * 1.4826 * mad
             if not np.any(keep):
                 keep[:] = True
-    kept = [r for r, k in zip(res_list, keep) if k]
-    dropped = [r for r, k in zip(res_list, keep) if not k]
+    kept = [r for r, k in zip(pool, keep) if k]
+    for r, k in zip(pool, keep):
+        if not k:
+            r['drop_reason'] = 'MAD 離群剔除'
+            dropped.append(r)
 
     def _weights(items):
         ws = []
@@ -469,6 +493,7 @@ def fuse_candidate_results(res_list):
         p3d_w = np.sum(np.array([r['p3d_w'] for r in kept_w], dtype=np.float64) * ws_w[:, None], axis=0)
     return {'p3d': p3d, 'd': float(np.linalg.norm(p3d)), 'p3d_w': p3d_w,
             'kept': kept, 'dropped': dropped, 'weights': ws}
+
 
 def fit_plane_to_points(pts, ransac_thresh_mm=1.5, ransac_iters=200):
     """
@@ -1048,6 +1073,7 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
     m_pt = res['pt']
     m_pt_raw = res.get('pt_raw')
     p3d = res['p3d']
+    p3d_best = res.get('p3d_best') if res.get('p3d_best') is not None else p3d
     p3d_w = res.get('p3d_w')
     d_val = res['d']
     method = res['method']
@@ -1062,8 +1088,8 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
     
     # 距標記平面深度 (signed：Above 表示在平面靠相機側)
     p_dist_str = "None"
-    if p3d is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None:
-        p_dist = np.dot(cand['plane_n'], p3d - cand['plane_c'])
+    if p3d_best is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None:
+        p_dist = np.dot(cand['plane_n'], p3d_best - cand['plane_c'])
         p_dist_str = f"{'Above' if p_dist > 0 else 'Below'} {abs(p_dist):.2f} mm"
         
     # 距自訂平面深度
@@ -1702,57 +1728,59 @@ def main():
     draw_aruco(ax_A, current_cand['cornersA'])
     draw_aruco(ax_B, current_cand['cornersB'])
 
-    def draw_reprojected_aruco(ax_target, corners_src, R_rel, t_rel, is_left_to_right=True):
-        if not hasattr(ax_target, 'reproj_art'): ax_target.reproj_art = []
-        for a in ax_target.reproj_art: a.remove()
-        ax_target.reproj_art = []
-        if not corners_src: return
-        
-        half = ACTUAL_MARKER_SIZE_MM / 2.0
-        canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
-        
-        if is_left_to_right:
-            rvec_rel, _ = cv2.Rodrigues(R_rel)
-            t_vec_rel = t_rel.reshape(3, 1)
-            color = '#FF00FF' # 洋紅色虛線代表左圖投影至右圖
-        else:
-            R_rel_back = R_rel.T
-            t_vec_rel = -R_rel.T @ t_rel.reshape(3, 1)
-            rvec_rel, _ = cv2.Rodrigues(R_rel_back)
-            color = '#FF8800' # 橘色虛線代表右圖投影至左圖
-            
-        label_prefix = "Reproj_L2R" if is_left_to_right else "Reproj_R2L"
-        for mid, pts in corners_src.items():
-            ok, rvec, tvec = cv2.solvePnP(canon, pts, KL, np.zeros(5), flags=cv2.SOLVEPNP_IPPE_SQUARE)
-            if not ok: continue
-            R_src, _ = cv2.Rodrigues(rvec)
-            P_src = (R_src @ canon.T).T + tvec.T # (4, 3) 3D點在 source 坐標系下
-            
-            pts_reproj, _ = cv2.projectPoints(P_src, rvec_rel, t_vec_rel, KL, np.zeros(5))
-            pts_reproj = pts_reproj.reshape(4, 2)
-            
-            # 計算與 target 視角真實偵測角點的誤差
-            err_str = "N/A"
-            if is_left_to_right:
-                if mid in current_cand['cornersB']:
-                    err = np.linalg.norm(pts_reproj - current_cand['cornersB'][mid], axis=1)
-                    err_str = f"{np.mean(err):.2f} px"
-            else:
-                if mid in current_cand['cornersA']:
-                    err = np.linalg.norm(pts_reproj - current_cand['cornersA'][mid], axis=1)
-                    err_str = f"{np.mean(err):.2f} px"
-            log_and_print(f"📊 [{label_prefix}] 標籤 ID: {mid} | 與真實檢測角點的平均重投影誤差: {err_str}")
-            
-            p = np.vstack((pts_reproj, pts_reproj[0]))
-            l, = ax_target.plot(p[:,0], p[:,1], color=color, linestyle='--', lw=1.5, alpha=0.8, zorder=3)
-            ax_target.reproj_art.append(l)
-            
-            for i in range(4):
-                pt, = ax_target.plot(pts_reproj[i,0], pts_reproj[i,1], color=color, marker='+', markersize=5, zorder=3)
-                ax_target.reproj_art.append(pt)
+    def draw_rt_consistency_overlay(cornersA_d, cornersB_d, R_rel, t_rel):
+        """
+        RT 一致性圖層：以量測用的最終 RT 三角化左右圖共享標籤角點，再重投影回兩視角繪製。
+        取代舊的「單標籤 PnP → RT 轉換」畫法——單標籤 PnP 有 IPPE 分支歧義，
+        畫出的偏移混入 PnP 自身誤差，無法判讀 RT 好壞。
+        另印出三角化邊長 vs 已知邊長的尺度檢查 (極線殘差看不到沿極線的尺度滑動)。
+        """
+        for ax_t in (ax_A, ax_B):
+            if not hasattr(ax_t, 'reproj_art'):
+                ax_t.reproj_art = []
+            for a in ax_t.reproj_art:
+                try: a.remove()
+                except: pass
+            ax_t.reproj_art = []
+        shared = set(cornersA_d.keys()) & set(cornersB_d.keys())
+        if not shared:
+            return
+        K64 = KL.astype(np.float64)
+        P0 = (K64 @ np.hstack([np.eye(3), np.zeros((3, 1))])).astype(np.float32)
+        P1 = (K64 @ np.hstack([np.asarray(R_rel, np.float64),
+                               np.asarray(t_rel, np.float64).reshape(3, 1)])).astype(np.float32)
+        rvec_rel, _ = cv2.Rodrigues(np.asarray(R_rel, np.float64))
+        for mid in sorted(shared):
+            ptsA = np.asarray(cornersA_d[mid], dtype=np.float32)
+            ptsB = np.asarray(cornersB_d[mid], dtype=np.float32)
+            pts4d = cv2.triangulatePoints(P0, P1, ptsA.T, ptsB.T)
+            w = pts4d[3]
+            if np.any(np.abs(w) < 1e-12):
+                continue
+            X = (pts4d[:3] / w).T
+            projA, _ = cv2.projectPoints(X.astype(np.float32), np.zeros(3), np.zeros(3), KL, np.zeros(5))
+            projB, _ = cv2.projectPoints(X.astype(np.float32), rvec_rel,
+                                         np.asarray(t_rel, np.float64).reshape(3, 1), KL, np.zeros(5))
+            projA = projA.reshape(4, 2)
+            projB = projB.reshape(4, 2)
+            errA = float(np.mean(np.linalg.norm(projA - ptsA, axis=1)))
+            errB = float(np.mean(np.linalg.norm(projB - ptsB, axis=1)))
+            edges = [float(np.linalg.norm(X[(i + 1) % 4] - X[i])) for i in range(4)]
+            edge_mean = float(np.mean(edges))
+            scale_err = (edge_mean / ACTUAL_MARKER_SIZE_MM - 1.0) * 100.0
+            log_and_print(
+                f"📊 [RT一致性] 標籤 {mid} | 三角化重投影 左 {errA:.2f}px / 右 {errB:.2f}px (量極線幾何) | "
+                f"三角化邊長 {edge_mean:.2f}mm vs 已知 {ACTUAL_MARKER_SIZE_MM}mm (尺度偏差 {scale_err:+.1f}%)"
+            )
+            for ax_t, proj in ((ax_A, projA), (ax_B, projB)):
+                p = np.vstack((proj, proj[0]))
+                l, = ax_t.plot(p[:, 0], p[:, 1], color='#FF00FF', linestyle='--', lw=1.5, alpha=0.8, zorder=3)
+                ax_t.reproj_art.append(l)
+                for i in range(4):
+                    pt, = ax_t.plot(proj[i, 0], proj[i, 1], color='#FF00FF', marker='+', markersize=6, zorder=3)
+                    ax_t.reproj_art.append(pt)
 
-    draw_reprojected_aruco(ax_B, current_cand['cornersA'], R_r, t_r, is_left_to_right=True)
-    draw_reprojected_aruco(ax_A, current_cand['cornersB'], R_r, t_r, is_left_to_right=False)
+    draw_rt_consistency_overlay(current_cand['cornersA'], current_cand['cornersB'], R_r, t_r)
 
     # 初始化 TXT 檔案，寫入影片分析與 Baseline 組合日誌
     init_txt_path = os.path.splitext(VIDEO_PATH)[0] + ".txt"
@@ -2562,7 +2590,7 @@ def main():
                     valid_results.append(res_c)
 
             if valid_results:
-                fused = fuse_candidate_results(valid_results)
+                fused = fuse_candidate_results(valid_results, best_idx=current_cand['idx'])
                 best_res = dict(current_res) if current_res is not None else dict(valid_results[0])
                 best_res['p3d'] = fused['p3d']
                 best_res['multi_res'] = valid_results
@@ -2696,8 +2724,9 @@ def main():
             current_res['cand_idx'] = current_cand['idx']
 
         res = dict(current_res)
+        res['p3d_best'] = res.get('p3d')  # 最優對自身的 3D 點 (與參考平面同一幾何鏈)
         if res_list:
-            fused = fuse_candidate_results(res_list)
+            fused = fuse_candidate_results(res_list, best_idx=current_cand['idx'])
             avg_p3d = fused['p3d']
             avg_d = fused['d']
             avg_depth = avg_p3d[2]
@@ -2725,7 +2754,7 @@ def main():
                 is_best = " (最優)" if r['cand_idx'] == current_cand['idx'] else ""
                 print(f"  - 右圖 F{r['cand_idx']}{is_best}: 深度 = {r['d']:.2f} mm, 權重 = {w:.2f}, 3D = [{r['p3d'][0]:.2f}, {r['p3d'][1]:.2f}, {r['p3d'][2]:.2f}]")
             for r in fused['dropped']:
-                print(f"  - 右圖 F{r['cand_idx']}: 深度 = {r['d']:.2f} mm (MAD 離群剔除)")
+                print(f"  - 右圖 F{r['cand_idx']}: 深度 = {r['d']:.2f} mm ({r.get('drop_reason', '離群剔除')})")
             print(f"  ➡️ 加權融合結果 (採用 {len(kept)}/{len(res_list)} 組): 深度 = {avg_d:.2f} mm, 3D = [{avg_p3d[0]:.2f}, {avg_p3d[1]:.2f}, {avg_p3d[2]:.2f}]")
         click_timer.stage("多影格融合")
         
@@ -2942,7 +2971,9 @@ def main():
                     plane_dist_history.clear()
                     p_dist_str = f"\nWound Height (Custom Plane): {p_dist:.1f}mm"
             elif res['p3d'] is not None and current_cand['plane_n'] is not None:
-                p_dist = (np.dot(current_cand['plane_n'], res['p3d'] - current_cand['plane_c']))
+                # 與平面同鏈: 高度用最優對的 p3d (平面即由最優對 RT 三角化)，誤差相消才成立
+                _p3d_plane = res['p3d_best'] if res.get('p3d_best') is not None else res['p3d']
+                p_dist = (np.dot(current_cand['plane_n'], _p3d_plane - current_cand['plane_c']))
                 if auto_calc_active:
                     plane_dist_history.append(p_dist)
                     p_dist_str = f"\nWound Height: {np.mean(plane_dist_history):.1f}mm"
