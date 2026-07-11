@@ -83,10 +83,10 @@ CAMERA_WIDTH          = 1920                       # 相機解析度寬
 CAMERA_HEIGHT         = 1080                       # 相機解析度高
 
 PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
-ACTUAL_MARKER_SIZE_MM =  10#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
+ACTUAL_MARKER_SIZE_MM =  10.0#33#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
-MIN_BASELINE_MM       = 40#8.0                        # 最小基準線限制 (mm)
+MIN_BASELINE_MM       = 40.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
 ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
