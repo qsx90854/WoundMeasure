@@ -31,6 +31,23 @@ FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值
 FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
 FEATURE_MARKER_EPI_MARGIN_PX = 0.3  # 採用混合解時，標籤角點極線殘差允許的最大退步量 (px)
 FEATURE_MAX_KEYPOINTS = 2000        # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
+FEATURE_MARKER_MASK_MARGIN_PX = 8.0 # Do not let marker texture dominate the independent feature check
+FEATURE_GRID_COLS = 6
+FEATURE_GRID_ROWS = 4
+FEATURE_MAX_MATCHES_PER_CELL = 24
+FEATURE_MIN_INLIER_RATIO = 0.30
+FEATURE_MIN_GRID_COVERAGE = 0.17
+FEATURE_MIN_HULL_COVERAGE = 0.02
+FEATURE_MIN_PARALLAX_DEG = 0.05
+FEATURE_STRONG_INLIERS = 40
+FEATURE_STRONG_INLIER_RATIO = 0.35
+FEATURE_STRONG_GRID_COVERAGE = 0.25
+FEATURE_STRONG_HULL_COVERAGE = 0.04
+FEATURE_STRONG_PARALLAX_DEG = 0.10
+FEATURE_ROT_DIFF_HARD_MAX_DEG = 25.0
+FEATURE_MARKER_EPI_HARD_MAX_PX = 3.0
+FEATURE_SCALE_MAX_EDGE_CV = 0.30
+FEATURE_SCALE_MAX_MARKER_REL_MAD = 0.25
 
 
 
@@ -254,8 +271,42 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     def get_frame_features(idx):
         if idx not in feat_cache:
             gray = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2GRAY)
-            feat_cache[idx] = sift_feat.detectAndCompute(gray, None)
+            if idx not in detected_cache:
+                detected_cache[idx] = detect_frame_markers(frames[idx])
+            feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
+            for pts in detected_cache[idx].values():
+                quad = np.asarray(pts, dtype=np.float32).reshape(4, 2)
+                center = quad.mean(axis=0)
+                radius = max(float(np.mean(np.linalg.norm(quad - center, axis=1))), 1.0)
+                expanded = center + (quad - center) * (1.0 + FEATURE_MARKER_MASK_MARGIN_PX / radius)
+                cv2.fillConvexPoly(feature_mask, np.round(expanded).astype(np.int32), 0)
+            feat_cache[idx] = sift_feat.detectAndCompute(gray, feature_mask)
         return feat_cache[idx]
+
+    def feature_cell(pt):
+        h, w = frames[0].shape[:2]
+        x = min(FEATURE_GRID_COLS - 1, max(0, int(float(pt[0]) * FEATURE_GRID_COLS / max(w, 1))))
+        y = min(FEATURE_GRID_ROWS - 1, max(0, int(float(pt[1]) * FEATURE_GRID_ROWS / max(h, 1))))
+        return x, y
+
+    def spatially_balance_matches(matches, kp_left, kp_right, max_matches=500):
+        """Keep strong matches while preventing one textured patch from owning the pose."""
+        counts_left = {}
+        counts_right = {}
+        selected = []
+        for match in sorted(matches, key=lambda m: m.distance):
+            cell_left = feature_cell(kp_left[match.queryIdx].pt)
+            cell_right = feature_cell(kp_right[match.trainIdx].pt)
+            if counts_left.get(cell_left, 0) >= FEATURE_MAX_MATCHES_PER_CELL:
+                continue
+            if counts_right.get(cell_right, 0) >= FEATURE_MAX_MATCHES_PER_CELL:
+                continue
+            selected.append(match)
+            counts_left[cell_left] = counts_left.get(cell_left, 0) + 1
+            counts_right[cell_right] = counts_right.get(cell_right, 0) + 1
+            if len(selected) >= max_matches:
+                break
+        return selected
 
     match_cache = {}
 
@@ -280,8 +331,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 if m.distance < FEATURE_MATCH_RATIO * n.distance and reverse_best.get(m.trainIdx) == m.queryIdx:
                     good.append(m)
             if len(good) >= 8:
-                good.sort(key=lambda m: m.distance)
-                good = good[:500]
+                good = spatially_balance_matches(good, kpL, kpR)
                 ptsL = np.float32([kpL[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
                 ptsR = np.float32([kpR[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
                 ptsL_u = cv2.undistortPoints(ptsL, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
@@ -319,6 +369,141 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         Rd = np.asarray(Ra, np.float64) @ np.asarray(Rb, np.float64).T
         return float(np.degrees(np.arccos(np.clip((np.trace(Rd) - 1.0) / 2.0, -1.0, 1.0))))
 
+    def feature_spatial_support(pts_left, pts_right):
+        h, w = frames[0].shape[:2]
+        image_area = float(max(h * w, 1))
+        grid_total = float(FEATURE_GRID_COLS * FEATURE_GRID_ROWS)
+        hull_ratios = []
+        grid_ratios = []
+        for pts in (pts_left, pts_right):
+            pts32 = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+            if len(pts32) >= 3:
+                hull_ratios.append(float(cv2.contourArea(cv2.convexHull(pts32))) / image_area)
+            else:
+                hull_ratios.append(0.0)
+            occupied = {feature_cell(pt) for pt in pts32}
+            grid_ratios.append(len(occupied) / grid_total)
+        return float(min(hull_ratios)), float(min(grid_ratios))
+
+    def median_feature_parallax_deg(pts_left, pts_right, R_left_to_right):
+        if len(pts_left) == 0:
+            return 0.0
+        K_inv = np.linalg.inv(K_L.astype(np.float64))
+        left_h = np.hstack([pts_left, np.ones((len(pts_left), 1))])
+        right_h = np.hstack([pts_right, np.ones((len(pts_right), 1))])
+        rays_left = (K_inv @ left_h.T).T
+        rays_right = (K_inv @ right_h.T).T
+        rays_left /= np.maximum(np.linalg.norm(rays_left, axis=1, keepdims=True), 1e-12)
+        rays_right /= np.maximum(np.linalg.norm(rays_right, axis=1, keepdims=True), 1e-12)
+        rays_left_rotated = (np.asarray(R_left_to_right, np.float64) @ rays_left.T).T
+        rays_left_rotated /= np.maximum(np.linalg.norm(rays_left_rotated, axis=1, keepdims=True), 1e-12)
+        dots = np.sum(rays_left_rotated * rays_right, axis=1)
+        return float(np.degrees(np.median(np.arccos(np.clip(dots, -1.0, 1.0)))))
+
+    feature_geometry_cache = {}
+
+    def estimate_feature_geometry(idx_left, idx_right):
+        """Estimate and grade an Essential-matrix pose from marker-independent image features."""
+        key = (idx_left, idx_right)
+        if key in feature_geometry_cache:
+            return feature_geometry_cache[key]
+        matches_lr = get_pair_matches(idx_left, idx_right)
+        if matches_lr is None or len(matches_lr[0]) < FEATURE_MIN_MATCHES:
+            feature_geometry_cache[key] = None
+            return None
+        pts_left, pts_right = matches_lr
+        K64 = K_L.astype(np.float64)
+        E, mask_e = cv2.findEssentialMat(
+            pts_left, pts_right, K64, method=cv2.RANSAC,
+            prob=0.999, threshold=FEATURE_E_RANSAC_THRESH_PX)
+        if E is None or E.ndim != 2 or E.shape[1] != 3 or E.shape[0] % 3 != 0:
+            feature_geometry_cache[key] = None
+            return None
+        essential_candidates = [E[i:i + 3] for i in range(0, E.shape[0], 3)]
+        if mask_e is None:
+            mask_e = np.ones((len(pts_left), 1), dtype=np.uint8)
+        best = None
+        for E_cand in essential_candidates:
+            try:
+                n_in, R_E, t_E, mask_pose = cv2.recoverPose(
+                    E_cand, pts_left, pts_right, K64, mask=mask_e.copy())
+            except cv2.error:
+                continue
+            inlier_mask = np.asarray(mask_pose).reshape(-1) != 0
+            if len(inlier_mask) != len(pts_left):
+                continue
+            actual_inliers = int(np.count_nonzero(inlier_mask))
+            if actual_inliers == 0:
+                continue
+            candidate = (actual_inliers, int(n_in), R_E, t_E, inlier_mask)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+        if best is None:
+            feature_geometry_cache[key] = None
+            return None
+
+        n_in, _reported_in, R_E, t_E, inlier_mask = best
+        in_left = pts_left[inlier_mask]
+        in_right = pts_right[inlier_mask]
+        inlier_ratio = float(n_in) / max(len(pts_left), 1)
+        hull_coverage, grid_coverage = feature_spatial_support(in_left, in_right)
+        parallax_deg = median_feature_parallax_deg(in_left, in_right, R_E)
+        model_epi = rt_epipolar_residual(in_left, in_right, R_E, t_E)
+
+        homography_ratio = 0.0
+        if len(pts_left) >= 4:
+            try:
+                _H, mask_h = cv2.findHomography(pts_left, pts_right, cv2.RANSAC, 2.0)
+                if mask_h is not None:
+                    homography_ratio = float(np.count_nonzero(mask_h)) / max(len(pts_left), 1)
+            except cv2.error:
+                pass
+        planar_degenerate = (
+            homography_ratio >= max(0.70, 0.90 * inlier_ratio)
+            and parallax_deg < FEATURE_STRONG_PARALLAX_DEG)
+
+        quality_ok = (
+            n_in >= FEATURE_MIN_MATCHES
+            and inlier_ratio >= FEATURE_MIN_INLIER_RATIO
+            and grid_coverage >= FEATURE_MIN_GRID_COVERAGE
+            and hull_coverage >= FEATURE_MIN_HULL_COVERAGE
+            and parallax_deg >= FEATURE_MIN_PARALLAX_DEG
+            and not planar_degenerate)
+        strong = (
+            quality_ok
+            and n_in >= FEATURE_STRONG_INLIERS
+            and inlier_ratio >= FEATURE_STRONG_INLIER_RATIO
+            and grid_coverage >= FEATURE_STRONG_GRID_COVERAGE
+            and hull_coverage >= FEATURE_STRONG_HULL_COVERAGE
+            and parallax_deg >= FEATURE_STRONG_PARALLAX_DEG)
+
+        support_penalty = max(0.0, FEATURE_STRONG_INLIER_RATIO - inlier_ratio) / FEATURE_STRONG_INLIER_RATIO
+        grid_penalty = max(0.0, FEATURE_STRONG_GRID_COVERAGE - grid_coverage) / FEATURE_STRONG_GRID_COVERAGE
+        hull_penalty = max(0.0, FEATURE_STRONG_HULL_COVERAGE - hull_coverage) / FEATURE_STRONG_HULL_COVERAGE
+        parallax_penalty = max(0.0, FEATURE_STRONG_PARALLAX_DEG - parallax_deg) / FEATURE_STRONG_PARALLAX_DEG
+        quality_penalty = (
+            0.35 * support_penalty + 0.25 * grid_penalty + 0.15 * hull_penalty
+            + 0.25 * parallax_penalty + (0.50 if planar_degenerate else 0.0))
+        result = {
+            'R': R_E,
+            't': t_E.reshape(3, 1),
+            'inlier_mask': inlier_mask,
+            'match_count': int(len(pts_left)),
+            'inlier_count': int(n_in),
+            'inlier_ratio': float(inlier_ratio),
+            'hull_coverage': float(hull_coverage),
+            'grid_coverage': float(grid_coverage),
+            'parallax_deg': float(parallax_deg),
+            'homography_ratio': float(homography_ratio),
+            'planar_degenerate': bool(planar_degenerate),
+            'model_epi_px': float(model_epi),
+            'quality_penalty': float(quality_penalty),
+            'quality_ok': bool(quality_ok),
+            'strong': bool(strong),
+        }
+        feature_geometry_cache[key] = result
+        return result
+
     def build_alt_rotations(item_s_c, item_e_c, R_chosen):
         """同一配對其餘 IPPE 分支組合的 R_rel 清單 (排除與已選解相同者)。"""
         alts = []
@@ -330,38 +515,60 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         return alts
 
     def baseline_from_marker_edges(R_rel_c, t_dir, corners_left_u, corners_right_u):
-        """
-        以單位平移方向三角化共享標籤角點，用已知邊長 (marker_size_mm) 反推 baseline。
-        繞開 t_rel = t_s - R_rel @ t_e 的槓桿誤差；失敗回傳 None。
-        """
-        mk = marker_corner_pairs(corners_left_u, corners_right_u)
-        if mk is None:
-            return None
-        ptsL, ptsR = mk
+        """Recover metric baseline from every shared marker and reject inconsistent scale."""
+        shared = sorted(set(corners_left_u.keys()) & set(corners_right_u.keys()))
+        if not shared:
+            return None, None
         t_u = np.asarray(t_dir, dtype=np.float64).reshape(3, 1)
         t_norm = float(np.linalg.norm(t_u))
         if t_norm < 1e-9:
-            return None
+            return None, None
         t_u = t_u / t_norm
         K64 = K_L.astype(np.float64)
         P0 = (K64 @ np.hstack([np.eye(3), np.zeros((3, 1))])).astype(np.float32)
         P1 = (K64 @ np.hstack([np.asarray(R_rel_c, np.float64), t_u])).astype(np.float32)
-        pts4d = cv2.triangulatePoints(P0, P1, ptsL.T.astype(np.float32), ptsR.T.astype(np.float32))
-        w = pts4d[3]
-        if np.any(np.abs(w) < 1e-12):
-            return None
-        X = pts4d[:3] / w
-        if float(np.median(X[2])) <= 0:  # cheirality: 點應在相機前方
-            return None
-        edges = []
-        for m in range(len(ptsL) // 4):
-            quad = X[:, m * 4:(m + 1) * 4]
-            for i in range(4):
-                edges.append(float(np.linalg.norm(quad[:, (i + 1) % 4] - quad[:, i])))
-        L_est = float(np.median(edges))
-        if L_est <= 1e-9:
-            return None
-        return marker_size_mm / L_est
+        marker_scales = []
+        rejected_shape = 0
+        for mid in shared:
+            pts_left = np.asarray(corners_left_u[mid], np.float32).reshape(4, 2)
+            pts_right = np.asarray(corners_right_u[mid], np.float32).reshape(4, 2)
+            pts4d = cv2.triangulatePoints(P0, P1, pts_left.T, pts_right.T)
+            w = pts4d[3]
+            if np.any(np.abs(w) < 1e-12):
+                continue
+            X_left = pts4d[:3] / w
+            X_right = np.asarray(R_rel_c, np.float64) @ X_left + t_u
+            if np.count_nonzero(X_left[2] > 0) < 3 or np.count_nonzero(X_right[2] > 0) < 3:
+                continue
+            edges = np.array([
+                np.linalg.norm(X_left[:, (i + 1) % 4] - X_left[:, i])
+                for i in range(4)
+            ], dtype=np.float64)
+            edge_median = float(np.median(edges))
+            if edge_median <= 1e-9:
+                continue
+            edge_cv = float(np.median(np.abs(edges - edge_median)) / edge_median)
+            if edge_cv > FEATURE_SCALE_MAX_EDGE_CV:
+                rejected_shape += 1
+                continue
+            marker_scales.append((mid, marker_size_mm / edge_median, edge_cv))
+        if not marker_scales:
+            return None, {'marker_count': 0, 'rejected_shape': rejected_shape}
+
+        scales = np.array([item[1] for item in marker_scales], dtype=np.float64)
+        scale_median = float(np.median(scales))
+        rel_mad = float(np.median(np.abs(scales - scale_median)) / max(scale_median, 1e-9))
+        diagnostics = {
+            'marker_count': len(marker_scales),
+            'rejected_shape': rejected_shape,
+            'relative_mad': rel_mad,
+            'per_marker': marker_scales,
+        }
+        if len(marker_scales) >= 2 and rel_mad > FEATURE_SCALE_MAX_MARKER_REL_MAD:
+            diagnostics['inconsistent'] = True
+            return None, diagnostics
+        diagnostics['inconsistent'] = False
+        return scale_median, diagnostics
 
     def plane_from_triangulated_corners(R_rel_c, t_rel_c, corners_left_u, corners_right_u):
         """
@@ -394,71 +601,81 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
     def refine_rt_with_features(idx_left, idx_right, R_aruco, t_aruco, corners_left_u, corners_right_u,
                                 tag="", alt_rotations=None, single_marker=False):
-        """
-        混合 RT 精修：R 與 t 方向改用 SIFT + Essential matrix (5-point RANSAC) 的解，
-        尺度 |t| 保留 ArUco 解。僅在特徵極線殘差改善、且標籤角點極線殘差未明顯變差時採用。
-        """
+        """Fuse marker scale with a spatially validated, marker-independent feature pose."""
         if not ENABLE_FEATURE_RT_REFINE:
             return R_aruco, t_aruco
         matches_lr = get_pair_matches(idx_left, idx_right)
-        if matches_lr is None or len(matches_lr[0]) < FEATURE_MIN_MATCHES:
+        geometry = estimate_feature_geometry(idx_left, idx_right)
+        if matches_lr is None or geometry is None:
             log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，保留 ArUco RT。")
             return R_aruco, t_aruco
         ptsL_u, ptsR_u = matches_lr
-        K64 = K_L.astype(np.float64)
-        E, mask_e = cv2.findEssentialMat(ptsL_u, ptsR_u, K64, method=cv2.RANSAC,
-                                         prob=0.999, threshold=FEATURE_E_RANSAC_THRESH_PX)
-        if E is None or E.shape != (3, 3):
-            log_and_print(f"ℹ️ [RT精修{tag}] Essential matrix 求解失敗，保留 ArUco RT。")
+        if not geometry['quality_ok']:
+            reason = "平面/低視差退化" if geometry['planar_degenerate'] else "內點或空間覆蓋不足"
+            log_and_print(
+                f"⚠️ [RT精修{tag}] 特徵幾何不可靠 ({reason}): "
+                f"inliers={geometry['inlier_count']}/{geometry['match_count']}, "
+                f"grid={geometry['grid_coverage']:.2f}, hull={geometry['hull_coverage']:.3f}, "
+                f"parallax={geometry['parallax_deg']:.3f}°，保留 ArUco RT。")
             return R_aruco, t_aruco
-        n_in, R_E, t_E, _mask_rp = cv2.recoverPose(E, ptsL_u, ptsR_u, K64, mask=mask_e.copy())
-        if n_in < FEATURE_MIN_MATCHES:
-            log_and_print(f"ℹ️ [RT精修{tag}] recoverPose 內點不足 ({n_in})，保留 ArUco RT。")
-            return R_aruco, t_aruco
+        R_E = geometry['R']
+        t_E = geometry['t']
+        n_in = geometry['inlier_count']
 
-        # 健全性檢查：特徵解需與 ArUco 解、或其 IPPE 分支替代解大致一致
         R_a64 = np.asarray(R_aruco, dtype=np.float64)
         t_a64 = np.asarray(t_aruco, dtype=np.float64).flatten()
         ang = rot_angle_deg(R_E, R_a64)
         t_dot = float(np.dot(t_E.flatten(), t_a64 / max(np.linalg.norm(t_a64), 1e-9)))
-        if ang <= FEATURE_ROT_DIFF_MAX_DEG:
-            if t_dot <= 0:
-                log_and_print(f"⚠️ [RT精修{tag}] 特徵解平移方向與 ArUco 解相反 (t·t'={t_dot:.2f})，保留 ArUco RT。")
-                return R_aruco, t_aruco
-        else:
-            matched_alt = None
+        matched_alt = None
+        if ang > FEATURE_ROT_DIFF_MAX_DEG:
             for R_alt in (alt_rotations or []):
                 ang_alt = rot_angle_deg(R_E, R_alt)
                 if ang_alt <= FEATURE_ROT_DIFF_MAX_DEG:
                     matched_alt = ang_alt
                     break
-            if matched_alt is None:
+            feature_override = geometry['strong'] and ang <= FEATURE_ROT_DIFF_HARD_MAX_DEG
+            if matched_alt is None and not feature_override:
                 log_and_print(f"⚠️ [RT精修{tag}] 特徵解與 ArUco 解及所有分支替代解差異過大 (dR={ang:.1f}°)，保留 ArUco RT。")
                 return R_aruco, t_aruco
-            log_and_print(f"🔀 [RT精修{tag}] 特徵解與 ArUco 解差 {ang:.1f}°，但與另一 IPPE 分支一致 (dR={matched_alt:.1f}°)——判定 ArUco 落入錯誤分支，交由仲裁決定")
+            if matched_alt is not None:
+                log_and_print(f"🔀 [RT精修{tag}] 特徵解與另一 IPPE 分支一致 (dR={matched_alt:.1f}°)，交由特徵/標籤共同仲裁。")
+            else:
+                log_and_print(f"🔀 [RT精修{tag}] 全畫面特徵證據強，允許修正與 marker 相差 {ang:.1f}° 的旋轉。")
 
         baseline_val = float(np.linalg.norm(t_a64))
-        if single_marker:
-            bsl_tri = baseline_from_marker_edges(R_E, t_E, corners_left_u, corners_right_u)
-            if bsl_tri is not None and MIN_BASELINE_MM <= bsl_tri <= MAX_BASELINE_MM:
-                log_and_print(f"📏 [RT精修{tag}] 標籤已知邊長定尺度: baseline {baseline_val:.2f} → {bsl_tri:.2f} mm")
-                baseline_val = bsl_tri
-            else:
-                log_and_print(f"⚠️ [RT精修{tag}] 邊長定尺度失敗，baseline 沿用 ArUco 值 {baseline_val:.2f} mm")
+        bsl_tri, scale_info = baseline_from_marker_edges(
+            R_E, t_E, corners_left_u, corners_right_u)
+        if bsl_tri is not None and MIN_BASELINE_MM <= bsl_tri <= MAX_BASELINE_MM:
+            marker_count = scale_info['marker_count'] if scale_info else 0
+            rel_mad = scale_info.get('relative_mad', 0.0) if scale_info else 0.0
+            log_and_print(
+                f"📏 [RT精修{tag}] {marker_count} 個 marker 邊長共同定尺度: "
+                f"baseline {baseline_val:.2f} → {bsl_tri:.2f} mm (scale MAD={rel_mad:.3f})")
+            baseline_val = bsl_tri
+        else:
+            scale_reason = "marker 間尺度不一致" if scale_info and scale_info.get('inconsistent') else "無有效邊長解"
+            log_and_print(f"⚠️ [RT精修{tag}] {scale_reason}，baseline 沿用 ArUco 值 {baseline_val:.2f} mm。")
+        if t_dot <= 0 and bsl_tri is None:
+            log_and_print(f"⚠️ [RT精修{tag}] 特徵平移方向與 marker 相反且無邊長尺度驗證，保留 ArUco RT。")
+            return R_aruco, t_aruco
         t_hybrid = (t_E.flatten() * baseline_val).reshape(3, 1)
 
-        # 仲裁：特徵極線殘差需改善，標籤角點極線殘差不得退步超過容許量
         feat_a = rt_epipolar_residual(ptsL_u, ptsR_u, R_a64, t_a64)
         feat_h = rt_epipolar_residual(ptsL_u, ptsR_u, R_E, t_hybrid)
         mk = marker_corner_pairs(corners_left_u, corners_right_u)
         mk_a = rt_epipolar_residual(mk[0], mk[1], R_a64, t_a64) if mk else None
         mk_h = rt_epipolar_residual(mk[0], mk[1], R_E, t_hybrid) if mk else None
         mk_str = f"{mk_a:.3f}→{mk_h:.3f}" if mk_a is not None else "N/A"
-        marker_ok = (mk_a is None) or (mk_h <= mk_a + FEATURE_MARKER_EPI_MARGIN_PX)
-        if feat_h < feat_a and marker_ok:
+        marker_ok = (
+            mk_a is None
+            or mk_h <= mk_a + FEATURE_MARKER_EPI_MARGIN_PX
+            or (geometry['strong'] and mk_h <= FEATURE_MARKER_EPI_HARD_MAX_PX))
+        feature_ok = feat_h < feat_a or (geometry['strong'] and geometry['model_epi_px'] < PAIR_EPI_OK_PX)
+        if feature_ok and marker_ok:
             log_and_print(
                 f"🚀 [RT精修{tag}] 採用混合解: 特徵極線 {feat_a:.3f}→{feat_h:.3f}px | "
-                f"標籤極線 {mk_str}px | dR={ang:.2f}° | E內點={n_in}/{len(ptsL_u)}"
+                f"標籤極線 {mk_str}px | dR={ang:.2f}° | E內點={n_in}/{len(ptsL_u)} | "
+                f"grid={geometry['grid_coverage']:.2f}, parallax={geometry['parallax_deg']:.3f}°"
             )
             return R_E.astype(np.asarray(R_aruco).dtype), t_hybrid.astype(np.asarray(t_aruco).dtype)
         log_and_print(
@@ -702,41 +919,72 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         for cand_tuple in topk:
             pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics = cand_tuple
             matches_lr = get_pair_matches(item_e['idx'], item_s['idx'])
-            if matches_lr is not None:
+            geometry = estimate_feature_geometry(item_e['idx'], item_s['idx'])
+            if matches_lr is not None and geometry is not None:
                 epi_med = rt_epipolar_residual(matches_lr[0], matches_lr[1], R_rel_c, t_rel_c)
-                combined = pair_score + PAIR_SCORE_EPI_W * min(epi_med, 10.0)
+                rot_agreement = rot_angle_deg(geometry['R'], R_rel_c)
+                combined = (
+                    0.35 * pair_score
+                    + PAIR_SCORE_EPI_W * (
+                        0.35 * min(epi_med, 4.0)
+                        + 0.35 * min(geometry['model_epi_px'], 2.0)
+                        + geometry['quality_penalty']
+                        + 0.15 * min(rot_agreement / FEATURE_ROT_DIFF_MAX_DEG, 2.0)))
                 pair_metrics['feat_epi_px'] = float(epi_med)
+                pair_metrics['feature_model_epi_px'] = geometry['model_epi_px']
+                pair_metrics['feature_quality_ok'] = geometry['quality_ok']
+                pair_metrics['feature_strong'] = geometry['strong']
+                pair_metrics['feature_inliers'] = geometry['inlier_count']
+                pair_metrics['feature_matches'] = geometry['match_count']
+                pair_metrics['feature_inlier_ratio'] = geometry['inlier_ratio']
+                pair_metrics['feature_grid_coverage'] = geometry['grid_coverage']
+                pair_metrics['feature_hull_coverage'] = geometry['hull_coverage']
+                pair_metrics['feature_parallax_deg'] = geometry['parallax_deg']
+                pair_metrics['feature_planar_degenerate'] = geometry['planar_degenerate']
+                pair_metrics['feature_rot_agreement_deg'] = float(rot_agreement)
             else:
-                # 無足夠特徵可驗證時給中性偏保守的懲罰，避免無驗證的配對反而占優
-                combined = pair_score + PAIR_SCORE_EPI_W * 2.0
+                combined = 0.35 * pair_score + PAIR_SCORE_EPI_W * 3.0
                 pair_metrics['feat_epi_px'] = None
+                pair_metrics['feature_model_epi_px'] = None
+                pair_metrics['feature_quality_ok'] = False
+            pair_metrics['combined_score'] = float(combined)
             reranked.append((combined, cand_tuple))
-        reranked.sort(key=lambda x: x[0])
+        reranked.sort(key=lambda x: (not x[1][7].get('feature_quality_ok', False), x[0]))
         for _c, _t in reranked:
             _fe_t = _t[7].get('feat_epi_px')
+            _model_t = _t[7].get('feature_model_epi_px')
             log_and_print(
                 f"   [topK] A=F{_t[2]['idx']} B=F{_t[3]['idx']} branch={_t[7].get('branch')} "
-                f"feat_epi={f'{_fe_t:.3f}px' if _fe_t is not None else 'N/A'} "
+                f"markerRT_epi={f'{_fe_t:.3f}px' if _fe_t is not None else 'N/A'} "
+                f"E_epi={f'{_model_t:.3f}px' if _model_t is not None else 'N/A'} "
+                f"inliers={_t[7].get('feature_inliers', 0)}/{_t[7].get('feature_matches', 0)} "
+                f"grid={_t[7].get('feature_grid_coverage', 0.0):.2f} "
+                f"parallax={_t[7].get('feature_parallax_deg', 0.0):.3f}° "
                 f"score={_t[0]:.3f} combined={_c:.3f}"
             )
         _topk_ids = {id(t) for t in topk}
         pairs = [t for _c, t in reranked] + [t for t in pairs if id(t) not in _topk_ids]
 
         best_cand = pairs[0]
-        best_cand = pairs[0]
         best_score = best_cand[0]
         best_err = best_cand[1]
         best_metrics = best_cand[7]
         feat_epi = best_metrics.get('feat_epi_px')
+        feature_model_epi = best_metrics.get('feature_model_epi_px')
         log_and_print(
             f"🎯 [pair quality] score={best_score:.3f} | reproj={best_err:.3f}px | "
-            f"feat_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
+            f"markerRT_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
+            f"E_epi={f'{feature_model_epi:.3f}px' if feature_model_epi is not None else 'N/A'} | "
             f"baseline={best_metrics['baseline']:.2f}mm | shared={best_metrics['shared_markers']} | "
-            f"sharp={best_metrics['sharpness_min']:.1f} | coverage={best_metrics['coverage']:.3f}"
+            f"feature_grid={best_metrics.get('feature_grid_coverage', 0.0):.2f} | "
+            f"parallax={best_metrics.get('feature_parallax_deg', 0.0):.3f}°"
         )
         
-        fe_str = f"{feat_epi:.3f}" if feat_epi is not None else "N/A"
-        stage_ok = feat_epi is not None and feat_epi < PAIR_EPI_OK_PX
+        fe_str = f"{feature_model_epi:.3f}" if feature_model_epi is not None else "N/A"
+        stage_ok = (
+            best_metrics.get('feature_strong', False)
+            and feature_model_epi is not None
+            and feature_model_epi < PAIR_EPI_OK_PX)
         if stage_ok:
             best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
             best_branch = best_cand[7].get('branch')
@@ -749,13 +997,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         # 若本階段成功，或這已是最大抽樣張數的第二階段，即固定最佳與次佳解
         if stage_success or num_samples == 50:
             if not stage_success:
-                # 降級：從已驗證候選中取特徵極線殘差最小者 (而非分數最小者)
-                _validated = [t for t in pairs if t[7].get('feat_epi_px') is not None]
+                _validated = [t for t in pairs if t[7].get('feature_quality_ok', False)]
                 if _validated:
-                    best_cand = min(_validated, key=lambda t: t[7]['feat_epi_px'])
+                    best_cand = min(_validated, key=lambda t: t[7].get('combined_score', float('inf')))
                 best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
                 best_branch = best_cand[7].get('branch')
-                _fe_fb = best_cand[7].get('feat_epi_px')
+                _fe_fb = best_cand[7].get('feature_model_epi_px')
                 log_and_print(f"⚠️ 達到最大抽樣張數 (50 張) 仍未達特徵極線門檻 {PAIR_EPI_OK_PX} px。"
                               f"降級使用殘差最小候選 (feat_epi {f'{_fe_fb:.3f}' if _fe_fb is not None else 'N/A'} px, "
                               f"reproj {best_cand[1]:.3f} px)——量測品質可能不佳")
@@ -769,13 +1016,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                     continue
                 if item_s['idx'] in _seen_extra_idx:
                     continue
-                fe = pair_metrics.get('feat_epi_px')
-                if fe is None or fe >= PAIR_EPI_EXTRA_PX:
+                fe = pair_metrics.get('feature_model_epi_px')
+                if not pair_metrics.get('feature_quality_ok', False) or fe is None or fe >= PAIR_EPI_EXTRA_PX:
                     continue
                 _seen_extra_idx.add(item_s['idx'])
                 candidates_scores.append((pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics))
 
-            selected_extras = candidates_scores[:5]
             selected_extras = candidates_scores[:5]
             break
             
@@ -783,6 +1029,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     if best_start is None or best_end is None:
         log_and_print("❌ [漸進式匹配] 無法在該影片中計算出任何影像對，分析失敗。")
         return None
+    best_pair_metrics = dict(best_cand[7])
 
     if few_marker_mode and best_branch is not None and 'branches' in best_start:
         _bi_s, _bi_e = best_branch
@@ -796,7 +1043,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     cornersA_undist = undistort_corners_dict(best_start['corners'])
     cornersB_undist = undistort_corners_dict(best_end['corners'])
 
-    # 混合 RT 精修 (最佳對)：R 與 t 方向取特徵解、尺度保留 ArUco，未通過仲裁則維持原值
+    # Feature geometry determines R/t direction; all valid marker edges independently anchor metric scale.
     _best_alts = build_alt_rotations(best_start, best_end, R_rel) if few_marker_mode else None
     R_rel, t_rel = refine_rt_with_features(
         best_end['idx'], best_start['idx'], R_rel, t_rel,
@@ -815,6 +1062,18 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             cornersB_undist, cornersA_e_undist, tag=f"-F{item_s['idx']}",
             alt_rotations=_extra_alts, single_marker=few_marker_mode
         )
+        _extra_matches = get_pair_matches(best_end['idx'], item_s['idx'])
+        if _extra_matches is None:
+            log_and_print(f"⚠️ [次佳配對] F{item_s['idx']} 無法做最終特徵驗證，已排除。")
+            continue
+        _extra_final_epi = rt_epipolar_residual(
+            _extra_matches[0], _extra_matches[1], R_rel_c, t_rel_c)
+        if _extra_final_epi >= PAIR_EPI_EXTRA_PX:
+            log_and_print(
+                f"⚠️ [次佳配對] F{item_s['idx']} 最終 RT 極線殘差 {_extra_final_epi:.3f} px "
+                f">= {PAIR_EPI_EXTRA_PX} px，已排除，不參與深度融合。")
+            continue
+        pair_metrics['final_feature_epi_px'] = float(_extra_final_epi)
         extra_candidates_info.append({
             'idx_A': item_s['idx'],
             'frame_A': frames[item_s['idx']],
@@ -825,10 +1084,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             'pair_metrics': pair_metrics,
             'cornersA': cornersA_e_undist
         })
-        log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {bsl:.2f} mm")
+        log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {np.linalg.norm(t_rel_c):.2f} mm")
 
-    if not selected_extras:
-        log_and_print(f"ℹ️ [次佳配對] 未找到任何符合條件 of 額外次佳配對影格 (門檻 0.5 px, Baseline 介於 {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)。")
+    if not extra_candidates_info:
+        log_and_print(f"ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 {PAIR_EPI_EXTRA_PX} px, Baseline {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)。")
 
     timer.stage("混合RT精修+次佳打包")
     log_and_print(f"✅ 挑選結果：")
@@ -840,16 +1099,25 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     for item in valid_start + valid_end:
         valid_poses[item['idx']] = (item['R'], item['t'])
 
-    best_reproj_err = None
+    marker_reproj_err = None
     if best_start is not None and best_end is not None:
-        best_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
-    if few_marker_mode:
-        _m_final = get_pair_matches(best_end['idx'], best_start['idx'])
-        if _m_final is not None:
-            _fe_final = rt_epipolar_residual(_m_final[0], _m_final[1], R_rel, t_rel)
-            log_and_print(f"ℹ️ [單標籤模式] 姿態指標改用特徵極線殘差 {_fe_final:.3f} px "
-                          f"(自我擬合殘差 {best_reproj_err:.3f} px 無鑑別力)")
-            best_reproj_err = _fe_final
+        marker_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
+    best_reproj_err = marker_reproj_err
+    _m_final = get_pair_matches(best_end['idx'], best_start['idx'])
+    if _m_final is not None:
+        _fe_final = rt_epipolar_residual(_m_final[0], _m_final[1], R_rel, t_rel)
+        log_and_print(
+            f"ℹ️ [RT品質] 最終全畫面特徵極線殘差 {_fe_final:.3f} px "
+            f"(marker PnP 重投影 {marker_reproj_err:.3f} px)" if marker_reproj_err is not None
+            else f"ℹ️ [RT品質] 最終全畫面特徵極線殘差 {_fe_final:.3f} px")
+        best_reproj_err = _fe_final
+        best_pair_metrics['final_feature_epi_px'] = float(_fe_final)
+    best_pair_metrics['marker_reproj_px'] = marker_reproj_err
+    best_pair_metrics['rt_reliable'] = bool(
+        best_reproj_err is not None
+        and np.isfinite(best_reproj_err)
+        and best_reproj_err < PAIR_EPI_EXTRA_PX
+        and best_pair_metrics.get('feature_quality_ok', False))
         
     if progress_callback:
         progress_callback(92, "階段 3/6：影像校正...")
@@ -921,6 +1189,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         'marker_map': marker_map,
         'extra_candidates': extra_candidates_info,
         'min_reproj_err': best_reproj_err,
+        'marker_reproj_err': marker_reproj_err,
+        'rt_quality': best_pair_metrics,
         'global_plane_n': global_plane_n,
         'global_plane_c': global_plane_c,
         'best_kpB': kb,

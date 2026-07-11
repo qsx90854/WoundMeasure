@@ -83,7 +83,7 @@ CAMERA_WIDTH          = 1920                       # 相機解析度寬
 CAMERA_HEIGHT         = 1080                       # 相機解析度高
 
 PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
-ACTUAL_MARKER_SIZE_MM =  10.0#33#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
+ACTUAL_MARKER_SIZE_MM =  10.0#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
 MIN_BASELINE_MM       = 40.0                        # 最小基準線限制 (mm)
@@ -112,7 +112,7 @@ EPIPOLAR_SEARCH_WEAK_FLOOR = 0.05                   # Epi-band search: weak scor
 
 # ----------------- 交互特徵點匹配搜索設定 -----------------
 LEFT_PATCH_SEARCH_RADIUS      = 30#18                         # 左圖點選候選點周圍的搜索半徑 (pixels)
-RIGHT_PATCH_SEARCH_RADIUS     = 40#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
+RIGHT_PATCH_SEARCH_RADIUS     = 90#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
 GRAD_SIFT_MAX_RT_ADJUST_PX    = 40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
 LEFT_GRADIENT_POINTS_COUNT    = 150                        # 左圖周圍取梯度最高的特徵點數量
 RIGHT_GRADIENT_POINTS_COUNT   = 300                       # 右圖周圍取梯度最高的特徵點數量
