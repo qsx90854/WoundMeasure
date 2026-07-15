@@ -2,6 +2,7 @@ import os
 
 import cv2
 import numpy as np
+from scipy.optimize import least_squares
 
 from .aruco_pose import average_rotations_svd, compute_global_plane as _compute_global_plane
 from .camera_preprocess import preprocess_gray
@@ -24,12 +25,11 @@ PAIR_EPI_OK_PX = 0.8                # 配對提前收斂的特徵極線殘差門
 PAIR_EPI_EXTRA_PX = 1.5             # 次佳對接受的特徵極線殘差上限 (px, 全模式)
 PAIR_TOPK_MAX_PER_START = 2         # top-K 多樣性: 同一起始幀最多幀對數
 PAIR_TOPK_MAX_PER_END = 4           # top-K 多樣性: 同一結尾幀最多幀對數
-ENABLE_FEATURE_RT_REFINE = True     # 選定配對後用 SIFT + Essential matrix 精修 R 與 t 方向 (尺度 |t| 保留 ArUco 解)
+ENABLE_FEATURE_RT_REFINE = True     # 用 marker 雙向重投影硬門檻 + SIFT robust residual 聯合精修 RT
 FEATURE_MATCH_RATIO = 0.75          # SIFT ratio test 閾值
 FEATURE_MIN_MATCHES = 25            # 精修所需最少匹配數 / recoverPose 內點數
 FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值 (px)
 FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
-FEATURE_MARKER_EPI_MARGIN_PX = 0.3  # 採用混合解時，標籤角點極線殘差允許的最大退步量 (px)
 FEATURE_MAX_KEYPOINTS = 2000        # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
 FEATURE_MARKER_MASK_MARGIN_PX = 8.0 # Do not let marker texture dominate the independent feature check
 FEATURE_GRID_COLS = 6
@@ -44,10 +44,22 @@ FEATURE_STRONG_INLIER_RATIO = 0.35
 FEATURE_STRONG_GRID_COVERAGE = 0.25
 FEATURE_STRONG_HULL_COVERAGE = 0.04
 FEATURE_STRONG_PARALLAX_DEG = 0.10
-FEATURE_ROT_DIFF_HARD_MAX_DEG = 25.0
-FEATURE_MARKER_EPI_HARD_MAX_PX = 3.0
 FEATURE_SCALE_MAX_EDGE_CV = 0.30
 FEATURE_SCALE_MAX_MARKER_REL_MAD = 0.25
+FEATURE_FINAL_INLIER_PX = 1.5
+FEATURE_FINAL_P90_MAX_PX = 1.25
+FEATURE_JOINT_GROUP_WEIGHT = 1.0
+MARKER_JOINT_GROUP_WEIGHT = 12.0
+JOINT_MARKER_WEIGHT_LEVELS = (12.0, 4.0, 1.0, 0.25)
+MARKER_BIDIR_RMS_MAX_PX = 1.5
+MARKER_BIDIR_MAX_MAX_PX = 2.0
+MARKER_CANDIDATE_RMS_MAX_PX = 3.0
+MARKER_CANDIDATE_MAX_MAX_PX = 6.0
+MARKER_BIDIR_RMS_MARGIN_PX = 0.75
+MARKER_BIDIR_MAX_MARGIN_PX = 1.50
+MARKER_SELECTION_RMS_BAND_PX = 0.05
+FINAL_PAIR_MARKER_RMS_BAND_PX = 0.25
+JOINT_RT_MAX_NFEV = 120
 
 
 
@@ -357,11 +369,15 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         match_cache[key] = result
         return result
 
-    def rt_epipolar_residual(ptsL_u, ptsR_u, R_rel_c, t_rel_c):
-        """給定 左→右 相對位姿，計算點對的中位數對稱極線距離 (px)。"""
+    def rt_epipolar_residuals(ptsL_u, ptsR_u, R_rel_c, t_rel_c):
+        """Return per-match symmetric epipolar distances for a left-to-right pose."""
+        ptsL_u = np.asarray(ptsL_u, dtype=np.float64).reshape(-1, 2)
+        ptsR_u = np.asarray(ptsR_u, dtype=np.float64).reshape(-1, 2)
+        if len(ptsL_u) == 0 or len(ptsL_u) != len(ptsR_u):
+            return np.empty(0, dtype=np.float64)
         t = np.asarray(t_rel_c, dtype=np.float64).flatten()
         if np.linalg.norm(t) < 1e-9:
-            return float('inf')
+            return np.full(len(ptsL_u), float('inf'), dtype=np.float64)
         tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
         K_inv = np.linalg.inv(K_L.astype(np.float64))
         F = K_inv.T @ (tx @ np.asarray(R_rel_c, dtype=np.float64)) @ K_inv
@@ -372,7 +388,31 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         num = np.abs(np.sum(lR * onesR, axis=1))
         dR = num / np.maximum(np.hypot(lR[:, 0], lR[:, 1]), 1e-12)
         dL = num / np.maximum(np.hypot(lL[:, 0], lL[:, 1]), 1e-12)
-        return float(np.median(0.5 * (dR + dL)))
+        return 0.5 * (dR + dL)
+
+    def rt_epipolar_residual(ptsL_u, ptsR_u, R_rel_c, t_rel_c):
+        """給定 左→右 相對位姿，計算點對的中位數對稱極線距離 (px)。"""
+        residuals = rt_epipolar_residuals(ptsL_u, ptsR_u, R_rel_c, t_rel_c)
+        return float(np.median(residuals)) if len(residuals) else float('inf')
+
+    def signed_sampson_residuals(ptsL_u, ptsR_u, R_rel_c, t_rel_c):
+        """Signed first-order geometric residuals in pixels for nonlinear refinement."""
+        ptsL_u = np.asarray(ptsL_u, dtype=np.float64).reshape(-1, 2)
+        ptsR_u = np.asarray(ptsR_u, dtype=np.float64).reshape(-1, 2)
+        t = np.asarray(t_rel_c, dtype=np.float64).reshape(3)
+        if len(ptsL_u) == 0 or len(ptsL_u) != len(ptsR_u) or np.linalg.norm(t) < 1e-9:
+            return np.full(len(ptsL_u), 1e3, dtype=np.float64)
+        tx = np.array([[0, -t[2], t[1]], [t[2], 0, -t[0]], [-t[1], t[0], 0]])
+        K_inv = np.linalg.inv(K_L.astype(np.float64))
+        F = K_inv.T @ (tx @ np.asarray(R_rel_c, dtype=np.float64)) @ K_inv
+        onesL = np.hstack([ptsL_u, np.ones((len(ptsL_u), 1))])
+        onesR = np.hstack([ptsR_u, np.ones((len(ptsR_u), 1))])
+        lR = onesL @ F.T
+        lL = onesR @ F
+        numerator = np.sum(lR * onesR, axis=1)
+        denominator = np.sqrt(
+            0.5 * (lR[:, 0] ** 2 + lR[:, 1] ** 2 + lL[:, 0] ** 2 + lL[:, 1] ** 2))
+        return numerator / np.maximum(denominator, 1e-12)
 
     def marker_corner_pairs(corners_left_dict, corners_right_dict):
         shared = set(corners_left_dict.keys()) & set(corners_right_dict.keys())
@@ -381,6 +421,155 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         pts_l = np.vstack([corners_left_dict[mid] for mid in shared]).astype(np.float64)
         pts_r = np.vstack([corners_right_dict[mid] for mid in shared]).astype(np.float64)
         return pts_l, pts_r
+
+    def marker_object_corners():
+        half_size = marker_size_mm / 2.0
+        return np.array([
+            [-half_size, half_size, 0.0],
+            [half_size, half_size, 0.0],
+            [half_size, -half_size, 0.0],
+            [-half_size, -half_size, 0.0],
+        ], dtype=np.float64)
+
+    def project_undistorted_points(points_camera):
+        points_camera = np.asarray(points_camera, dtype=np.float64).reshape(-1, 3)
+        z = points_camera[:, 2]
+        uvw = (K_L.astype(np.float64) @ points_camera.T).T
+        projected = uvw[:, :2] / np.maximum(np.abs(uvw[:, 2:3]), 1e-9)
+        return projected, z
+
+    marker_pose_branch_cache = {}
+
+    def marker_pose_branches(corners_u):
+        cache_key = np.asarray(corners_u, dtype=np.float32).reshape(4, 2).tobytes()
+        if cache_key in marker_pose_branch_cache:
+            return marker_pose_branch_cache[cache_key]
+        object_points = marker_object_corners().astype(np.float32)
+        image_points = np.asarray(corners_u, dtype=np.float32).reshape(-1, 1, 2)
+        try:
+            _n_sol, rvecs, tvecs, _errs = cv2.solvePnPGeneric(
+                object_points, image_points, K_L.astype(np.float64), None,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE)
+        except cv2.error:
+            return []
+        branches = []
+        for rvec, tvec in zip(rvecs, tvecs):
+            rotation, _ = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64))
+            branches.append((rotation, np.asarray(tvec, dtype=np.float64).reshape(3, 1)))
+        marker_pose_branch_cache[cache_key] = branches
+        return branches
+
+    def prepare_marker_transfer_models(R_rel_c, t_rel_c, corners_left_u, corners_right_u):
+        """Choose source-view IPPE branches and build metric marker points for both directions."""
+        shared = sorted(set(corners_left_u.keys()) & set(corners_right_u.keys()))
+        if not shared:
+            return []
+        object_points = marker_object_corners()
+        R_rel64 = np.asarray(R_rel_c, dtype=np.float64).reshape(3, 3)
+        t_rel64 = np.asarray(t_rel_c, dtype=np.float64).reshape(3, 1)
+        models = []
+        for marker_id in shared:
+            observed_left = np.asarray(corners_left_u[marker_id], dtype=np.float64).reshape(4, 2)
+            observed_right = np.asarray(corners_right_u[marker_id], dtype=np.float64).reshape(4, 2)
+            left_candidates = []
+            for R_marker, t_marker in marker_pose_branches(observed_left):
+                points_left = (R_marker @ object_points.T + t_marker).T
+                self_projection, z_left = project_undistorted_points(points_left)
+                points_right = (R_rel64 @ points_left.T + t_rel64).T
+                transfer_projection, z_right = project_undistorted_points(points_right)
+                score = float(np.mean(np.linalg.norm(self_projection - observed_left, axis=1)))
+                score += float(np.mean(np.linalg.norm(transfer_projection - observed_right, axis=1)))
+                if np.any(z_left <= 0) or np.any(z_right <= 0):
+                    score += 1e3
+                left_candidates.append((score, points_left))
+
+            right_candidates = []
+            for R_marker, t_marker in marker_pose_branches(observed_right):
+                points_right = (R_marker @ object_points.T + t_marker).T
+                self_projection, z_right = project_undistorted_points(points_right)
+                points_left = (R_rel64.T @ (points_right.T - t_rel64)).T
+                transfer_projection, z_left = project_undistorted_points(points_left)
+                score = float(np.mean(np.linalg.norm(self_projection - observed_right, axis=1)))
+                score += float(np.mean(np.linalg.norm(transfer_projection - observed_left, axis=1)))
+                if np.any(z_left <= 0) or np.any(z_right <= 0):
+                    score += 1e3
+                right_candidates.append((score, points_right))
+
+            if not left_candidates or not right_candidates:
+                continue
+            points_left = min(left_candidates, key=lambda item: item[0])[1]
+            points_right = min(right_candidates, key=lambda item: item[0])[1]
+            models.append({
+                'marker_id': int(marker_id),
+                'points_left': points_left,
+                'points_right': points_right,
+                'observed_left': observed_left,
+                'observed_right': observed_right,
+            })
+        return models
+
+    def marker_transfer_residual_vector(R_rel_c, t_rel_c, marker_models):
+        R_rel64 = np.asarray(R_rel_c, dtype=np.float64).reshape(3, 3)
+        t_rel64 = np.asarray(t_rel_c, dtype=np.float64).reshape(3, 1)
+        residuals = []
+        for model in marker_models:
+            predicted_right_3d = (R_rel64 @ model['points_left'].T + t_rel64).T
+            predicted_right, z_right = project_undistorted_points(predicted_right_3d)
+            predicted_left_3d = (R_rel64.T @ (model['points_right'].T - t_rel64)).T
+            predicted_left, z_left = project_undistorted_points(predicted_left_3d)
+            err_right = predicted_right - model['observed_right']
+            err_left = predicted_left - model['observed_left']
+            if np.any(z_right <= 0):
+                err_right[:] = 1e3
+            if np.any(z_left <= 0):
+                err_left[:] = 1e3
+            residuals.extend(err_right.reshape(-1))
+            residuals.extend(err_left.reshape(-1))
+        return np.asarray(residuals, dtype=np.float64)
+
+    def marker_bidirectional_stats(R_rel_c, t_rel_c, corners_left_u, corners_right_u,
+                                   marker_models=None):
+        if marker_models is None:
+            marker_models = prepare_marker_transfer_models(
+                R_rel_c, t_rel_c, corners_left_u, corners_right_u)
+        if not marker_models:
+            return None
+        R_rel64 = np.asarray(R_rel_c, dtype=np.float64).reshape(3, 3)
+        t_rel64 = np.asarray(t_rel_c, dtype=np.float64).reshape(3, 1)
+        forward = []
+        reverse = []
+        per_marker = []
+        for model in marker_models:
+            predicted_right_3d = (R_rel64 @ model['points_left'].T + t_rel64).T
+            predicted_right, z_right = project_undistorted_points(predicted_right_3d)
+            predicted_left_3d = (R_rel64.T @ (model['points_right'].T - t_rel64)).T
+            predicted_left, z_left = project_undistorted_points(predicted_left_3d)
+            err_forward = np.linalg.norm(predicted_right - model['observed_right'], axis=1)
+            err_reverse = np.linalg.norm(predicted_left - model['observed_left'], axis=1)
+            if np.any(z_right <= 0):
+                err_forward[:] = 1e3
+            if np.any(z_left <= 0):
+                err_reverse[:] = 1e3
+            forward.extend(err_forward)
+            reverse.extend(err_reverse)
+            per_marker.append({
+                'marker_id': model['marker_id'],
+                'left_to_right_rms_px': float(np.sqrt(np.mean(err_forward ** 2))),
+                'right_to_left_rms_px': float(np.sqrt(np.mean(err_reverse ** 2))),
+                'max_px': float(max(np.max(err_forward), np.max(err_reverse))),
+            })
+        forward = np.asarray(forward, dtype=np.float64)
+        reverse = np.asarray(reverse, dtype=np.float64)
+        both = np.concatenate([forward, reverse])
+        return {
+            'marker_count': len(marker_models),
+            'left_to_right_rms_px': float(np.sqrt(np.mean(forward ** 2))),
+            'right_to_left_rms_px': float(np.sqrt(np.mean(reverse ** 2))),
+            'rms_px': float(np.sqrt(np.mean(both ** 2))),
+            'median_px': float(np.median(both)),
+            'max_px': float(np.max(both)),
+            'per_marker': per_marker,
+        }
 
     def rot_angle_deg(Ra, Rb):
         Rd = np.asarray(Ra, np.float64) @ np.asarray(Rb, np.float64).T
@@ -622,90 +811,288 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         log_and_print(f"📐 [三角化平面] 角點數 {len(X)} | 平面 RMS 殘差 {resid:.3f} mm")
         return n.astype(np.float64), c.astype(np.float64)
 
+    def feature_pose_stats(pts_left, pts_right, R_rel_c, t_rel_c, seed_inlier_mask=None,
+                           holdout_mask=None):
+        residuals = rt_epipolar_residuals(pts_left, pts_right, R_rel_c, t_rel_c)
+        count = len(residuals)
+        seed_mask = np.ones(count, dtype=bool)
+        if seed_inlier_mask is not None and len(seed_inlier_mask) == count:
+            seed_mask = np.asarray(seed_inlier_mask, dtype=bool).reshape(-1)
+        final_inlier_mask = seed_mask & np.isfinite(residuals) & (residuals <= FEATURE_FINAL_INLIER_PX)
+        inlier_values = residuals[final_inlier_mask]
+        seed_values = residuals[seed_mask & np.isfinite(residuals)]
+        holdout_values = np.empty(0, dtype=np.float64)
+        if holdout_mask is not None and len(holdout_mask) == count:
+            holdout_values = residuals[np.asarray(holdout_mask, dtype=bool) & np.isfinite(residuals)]
+        return {
+            'residuals_px': residuals,
+            'final_inlier_mask': final_inlier_mask,
+            'inlier_count': int(np.count_nonzero(final_inlier_mask)),
+            'outlier_count': int(count - np.count_nonzero(final_inlier_mask)),
+            'inlier_ratio': float(np.count_nonzero(final_inlier_mask)) / max(count, 1),
+            'inlier_median_px': float(np.median(inlier_values)) if len(inlier_values) else float('inf'),
+            'inlier_p90_px': float(np.percentile(inlier_values, 90)) if len(inlier_values) else float('inf'),
+            'seed_median_px': float(np.median(seed_values)) if len(seed_values) else float('inf'),
+            'seed_p90_px': float(np.percentile(seed_values, 90)) if len(seed_values) else float('inf'),
+            'all_median_px': float(np.median(residuals)) if count else float('inf'),
+            'all_p90_px': float(np.percentile(residuals, 90)) if count else float('inf'),
+            'holdout_count': int(len(holdout_values)),
+            'holdout_median_px': float(np.median(holdout_values)) if len(holdout_values) else None,
+            'holdout_p90_px': float(np.percentile(holdout_values, 90)) if len(holdout_values) else None,
+        }
+
+    def optimize_marker_constrained_rt(R_start, t_start, marker_models,
+                                       feature_left=None, feature_right=None,
+                                       marker_group_weight=MARKER_JOINT_GROUP_WEIGHT):
+        if not marker_models:
+            return np.asarray(R_start, dtype=np.float64), np.asarray(t_start, dtype=np.float64).reshape(3, 1)
+        rvec_start, _ = cv2.Rodrigues(np.asarray(R_start, dtype=np.float64).reshape(3, 3))
+        x0 = np.concatenate([rvec_start.reshape(3), np.asarray(t_start, dtype=np.float64).reshape(3)])
+        marker_coordinate_count = max(16 * len(marker_models), 1)
+        marker_scale = np.sqrt(float(marker_group_weight) / marker_coordinate_count)
+        use_features = (
+            feature_left is not None and feature_right is not None
+            and len(feature_left) == len(feature_right) and len(feature_left) >= 5)
+        feature_scale = np.sqrt(FEATURE_JOINT_GROUP_WEIGHT / max(len(feature_left), 1)) if use_features else 0.0
+
+        def residual_function(parameters):
+            rotation, _ = cv2.Rodrigues(parameters[:3].reshape(3, 1))
+            translation = parameters[3:6].reshape(3, 1)
+            marker_residual = marker_transfer_residual_vector(
+                rotation, translation, marker_models) * marker_scale
+            residual_parts = [marker_residual]
+            if use_features:
+                raw_feature = signed_sampson_residuals(
+                    feature_left, feature_right, rotation, translation)
+                scaled_feature = raw_feature / FEATURE_FINAL_INLIER_PX
+                pseudo_huber_cost = 2.0 * FEATURE_FINAL_INLIER_PX ** 2 * (
+                    np.sqrt(1.0 + scaled_feature ** 2) - 1.0)
+                robust_feature = np.sign(raw_feature) * np.sqrt(
+                    np.maximum(pseudo_huber_cost, 0.0))
+                residual_parts.append(robust_feature * feature_scale)
+            baseline = float(np.linalg.norm(translation))
+            residual_parts.append(np.array([
+                max(0.0, MIN_BASELINE_MM - baseline) * 0.1,
+                max(0.0, baseline - MAX_BASELINE_MM) * 0.1,
+            ], dtype=np.float64))
+            return np.concatenate(residual_parts)
+
+        try:
+            result = least_squares(
+                residual_function, x0, method='trf', loss='linear',
+                max_nfev=JOINT_RT_MAX_NFEV, ftol=1e-9, xtol=1e-9, gtol=1e-9)
+            rotation, _ = cv2.Rodrigues(result.x[:3].reshape(3, 1))
+            translation = result.x[3:6].reshape(3, 1)
+            return rotation, translation
+        except (ValueError, np.linalg.LinAlgError) as optimize_error:
+            log_and_print(f"⚠️ [RT聯合最佳化] 求解失敗: {optimize_error}")
+            return np.asarray(R_start, dtype=np.float64), np.asarray(t_start, dtype=np.float64).reshape(3, 1)
+
     def refine_rt_with_features(idx_left, idx_right, R_aruco, t_aruco, corners_left_u, corners_right_u,
                                 tag="", alt_rotations=None, single_marker=False):
-        """Fuse marker scale with a spatially validated feature pose and report adoption."""
-        if not ENABLE_FEATURE_RT_REFINE:
-            return R_aruco, t_aruco, False
+        """Keep marker transfer as a hard constraint and use robust feature inliers to refine RT."""
+        del alt_rotations, single_marker
+        R_a64 = np.asarray(R_aruco, dtype=np.float64).reshape(3, 3)
+        t_a64 = np.asarray(t_aruco, dtype=np.float64).reshape(3, 1)
         matches_lr = get_pair_matches(idx_left, idx_right)
         geometry = estimate_feature_geometry(idx_left, idx_right)
-        if matches_lr is None or geometry is None:
-            log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，保留 ArUco RT。")
-            return R_aruco, t_aruco, False
-        ptsL_u, ptsR_u = matches_lr
-        if not geometry['quality_ok']:
+        marker_models = prepare_marker_transfer_models(
+            R_a64, t_a64, corners_left_u, corners_right_u)
+        empty_metrics = {
+            'marker_bidir_ok': False,
+            'marker_bidir': None,
+            'feature': None,
+            'optimization_mask': None,
+            'holdout_mask': None,
+            'used_feature_count': 0,
+            'solution_role': 'aruco_fallback',
+        }
+        if not marker_models:
+            log_and_print(f"⚠️ [RT精修{tag}] 無法建立 marker 雙向投影模型，保留 ArUco RT。")
+            return R_aruco, t_aruco, False, empty_metrics
+
+        marker_R, marker_t = optimize_marker_constrained_rt(R_a64, t_a64, marker_models)
+        candidate_solutions = [('marker_only', marker_R, marker_t, False)]
+        feature_train_left = None
+        feature_train_right = None
+        optimization_mask = None
+        holdout_mask = None
+
+        if ENABLE_FEATURE_RT_REFINE and matches_lr is not None and geometry is not None and geometry['quality_ok']:
+            ptsL_u, ptsR_u = matches_lr
+            seed_mask = np.asarray(geometry['inlier_mask'], dtype=bool).reshape(-1)
+            if len(seed_mask) == len(ptsL_u):
+                optimization_mask = seed_mask.copy()
+                holdout_mask = np.zeros(len(seed_mask), dtype=bool)
+                seed_indices = np.flatnonzero(seed_mask)
+                if len(seed_indices) >= 35:
+                    holdout_mask[seed_indices[::5]] = True
+                    optimization_mask[holdout_mask] = False
+                feature_train_left = ptsL_u[optimization_mask]
+                feature_train_right = ptsR_u[optimization_mask]
+                for marker_weight in JOINT_MARKER_WEIGHT_LEVELS:
+                    joint_R, joint_t = optimize_marker_constrained_rt(
+                        marker_R, marker_t, marker_models,
+                        feature_train_left, feature_train_right,
+                        marker_group_weight=marker_weight)
+                    candidate_solutions.append((
+                        f'joint_from_marker_w{marker_weight:g}', joint_R, joint_t, True))
+
+                R_E = np.asarray(geometry['R'], dtype=np.float64)
+                t_E = np.asarray(geometry['t'], dtype=np.float64).reshape(3, 1)
+                feature_baseline, scale_info = baseline_from_marker_edges(
+                    R_E, t_E, corners_left_u, corners_right_u)
+                if feature_baseline is not None and MIN_BASELINE_MM <= feature_baseline <= MAX_BASELINE_MM:
+                    t_feature = t_E * feature_baseline
+                    feature_models = prepare_marker_transfer_models(
+                        R_E, t_feature, corners_left_u, corners_right_u)
+                    if feature_models:
+                        feature_marker_R, feature_marker_t = optimize_marker_constrained_rt(
+                            R_E, t_feature, feature_models)
+                        for marker_weight in JOINT_MARKER_WEIGHT_LEVELS:
+                            feature_joint_R, feature_joint_t = optimize_marker_constrained_rt(
+                                feature_marker_R, feature_marker_t, feature_models,
+                                feature_train_left, feature_train_right,
+                                marker_group_weight=marker_weight)
+                            candidate_solutions.append((
+                                f'joint_from_feature_w{marker_weight:g}',
+                                feature_joint_R, feature_joint_t, True))
+        elif matches_lr is None or geometry is None:
+            log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，僅執行 marker 雙向精修。")
+        else:
             reason = "平面/低視差退化" if geometry['planar_degenerate'] else "內點或空間覆蓋不足"
             log_and_print(
-                f"⚠️ [RT精修{tag}] 特徵幾何不可靠 ({reason}): "
-                f"inliers={geometry['inlier_count']}/{geometry['match_count']}, "
-                f"grid={geometry['grid_coverage']:.2f}, hull={geometry['hull_coverage']:.3f}, "
-                f"parallax={geometry['parallax_deg']:.3f}°，保留 ArUco RT。")
-            return R_aruco, t_aruco, False
-        R_E = geometry['R']
-        t_E = geometry['t']
-        n_in = geometry['inlier_count']
+                f"⚠️ [RT精修{tag}] 特徵幾何不可靠 ({reason})，僅執行 marker 雙向精修。")
 
-        R_a64 = np.asarray(R_aruco, dtype=np.float64)
-        t_a64 = np.asarray(t_aruco, dtype=np.float64).flatten()
-        ang = rot_angle_deg(R_E, R_a64)
-        t_dot = float(np.dot(t_E.flatten(), t_a64 / max(np.linalg.norm(t_a64), 1e-9)))
-        matched_alt = None
-        if ang > FEATURE_ROT_DIFF_MAX_DEG:
-            for R_alt in (alt_rotations or []):
-                ang_alt = rot_angle_deg(R_E, R_alt)
-                if ang_alt <= FEATURE_ROT_DIFF_MAX_DEG:
-                    matched_alt = ang_alt
-                    break
-            feature_override = geometry['strong'] and ang <= FEATURE_ROT_DIFF_HARD_MAX_DEG
-            if matched_alt is None and not feature_override:
-                log_and_print(f"⚠️ [RT精修{tag}] 特徵解與 ArUco 解及所有分支替代解差異過大 (dR={ang:.1f}°)，保留 ArUco RT。")
-                return R_aruco, t_aruco, False
-            if matched_alt is not None:
-                log_and_print(f"🔀 [RT精修{tag}] 特徵解與另一 IPPE 分支一致 (dR={matched_alt:.1f}°)，交由特徵/標籤共同仲裁。")
-            else:
-                log_and_print(f"🔀 [RT精修{tag}] 全畫面特徵證據強，允許修正與 marker 相差 {ang:.1f}° 的旋轉。")
+        evaluated = []
+        seed_mask = None
+        ptsL_u = ptsR_u = None
+        if matches_lr is not None:
+            ptsL_u, ptsR_u = matches_lr
+        if geometry is not None and ptsL_u is not None:
+            mask_value = np.asarray(geometry.get('inlier_mask', []), dtype=bool).reshape(-1)
+            if len(mask_value) == len(ptsL_u):
+                seed_mask = mask_value
+        for role, rotation, translation, uses_feature in candidate_solutions:
+            baseline_value = float(np.linalg.norm(translation))
+            if not (MIN_BASELINE_MM <= baseline_value <= MAX_BASELINE_MM):
+                continue
+            marker_stats = marker_bidirectional_stats(
+                rotation, translation, corners_left_u, corners_right_u)
+            if marker_stats is None:
+                continue
+            feature_stats = None
+            if ptsL_u is not None:
+                feature_stats = feature_pose_stats(
+                    ptsL_u, ptsR_u, rotation, translation, seed_mask, holdout_mask)
+            evaluated.append({
+                'role': role,
+                'R': rotation,
+                't': translation,
+                'uses_feature': uses_feature,
+                'marker': marker_stats,
+                'feature': feature_stats,
+            })
 
-        baseline_val = float(np.linalg.norm(t_a64))
-        bsl_tri, scale_info = baseline_from_marker_edges(
-            R_E, t_E, corners_left_u, corners_right_u)
-        if bsl_tri is not None and MIN_BASELINE_MM <= bsl_tri <= MAX_BASELINE_MM:
-            marker_count = scale_info['marker_count'] if scale_info else 0
-            rel_mad = scale_info.get('relative_mad', 0.0) if scale_info else 0.0
+        if not evaluated:
+            log_and_print(f"⚠️ [RT精修{tag}] 無有效聯合候選，保留 ArUco RT。")
+            return R_aruco, t_aruco, False, empty_metrics
+
+        for candidate in evaluated:
+            candidate_feature = candidate['feature'] or {}
             log_and_print(
-                f"📏 [RT精修{tag}] {marker_count} 個 marker 邊長共同定尺度: "
-                f"baseline {baseline_val:.2f} → {bsl_tri:.2f} mm (scale MAD={rel_mad:.3f})")
-            baseline_val = bsl_tri
+                f"   [RT候選{tag}] {candidate['role']} | marker={candidate['marker']['rms_px']:.3f}px, "
+                f"max={candidate['marker']['max_px']:.3f}px | "
+                f"feature_seed_p90={candidate_feature.get('seed_p90_px', float('inf')):.3f}px, "
+                f"final_inliers={candidate_feature.get('inlier_count', 0)}")
+
+        marker_only_evaluated = [item for item in evaluated if not item['uses_feature']]
+        marker_floor = min(
+            marker_only_evaluated or evaluated,
+            key=lambda item: item['marker']['rms_px'])['marker']
+        rms_limit = min(
+            MARKER_BIDIR_RMS_MAX_PX,
+            marker_floor['rms_px'] + MARKER_BIDIR_RMS_MARGIN_PX)
+        max_limit = min(
+            MARKER_BIDIR_MAX_MAX_PX,
+            marker_floor['max_px'] + MARKER_BIDIR_MAX_MARGIN_PX)
+        marker_valid = [
+            item for item in evaluated
+            if item['marker']['rms_px'] <= rms_limit
+            and item['marker']['left_to_right_rms_px'] <= MARKER_BIDIR_RMS_MAX_PX
+            and item['marker']['right_to_left_rms_px'] <= MARKER_BIDIR_RMS_MAX_PX
+            and item['marker']['max_px'] <= max_limit]
+
+        def feature_candidate_ok(item):
+            stats = item.get('feature')
+            return bool(
+                geometry is not None and geometry.get('quality_ok', False)
+                and stats is not None
+                and stats['inlier_count'] >= FEATURE_MIN_MATCHES
+                and stats['inlier_ratio'] >= FEATURE_MIN_INLIER_RATIO
+                and stats['inlier_p90_px'] <= FEATURE_FINAL_P90_MAX_PX
+                and (stats['holdout_median_px'] is None
+                     or stats['holdout_median_px'] <= FEATURE_FINAL_INLIER_PX))
+
+        feature_valid = [item for item in marker_valid if feature_candidate_ok(item)]
+        if feature_valid:
+            best_feature_valid_marker_rms = min(
+                item['marker']['rms_px'] for item in feature_valid)
+            marker_priority_band = [
+                item for item in feature_valid
+                if item['marker']['rms_px']
+                <= best_feature_valid_marker_rms + MARKER_SELECTION_RMS_BAND_PX]
+
+            def joint_rank(item):
+                feature_stats = item['feature'] or {}
+                return (
+                    feature_stats.get('seed_p90_px', float('inf')),
+                    feature_stats.get('seed_median_px', float('inf')),
+                    -feature_stats.get('inlier_count', 0),
+                    item['marker']['rms_px'],
+                )
+            chosen = min(marker_priority_band, key=joint_rank)
+        elif marker_valid:
+            marker_only_valid = [item for item in marker_valid if not item['uses_feature']]
+            chosen = min(
+                marker_only_valid or marker_valid,
+                key=lambda item: item['marker']['rms_px'])
         else:
-            scale_reason = "marker 間尺度不一致" if scale_info and scale_info.get('inconsistent') else "無有效邊長解"
-            log_and_print(f"⚠️ [RT精修{tag}] {scale_reason}，baseline 沿用 ArUco 值 {baseline_val:.2f} mm。")
-        if t_dot <= 0 and bsl_tri is None:
-            log_and_print(f"⚠️ [RT精修{tag}] 特徵平移方向與 marker 相反且無邊長尺度驗證，保留 ArUco RT。")
-            return R_aruco, t_aruco, False
-        t_hybrid = (t_E.flatten() * baseline_val).reshape(3, 1)
+            chosen = min(evaluated, key=lambda item: item['marker']['rms_px'])
 
-        feat_a = rt_epipolar_residual(ptsL_u, ptsR_u, R_a64, t_a64)
-        feat_h = rt_epipolar_residual(ptsL_u, ptsR_u, R_E, t_hybrid)
-        mk = marker_corner_pairs(corners_left_u, corners_right_u)
-        mk_a = rt_epipolar_residual(mk[0], mk[1], R_a64, t_a64) if mk else None
-        mk_h = rt_epipolar_residual(mk[0], mk[1], R_E, t_hybrid) if mk else None
-        mk_str = f"{mk_a:.3f}→{mk_h:.3f}" if mk_a is not None else "N/A"
-        marker_ok = (
-            mk_a is None
-            or mk_h <= mk_a + FEATURE_MARKER_EPI_MARGIN_PX
-            or (geometry['strong'] and mk_h <= FEATURE_MARKER_EPI_HARD_MAX_PX))
-        feature_ok = feat_h < feat_a or (geometry['strong'] and geometry['model_epi_px'] < PAIR_EPI_OK_PX)
-        if feature_ok and marker_ok:
-            log_and_print(
-                f"🚀 [RT精修{tag}] 採用混合解: 特徵極線 {feat_a:.3f}→{feat_h:.3f}px | "
-                f"標籤極線 {mk_str}px | dR={ang:.2f}° | E內點={n_in}/{len(ptsL_u)} | "
-                f"grid={geometry['grid_coverage']:.2f}, parallax={geometry['parallax_deg']:.3f}°"
-            )
-            return (R_E.astype(np.asarray(R_aruco).dtype),
-                    t_hybrid.astype(np.asarray(t_aruco).dtype), True)
+        marker_ok = any(chosen is item for item in marker_valid)
+        feature_stats = chosen['feature']
+        feature_ok = feature_candidate_ok(chosen)
+        applied = bool(chosen['uses_feature'] and marker_ok and feature_ok)
+        solution_metrics = {
+            'marker_bidir_ok': bool(marker_ok),
+            'marker_bidir': chosen['marker'],
+            'marker_floor': marker_floor,
+            'marker_rms_limit_px': float(rms_limit),
+            'marker_max_limit_px': float(max_limit),
+            'feature': feature_stats,
+            'optimization_mask': optimization_mask,
+            'holdout_mask': holdout_mask,
+            'used_feature_count': int(np.count_nonzero(optimization_mask)) if applied and optimization_mask is not None else 0,
+            'solution_role': chosen['role'] if marker_ok else 'unreliable_marker_fallback',
+            'feature_ok': feature_ok,
+        }
+        marker_text = chosen['marker']
+        feature_text = feature_stats or {}
         log_and_print(
-            f"ℹ️ [RT精修{tag}] 混合解未通過仲裁 (特徵 {feat_a:.3f}→{feat_h:.3f}px, 標籤 {mk_str}px)，保留 ArUco RT。"
+            f"{'✅' if marker_ok else '⚠️'} [RT聯合精修{tag}] role={solution_metrics['solution_role']} | "
+            f"marker L→R={marker_text['left_to_right_rms_px']:.3f}px, "
+            f"R→L={marker_text['right_to_left_rms_px']:.3f}px, max={marker_text['max_px']:.3f}px | "
+            f"feature inliers={feature_text.get('inlier_count', 0)}/{len(ptsL_u) if ptsL_u is not None else 0}, "
+            f"median={feature_text.get('inlier_median_px', float('inf')):.3f}px, "
+            f"p90={feature_text.get('inlier_p90_px', float('inf')):.3f}px | "
+            f"baseline={np.linalg.norm(chosen['t']):.2f}mm")
+        return (
+            chosen['R'].astype(np.asarray(R_aruco).dtype),
+            chosen['t'].astype(np.asarray(t_aruco).dtype),
+            applied,
+            solution_metrics,
         )
-        return R_aruco, t_aruco, False
 
     def compute_pair_quality_score(err, item_s, item_e, baseline_mm):
         shared_markers = set(item_s['corners'].keys()).intersection(item_e['corners'].keys())
@@ -944,17 +1331,47 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics = cand_tuple
             matches_lr = get_pair_matches(item_e['idx'], item_s['idx'])
             geometry = estimate_feature_geometry(item_e['idx'], item_s['idx'])
+            corners_left_u = undistort_corners_dict(item_e['corners'])
+            corners_right_u = undistort_corners_dict(item_s['corners'])
+            marker_stats = marker_bidirectional_stats(
+                R_rel_c, t_rel_c, corners_left_u, corners_right_u)
+            marker_ok = bool(
+                marker_stats is not None
+                and marker_stats['rms_px'] <= MARKER_CANDIDATE_RMS_MAX_PX
+                and marker_stats['left_to_right_rms_px'] <= MARKER_CANDIDATE_RMS_MAX_PX
+                and marker_stats['right_to_left_rms_px'] <= MARKER_CANDIDATE_RMS_MAX_PX
+                and marker_stats['max_px'] <= MARKER_CANDIDATE_MAX_MAX_PX)
+            pair_metrics['marker_bidir_ok'] = marker_ok
+            pair_metrics['marker_bidir_rms_px'] = (
+                marker_stats['rms_px'] if marker_stats is not None else None)
+            pair_metrics['marker_bidir_max_px'] = (
+                marker_stats['max_px'] if marker_stats is not None else None)
+            pair_metrics['marker_left_to_right_rms_px'] = (
+                marker_stats['left_to_right_rms_px'] if marker_stats is not None else None)
+            pair_metrics['marker_right_to_left_rms_px'] = (
+                marker_stats['right_to_left_rms_px'] if marker_stats is not None else None)
             if matches_lr is not None and geometry is not None:
-                epi_med = rt_epipolar_residual(matches_lr[0], matches_lr[1], R_rel_c, t_rel_c)
+                feature_residuals = rt_epipolar_residuals(
+                    matches_lr[0], matches_lr[1], R_rel_c, t_rel_c)
+                seed_mask = np.asarray(geometry['inlier_mask'], dtype=bool).reshape(-1)
+                if len(seed_mask) == len(feature_residuals) and np.any(seed_mask):
+                    seed_residuals = feature_residuals[seed_mask]
+                else:
+                    seed_residuals = feature_residuals
+                epi_med = float(np.median(seed_residuals))
+                epi_p90 = float(np.percentile(seed_residuals, 90))
                 rot_agreement = rot_angle_deg(geometry['R'], R_rel_c)
                 combined = (
-                    0.35 * pair_score
+                    0.15 * pair_score
                     + PAIR_SCORE_EPI_W * (
-                        0.35 * min(epi_med, 4.0)
-                        + 0.35 * min(geometry['model_epi_px'], 2.0)
+                        0.10 * min(epi_med / 4.0, 2.0)
+                        + 0.05 * min(epi_p90 / 4.0, 2.0)
+                        + 0.45 * min(geometry['model_epi_px'], 2.0)
                         + geometry['quality_penalty']
-                        + 0.15 * min(rot_agreement / FEATURE_ROT_DIFF_MAX_DEG, 2.0)))
+                        + 0.30 * min(rot_agreement / FEATURE_ROT_DIFF_MAX_DEG, 3.0))
+                    + (0.0 if marker_ok else 4.0))
                 pair_metrics['feat_epi_px'] = float(epi_med)
+                pair_metrics['feat_epi_p90_px'] = float(epi_p90)
                 pair_metrics['feature_model_epi_px'] = geometry['model_epi_px']
                 pair_metrics['feature_quality_ok'] = geometry['quality_ok']
                 pair_metrics['feature_strong'] = geometry['strong']
@@ -967,19 +1384,26 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 pair_metrics['feature_planar_degenerate'] = geometry['planar_degenerate']
                 pair_metrics['feature_rot_agreement_deg'] = float(rot_agreement)
             else:
-                combined = 0.35 * pair_score + PAIR_SCORE_EPI_W * 3.0
+                combined = 0.20 * pair_score + PAIR_SCORE_EPI_W * 3.0 + (0.0 if marker_ok else 4.0)
                 pair_metrics['feat_epi_px'] = None
+                pair_metrics['feat_epi_p90_px'] = None
                 pair_metrics['feature_model_epi_px'] = None
                 pair_metrics['feature_quality_ok'] = False
             pair_metrics['combined_score'] = float(combined)
             reranked.append((combined, cand_tuple))
-        reranked.sort(key=lambda x: (not x[1][7].get('feature_quality_ok', False), x[0]))
+        reranked.sort(key=lambda x: (
+            not x[1][7].get('marker_bidir_ok', False),
+            not x[1][7].get('feature_quality_ok', False),
+            x[0]))
         for _c, _t in reranked:
             _fe_t = _t[7].get('feat_epi_px')
             _model_t = _t[7].get('feature_model_epi_px')
+            _marker_bidir_t = _t[7].get('marker_bidir_rms_px')
+            _marker_bidir_str = f"{_marker_bidir_t:.3f}px" if _marker_bidir_t is not None else "N/A"
             log_and_print(
                 f"   [topK] A=F{_t[2]['idx']} B=F{_t[3]['idx']} branch={_t[7].get('branch')} "
-                f"markerRT_epi={f'{_fe_t:.3f}px' if _fe_t is not None else 'N/A'} "
+                f"marker_bidir={_marker_bidir_str} "
+                f"feature_inlier_epi={f'{_fe_t:.3f}px' if _fe_t is not None else 'N/A'} "
                 f"E_epi={f'{_model_t:.3f}px' if _model_t is not None else 'N/A'} "
                 f"inliers={_t[7].get('feature_inliers', 0)}/{_t[7].get('feature_matches', 0)} "
                 f"grid={_t[7].get('feature_grid_coverage', 0.0):.2f} "
@@ -995,9 +1419,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         best_metrics = best_cand[7]
         feat_epi = best_metrics.get('feat_epi_px')
         feature_model_epi = best_metrics.get('feature_model_epi_px')
+        best_marker_bidir = best_metrics.get('marker_bidir_rms_px')
+        best_marker_bidir_str = f"{best_marker_bidir:.3f}px" if best_marker_bidir is not None else "N/A"
         log_and_print(
             f"🎯 [pair quality] score={best_score:.3f} | reproj={best_err:.3f}px | "
-            f"markerRT_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
+            f"marker_bidir={best_marker_bidir_str} | "
+            f"feature_inlier_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
             f"E_epi={f'{feature_model_epi:.3f}px' if feature_model_epi is not None else 'N/A'} | "
             f"baseline={best_metrics['baseline']:.2f}mm | shared={best_metrics['shared_markers']} | "
             f"feature_grid={best_metrics.get('feature_grid_coverage', 0.0):.2f} | "
@@ -1006,7 +1433,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         
         fe_str = f"{feature_model_epi:.3f}" if feature_model_epi is not None else "N/A"
         stage_ok = (
-            best_metrics.get('feature_strong', False)
+            best_metrics.get('marker_bidir_ok', False)
+            and best_metrics.get('feature_strong', False)
             and feature_model_epi is not None
             and feature_model_epi < PAIR_EPI_OK_PX)
         if stage_ok:
@@ -1021,7 +1449,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         # 若本階段成功，或這已是最大抽樣張數的第二階段，即固定最佳與次佳解
         if stage_success or num_samples == 50:
             if not stage_success:
-                _validated = [t for t in pairs if t[7].get('feature_quality_ok', False)]
+                _validated = [
+                    t for t in pairs
+                    if t[7].get('marker_bidir_ok', False)
+                    and t[7].get('feature_quality_ok', False)]
                 if _validated:
                     best_cand = min(_validated, key=lambda t: t[7].get('combined_score', float('inf')))
                 best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
@@ -1041,7 +1472,9 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 if item_s['idx'] in _seen_extra_idx:
                     continue
                 fe = pair_metrics.get('feature_model_epi_px')
-                if not pair_metrics.get('feature_quality_ok', False) or fe is None or fe >= PAIR_EPI_EXTRA_PX:
+                if (not pair_metrics.get('marker_bidir_ok', False)
+                        or not pair_metrics.get('feature_quality_ok', False)
+                        or fe is None or fe >= PAIR_EPI_EXTRA_PX):
                     continue
                 _seen_extra_idx.add(item_s['idx'])
                 candidates_scores.append((pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics))
@@ -1069,36 +1502,19 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
     # Feature geometry determines R/t direction; all valid marker edges independently anchor metric scale.
     _best_alts = build_alt_rotations(best_start, best_end, R_rel) if few_marker_mode else None
-    R_rel, t_rel, best_feature_rt_applied = refine_rt_with_features(
+    R_rel, t_rel, best_feature_rt_applied, best_joint_metrics = refine_rt_with_features(
         best_end['idx'], best_start['idx'], R_rel, t_rel,
         cornersB_undist, cornersA_undist, tag="-best",
         alt_rotations=_best_alts, single_marker=few_marker_mode
     )
     baseline = float(np.linalg.norm(t_rel))
 
-    # Keep the exact Essential/recoverPose inliers in undistorted display-pixel coordinates.
-    # pts_left belongs to frame_B (UI left); pts_right belongs to frame_A (UI right).
-    rt_sift_points_left = np.empty((0, 2), dtype=np.float64)
-    rt_sift_points_right = np.empty((0, 2), dtype=np.float64)
-    best_feature_matches = get_pair_matches(best_end['idx'], best_start['idx'])
-    best_feature_geometry = estimate_feature_geometry(best_end['idx'], best_start['idx'])
-    if best_feature_matches is not None and best_feature_geometry is not None:
-        inlier_mask = np.asarray(best_feature_geometry['inlier_mask'], dtype=bool).reshape(-1)
-        if len(inlier_mask) == len(best_feature_matches[0]):
-            rt_sift_points_left = np.asarray(best_feature_matches[0][inlier_mask], dtype=np.float64)
-            rt_sift_points_right = np.asarray(best_feature_matches[1][inlier_mask], dtype=np.float64)
-    rt_sift_role = "final_rt" if best_feature_rt_applied else "validation_only"
-    log_and_print(
-        f"📍 [RT SIFT像素] recoverPose 內點 {len(rt_sift_points_left)}/"
-        f"{0 if best_feature_matches is None else len(best_feature_matches[0])} | role={rt_sift_role}"
-    )
-
     # 包裝次優額外右圖組 (同樣做混合 RT 精修)
     extra_candidates_info = []
     for pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics in selected_extras:
         cornersA_e_undist = undistort_corners_dict(item_s['corners'])
         _extra_alts = build_alt_rotations(item_s, best_end, R_rel_c) if few_marker_mode else None
-        R_rel_c, t_rel_c, _extra_feature_rt_applied = refine_rt_with_features(
+        R_rel_c, t_rel_c, _extra_feature_rt_applied, _extra_joint_metrics = refine_rt_with_features(
             best_end['idx'], item_s['idx'], R_rel_c, t_rel_c,
             cornersB_undist, cornersA_e_undist, tag=f"-F{item_s['idx']}",
             alt_rotations=_extra_alts, single_marker=few_marker_mode
@@ -1107,25 +1523,112 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         if _extra_matches is None:
             log_and_print(f"⚠️ [次佳配對] F{item_s['idx']} 無法做最終特徵驗證，已排除。")
             continue
-        _extra_final_epi = rt_epipolar_residual(
-            _extra_matches[0], _extra_matches[1], R_rel_c, t_rel_c)
-        if _extra_final_epi >= PAIR_EPI_EXTRA_PX:
+        _extra_feature_stats = _extra_joint_metrics.get('feature') or {}
+        _extra_final_epi = _extra_feature_stats.get(
+            'inlier_median_px', rt_epipolar_residual(
+                _extra_matches[0], _extra_matches[1], R_rel_c, t_rel_c))
+        if (not _extra_joint_metrics.get('marker_bidir_ok', False)
+                or not _extra_joint_metrics.get('feature_ok', False)
+                or _extra_final_epi >= PAIR_EPI_EXTRA_PX):
             log_and_print(
-                f"⚠️ [次佳配對] F{item_s['idx']} 最終 RT 極線殘差 {_extra_final_epi:.3f} px "
-                f">= {PAIR_EPI_EXTRA_PX} px，已排除，不參與深度融合。")
+                f"⚠️ [次佳配對] F{item_s['idx']} 未同時通過 marker 雙向投影與 Feature 內點驗證 "
+                f"(feature={_extra_final_epi:.3f}px)，已排除，不參與深度融合。")
             continue
         pair_metrics['final_feature_epi_px'] = float(_extra_final_epi)
+        pair_metrics['joint_refine'] = _extra_joint_metrics
         extra_candidates_info.append({
             'idx_A': item_s['idx'],
+            'item_start': item_s,
             'frame_A': frames[item_s['idx']],
             'R_rel': R_rel_c,
             't_rel': t_rel_c,
             'baseline': float(np.linalg.norm(t_rel_c)),
             'pair_score': pair_score,
             'pair_metrics': pair_metrics,
+            'joint_refine': _extra_joint_metrics,
+            'feature_rt_applied': bool(_extra_feature_rt_applied),
             'cornersA': cornersA_e_undist
         })
         log_and_print(f"➕ [次佳配對] 額外右圖 (Frame A) 索引: {item_s['idx']} | 重投影誤差: {err:.3f} px | Baseline: {np.linalg.norm(t_rel_c):.2f} mm")
+
+    primary_candidate = {
+        'idx_A': best_start['idx'],
+        'item_start': best_start,
+        'frame_A': frames[best_start['idx']],
+        'R_rel': R_rel,
+        't_rel': t_rel,
+        'baseline': baseline,
+        'pair_score': best_pair_metrics.get('score', float('inf')),
+        'pair_metrics': best_pair_metrics,
+        'joint_refine': best_joint_metrics,
+        'feature_rt_applied': bool(best_feature_rt_applied),
+        'cornersA': cornersA_undist,
+    }
+    valid_final_candidates = [
+        candidate for candidate in [primary_candidate] + extra_candidates_info
+        if candidate['joint_refine'].get('marker_bidir_ok', False)
+        and candidate['joint_refine'].get('feature_ok', False)]
+    if valid_final_candidates:
+        best_final_marker_rms = min(
+            candidate['joint_refine']['marker_bidir']['rms_px']
+            for candidate in valid_final_candidates)
+        marker_priority_candidates = [
+            candidate for candidate in valid_final_candidates
+            if candidate['joint_refine']['marker_bidir']['rms_px']
+            <= best_final_marker_rms + FINAL_PAIR_MARKER_RMS_BAND_PX]
+
+        def final_candidate_rank(candidate):
+            feature_stats = candidate['joint_refine'].get('feature') or {}
+            marker_stats = candidate['joint_refine'].get('marker_bidir') or {}
+            return (
+                feature_stats.get('inlier_p90_px', float('inf')),
+                feature_stats.get('inlier_median_px', float('inf')),
+                -feature_stats.get('inlier_count', 0),
+                marker_stats.get('rms_px', float('inf')),
+            )
+
+        selected_final = min(marker_priority_candidates, key=final_candidate_rank)
+        if selected_final is not primary_candidate:
+            old_primary = primary_candidate
+            best_start = selected_final['item_start']
+            R_rel = selected_final['R_rel']
+            t_rel = selected_final['t_rel']
+            baseline = selected_final['baseline']
+            cornersA_undist = selected_final['cornersA']
+            best_pair_metrics = dict(selected_final['pair_metrics'])
+            best_joint_metrics = selected_final['joint_refine']
+            best_feature_rt_applied = selected_final['feature_rt_applied']
+            extra_candidates_info = [
+                candidate for candidate in extra_candidates_info
+                if candidate is not selected_final]
+            if (old_primary['joint_refine'].get('marker_bidir_ok', False)
+                    and old_primary['joint_refine'].get('feature_ok', False)):
+                extra_candidates_info.append(old_primary)
+            save_debug_pair_images(best_start, best_end, "best_joint_promoted")
+            log_and_print(
+                f"🔁 [最終配對升格] F{selected_final['idx_A']} 在聯合精修後同時通過 "
+                f"marker 與 Feature，且雙重約束品質優於精修前排名第一的影像對。")
+
+    # Keep exactly the Feature points used by the final joint solution. If Feature was
+    # validation-only, show the recoverPose inliers but label their role accordingly.
+    rt_sift_points_left = np.empty((0, 2), dtype=np.float64)
+    rt_sift_points_right = np.empty((0, 2), dtype=np.float64)
+    best_feature_matches = get_pair_matches(best_end['idx'], best_start['idx'])
+    best_feature_geometry = estimate_feature_geometry(best_end['idx'], best_start['idx'])
+    if best_feature_matches is not None and best_feature_geometry is not None:
+        inlier_mask = np.asarray(best_feature_geometry['inlier_mask'], dtype=bool).reshape(-1)
+        optimization_mask = best_joint_metrics.get('optimization_mask')
+        if best_feature_rt_applied and optimization_mask is not None:
+            optimization_mask = np.asarray(optimization_mask, dtype=bool).reshape(-1)
+            if len(optimization_mask) == len(inlier_mask):
+                inlier_mask = optimization_mask
+        if len(inlier_mask) == len(best_feature_matches[0]):
+            rt_sift_points_left = np.asarray(best_feature_matches[0][inlier_mask], dtype=np.float64)
+            rt_sift_points_right = np.asarray(best_feature_matches[1][inlier_mask], dtype=np.float64)
+    rt_sift_role = "final_rt" if best_feature_rt_applied else "validation_only"
+    log_and_print(
+        f"📍 [RT SIFT像素] {len(rt_sift_points_left)}/"
+        f"{0 if best_feature_matches is None else len(best_feature_matches[0])} | role={rt_sift_role}")
 
     if not extra_candidates_info:
         log_and_print(f"ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 {PAIR_EPI_EXTRA_PX} px, Baseline {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)。")
@@ -1140,24 +1643,49 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     for item in valid_start + valid_end:
         valid_poses[item['idx']] = (item['R'], item['t'])
 
-    marker_reproj_err = None
+    marker_pnp_self_reproj_err = None
     if best_start is not None and best_end is not None:
-        marker_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
-    best_reproj_err = marker_reproj_err
+        marker_pnp_self_reproj_err = compute_pair_reprojection_error(best_start, best_end, mtx_L, dist_L)
+    marker_bidir_stats = marker_bidirectional_stats(
+        R_rel, t_rel, cornersB_undist, cornersA_undist)
+    marker_reproj_err = marker_bidir_stats['rms_px'] if marker_bidir_stats is not None else None
+    final_feature_stats = best_joint_metrics.get('feature')
     _m_final = get_pair_matches(best_end['idx'], best_start['idx'])
-    if _m_final is not None:
-        _fe_final = rt_epipolar_residual(_m_final[0], _m_final[1], R_rel, t_rel)
+    if _m_final is not None and final_feature_stats is None:
+        _seed_mask = None
+        if best_feature_geometry is not None:
+            _seed_value = np.asarray(best_feature_geometry.get('inlier_mask', []), dtype=bool).reshape(-1)
+            if len(_seed_value) == len(_m_final[0]):
+                _seed_mask = _seed_value
+        final_feature_stats = feature_pose_stats(
+            _m_final[0], _m_final[1], R_rel, t_rel, _seed_mask)
+    final_feature_epi = (
+        final_feature_stats.get('inlier_median_px')
+        if final_feature_stats is not None else None)
+    quality_components = [value for value in (marker_reproj_err, final_feature_epi)
+                          if value is not None and np.isfinite(value)]
+    best_reproj_err = max(quality_components) if quality_components else None
+    if marker_bidir_stats is not None:
+        feature_log = (
+            f"inliers={final_feature_stats['inlier_count']}/{len(_m_final[0])}, "
+            f"median={final_feature_stats['inlier_median_px']:.3f}px, "
+            f"p90={final_feature_stats['inlier_p90_px']:.3f}px"
+            if final_feature_stats is not None and _m_final is not None else "N/A")
         log_and_print(
-            f"ℹ️ [RT品質] 最終全畫面特徵極線殘差 {_fe_final:.3f} px "
-            f"(marker PnP 重投影 {marker_reproj_err:.3f} px)" if marker_reproj_err is not None
-            else f"ℹ️ [RT品質] 最終全畫面特徵極線殘差 {_fe_final:.3f} px")
-        best_reproj_err = _fe_final
-        best_pair_metrics['final_feature_epi_px'] = float(_fe_final)
+            f"ℹ️ [RT品質] marker 雙向重投影 L→R={marker_bidir_stats['left_to_right_rms_px']:.3f}px, "
+            f"R→L={marker_bidir_stats['right_to_left_rms_px']:.3f}px, "
+            f"max={marker_bidir_stats['max_px']:.3f}px | Feature {feature_log}")
+    if final_feature_epi is not None:
+        best_pair_metrics['final_feature_epi_px'] = float(final_feature_epi)
+    best_pair_metrics['final_feature_stats'] = final_feature_stats
+    best_pair_metrics['marker_bidir'] = marker_bidir_stats
+    best_pair_metrics['marker_bidir_ok'] = bool(best_joint_metrics.get('marker_bidir_ok', False))
     best_pair_metrics['marker_reproj_px'] = marker_reproj_err
+    best_pair_metrics['marker_pnp_self_reproj_px'] = marker_pnp_self_reproj_err
+    best_pair_metrics['feature_final_ok'] = bool(best_joint_metrics.get('feature_ok', False))
     best_pair_metrics['rt_reliable'] = bool(
-        best_reproj_err is not None
-        and np.isfinite(best_reproj_err)
-        and best_reproj_err < PAIR_EPI_EXTRA_PX
+        best_pair_metrics['marker_bidir_ok']
+        and best_pair_metrics['feature_final_ok']
         and best_pair_metrics.get('feature_quality_ok', False))
 
     def _diagnostic_grid(points):
@@ -1192,6 +1720,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         candidate_points_right = candidate_points_right[:candidate_count]
         essential_mask = np.zeros(candidate_count, dtype=bool)
         recover_mask = np.zeros(candidate_count, dtype=bool)
+        optimization_mask = np.zeros(candidate_count, dtype=bool)
+        holdout_mask = np.zeros(candidate_count, dtype=bool)
+        final_feature_inlier_mask = np.zeros(candidate_count, dtype=bool)
+        final_feature_residuals = np.full(candidate_count, np.nan, dtype=np.float64)
         if best_feature_geometry is not None:
             essential_mask_src = np.asarray(
                 best_feature_geometry.get('essential_inlier_mask', []), dtype=bool).reshape(-1)
@@ -1201,6 +1733,21 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 essential_mask = essential_mask_src
             if len(recover_mask_src) == candidate_count:
                 recover_mask = recover_mask_src
+        optimization_mask_src = best_joint_metrics.get('optimization_mask')
+        holdout_mask_src = best_joint_metrics.get('holdout_mask')
+        if optimization_mask_src is not None and len(optimization_mask_src) == candidate_count:
+            optimization_mask = np.asarray(optimization_mask_src, dtype=bool).reshape(-1)
+        if holdout_mask_src is not None and len(holdout_mask_src) == candidate_count:
+            holdout_mask = np.asarray(holdout_mask_src, dtype=bool).reshape(-1)
+        if final_feature_stats is not None:
+            final_mask_src = np.asarray(
+                final_feature_stats.get('final_inlier_mask', []), dtype=bool).reshape(-1)
+            final_residual_src = np.asarray(
+                final_feature_stats.get('residuals_px', []), dtype=np.float64).reshape(-1)
+            if len(final_mask_src) == candidate_count:
+                final_feature_inlier_mask = final_mask_src
+            if len(final_residual_src) == candidate_count:
+                final_feature_residuals = final_residual_src
 
         match_diagnostics = match_diagnostics_cache.get(
             (best_end['idx'], best_start['idx']), {})
@@ -1231,7 +1778,9 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             diag_file.write(f"recoverpose_inlier_count={int(np.count_nonzero(recover_mask))}\n")
             diag_file.write(
                 f"final_rt_sift_point_count="
-                f"{int(np.count_nonzero(recover_mask)) if best_feature_rt_applied else 0}\n\n")
+                f"{int(np.count_nonzero(optimization_mask)) if best_feature_rt_applied else 0}\n")
+            diag_file.write(f"final_rt_feature_inlier_count={int(np.count_nonzero(final_feature_inlier_mask))}\n")
+            diag_file.write(f"final_rt_feature_outlier_count={candidate_count - int(np.count_nonzero(final_feature_inlier_mask))}\n\n")
 
             diag_file.write("[FEATURE_QUALITY]\n")
             quality_fields = (
@@ -1242,7 +1791,15 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 diag_file.write(f"{field}={geometry_diagnostics.get(field, 'N/A')}\n")
             diag_file.write(f"marker_rt_feature_epi_px={best_pair_metrics.get('feat_epi_px', 'N/A')}\n")
             diag_file.write(f"final_feature_epi_px={best_pair_metrics.get('final_feature_epi_px', 'N/A')}\n")
-            diag_file.write(f"marker_pnp_reproj_px={marker_reproj_err if marker_reproj_err is not None else 'N/A'}\n")
+            diag_file.write(f"final_feature_inlier_p90_px={final_feature_stats.get('inlier_p90_px', 'N/A') if final_feature_stats else 'N/A'}\n")
+            diag_file.write(f"final_feature_all_p90_px={final_feature_stats.get('all_p90_px', 'N/A') if final_feature_stats else 'N/A'}\n")
+            diag_file.write(f"final_feature_holdout_median_px={final_feature_stats.get('holdout_median_px', 'N/A') if final_feature_stats else 'N/A'}\n")
+            diag_file.write(f"marker_bidir_rms_px={marker_reproj_err if marker_reproj_err is not None else 'N/A'}\n")
+            diag_file.write(f"marker_left_to_right_rms_px={marker_bidir_stats.get('left_to_right_rms_px', 'N/A') if marker_bidir_stats else 'N/A'}\n")
+            diag_file.write(f"marker_right_to_left_rms_px={marker_bidir_stats.get('right_to_left_rms_px', 'N/A') if marker_bidir_stats else 'N/A'}\n")
+            diag_file.write(f"marker_bidir_max_px={marker_bidir_stats.get('max_px', 'N/A') if marker_bidir_stats else 'N/A'}\n")
+            diag_file.write(f"marker_pnp_self_reproj_px={marker_pnp_self_reproj_err if marker_pnp_self_reproj_err is not None else 'N/A'}\n")
+            diag_file.write(f"joint_solution_role={best_joint_metrics.get('solution_role', 'N/A')}\n")
             diag_file.write(f"feature_rot_agreement_deg={best_pair_metrics.get('feature_rot_agreement_deg', 'N/A')}\n")
             diag_file.write(f"pair_score={best_pair_metrics.get('score', 'N/A')}\n")
             diag_file.write(f"combined_score={best_pair_metrics.get('combined_score', 'N/A')}\n")
@@ -1261,6 +1818,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             diag_file.write(f"min_parallax_deg={FEATURE_MIN_PARALLAX_DEG}\n")
             diag_file.write(f"strong_inliers={FEATURE_STRONG_INLIERS}\n")
             diag_file.write(f"strong_grid_coverage={FEATURE_STRONG_GRID_COVERAGE}\n\n")
+            diag_file.write(f"final_feature_inlier_px={FEATURE_FINAL_INLIER_PX}\n")
+            diag_file.write(f"final_feature_p90_max_px={FEATURE_FINAL_P90_MAX_PX}\n")
+            diag_file.write(f"marker_bidir_rms_max_px={MARKER_BIDIR_RMS_MAX_PX}\n")
+            diag_file.write(f"marker_bidir_point_max_px={MARKER_BIDIR_MAX_MAX_PX}\n\n")
 
             diag_file.write("[FINAL_RT_LEFT_TO_RIGHT]\n")
             for row_idx, row in enumerate(np.asarray(R_rel, dtype=np.float64).reshape(3, 3)):
@@ -1278,21 +1839,29 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             _write_grid_section(diag_file, "essential_inliers_right", candidate_points_right[essential_mask])
             _write_grid_section(diag_file, "recoverpose_inliers_left", candidate_points_left[recover_mask])
             _write_grid_section(diag_file, "recoverpose_inliers_right", candidate_points_right[recover_mask])
+            _write_grid_section(diag_file, "joint_optimization_left", candidate_points_left[optimization_mask])
+            _write_grid_section(diag_file, "joint_optimization_right", candidate_points_right[optimization_mask])
+            _write_grid_section(diag_file, "holdout_left", candidate_points_left[holdout_mask])
+            _write_grid_section(diag_file, "holdout_right", candidate_points_right[holdout_mask])
+            _write_grid_section(diag_file, "final_rt_inliers_left", candidate_points_left[final_feature_inlier_mask])
+            _write_grid_section(diag_file, "final_rt_inliers_right", candidate_points_right[final_feature_inlier_mask])
             diag_file.write("\n")
 
             diag_file.write("[MATCH_TABLE]\n")
             diag_file.write(
                 "index,left_x,left_y,right_x,right_y,essential_inlier,"
-                "recoverpose_inlier,used_by_final_rt\n")
+                "recoverpose_inlier,optimization_used,holdout,final_rt_inlier,"
+                "final_epipolar_px\n")
             for index, (point_left, point_right) in enumerate(
                     zip(candidate_points_left, candidate_points_right), start=1):
                 match_idx = index - 1
-                used_by_final_rt = bool(best_feature_rt_applied and recover_mask[match_idx])
                 diag_file.write(
                     f"{index},{point_left[0]:.6f},{point_left[1]:.6f},"
                     f"{point_right[0]:.6f},{point_right[1]:.6f},"
                     f"{int(essential_mask[match_idx])},{int(recover_mask[match_idx])},"
-                    f"{int(used_by_final_rt)}\n")
+                    f"{int(best_feature_rt_applied and optimization_mask[match_idx])},"
+                    f"{int(holdout_mask[match_idx])},{int(final_feature_inlier_mask[match_idx])},"
+                    f"{final_feature_residuals[match_idx]:.6f}\n")
         log_and_print(f"🧾 [RT SIFT診斷] 已輸出: {rt_sift_diagnostics_path}")
     except Exception as diag_error:
         log_and_print(f"⚠️ [RT SIFT診斷] 輸出失敗: {diag_error}")
@@ -1369,6 +1938,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         'extra_candidates': extra_candidates_info,
         'min_reproj_err': best_reproj_err,
         'marker_reproj_err': marker_reproj_err,
+        'marker_pnp_self_reproj_err': marker_pnp_self_reproj_err,
+        'marker_bidir_stats': marker_bidir_stats,
         'rt_quality': best_pair_metrics,
         'rt_sift_points_left': rt_sift_points_left,
         'rt_sift_points_right': rt_sift_points_right,

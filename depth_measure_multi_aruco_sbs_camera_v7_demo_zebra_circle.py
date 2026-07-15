@@ -112,8 +112,8 @@ EPIPOLAR_SEARCH_WEAK_FLOOR = 0.05                   # Epi-band search: weak scor
 
 # ----------------- 交互特徵點匹配搜索設定 -----------------
 LEFT_PATCH_SEARCH_RADIUS      = 30#18                         # 左圖點選候選點周圍的搜索半徑 (pixels)
-RIGHT_PATCH_SEARCH_RADIUS     = 90#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
-GRAD_SIFT_MAX_RT_ADJUST_PX    = 40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
+RIGHT_PATCH_SEARCH_RADIUS     = 75#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
+GRAD_SIFT_MAX_RT_ADJUST_PX    = 75#40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
 LEFT_GRADIENT_POINTS_COUNT    = 150                        # 左圖周圍取梯度最高的特徵點數量
 RIGHT_GRADIENT_POINTS_COUNT   = 300                       # 右圖周圍取梯度最高的特徵點數量
 LEFT_MID_GRADIENT_POINTS_COUNT = 150                       # 左圖周圍取梯度中等的特徵點數量

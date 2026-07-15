@@ -1,5 +1,65 @@
 # RT Optimization Notes
 
+## 2026-07-15 - ArUco hard constraint + robust Feature joint RT refinement
+
+### Goal
+
+- Treat ArUco geometry as the mandatory metric constraint: the final RT must keep left-to-right and right-to-left marker projection errors low.
+- Use SIFT/Essential inliers to choose and refine the best RT among marker-compatible solutions.
+- Do not reject a good RT because a small number of SIFT matches have large epipolar errors; classify and report those matches as outliers.
+
+### Files changed
+
+- `Algorithm/video_pose_analysis.py`
+- `RT_OPTIMIZATION_NOTES.md`
+- Zebra and Circle both import the shared `Algorithm/video_pose_analysis.py`, so both receive the same RT behavior without duplicate code changes.
+
+### New RT flow
+
+1. SIFT still uses ratio test, mutual matching, spatial balancing, Essential RANSAC, and `recoverPose` before any Feature point can affect RT.
+2. ArUco IPPE branches are cached and used to build metric marker points in both views.
+3. Every RT candidate is checked with true cross-view marker transfer:
+   - left marker 3D model -> final RT -> right detected corners;
+   - right marker 3D model -> inverse final RT -> left detected corners.
+4. Nonlinear least-squares jointly refines six RT parameters with marker bidirectional pixel residuals and signed Feature Sampson residuals.
+5. Feature residuals use pseudo-Huber robustification so a few wrong SIFT matches have limited influence.
+6. Multiple marker/Feature weight levels (`12, 4, 1, 0.25`) search the Pareto frontier. A solution is accepted only if it passes marker hard limits.
+7. Among Feature-qualified solutions, selection first stays inside a narrow near-best marker RMS band, then compares Feature p90, median, and inlier support.
+8. Secondary frame pairs are also jointly refined and can be promoted when their final marker + Feature quality is better than the preliminary winner.
+
+### Active final acceptance rules
+
+- Feature final inlier threshold: `1.5 px`.
+- Feature inlier p90 maximum: `1.25 px`.
+- Feature minimum support remains `25` points and `30%` of balanced candidates.
+- Marker bidirectional RMS maximum: `1.5 px` for each direction and combined.
+- Marker maximum individual corner transfer error: `2.0 px`.
+- Candidate-stage marker limits are intentionally looser (`3.0 px` RMS / `6.0 px` max); strict limits are applied after joint refinement.
+- `rt_reliable=True` now requires both final marker and final Feature checks. It is no longer based only on Feature median epipolar error.
+
+### Diagnostics changes
+
+- `marker_pnp_self_reproj_px` is retained only as the old same-image PnP fitting diagnostic.
+- Added final `marker_left_to_right_rms_px`, `marker_right_to_left_rms_px`, combined RMS, maximum error, and per-marker values.
+- Added final Feature inlier/outlier counts, inlier median/p90, all-match p90, holdout values, and joint solution role.
+- `MATCH_TABLE` now records optimization use, holdout status, final RT inlier status, and each match's final epipolar error.
+- The UI RT SIFT overlay shows the actual optimization set when Feature affected the final RT; validation-only points remain labeled as such.
+
+### Verification
+
+- Python syntax compiled for the shared module and both Zebra entry scripts.
+- `video_20260714_214605.mp4`: promoted F54/F136; baseline `81.02 mm`; marker L->R/R->L RMS `0.72/0.76 px`, max `1.01 px`; Feature `27/71`, median `0.51 px`, p90 `1.04 px`; reliable.
+- `video_20260714_215545.mp4`: selected F78/F98; baseline `58.14 mm`; marker L->R/R->L RMS `0.26/0.25 px`, max `0.39 px`; Feature `171/256`, median `0.14 px`, p90 `0.44 px`; reliable.
+- Two-pattern `video_20260601_172436.mp4`: selected F41/F56 using both markers; baseline `23.28 mm`; marker L->R/R->L RMS `0.71/0.84 px`, max `1.45 px`; Feature `68/184`, median `0.72 px`, p90 `1.15 px`; reliable.
+
+### Dependency and interpretation notes
+
+- Joint nonlinear refinement uses `scipy.optimize.least_squares`; SciPy is present in this project's virtual environment.
+- A very large error on a small number of final Feature outliers is interpreted as bad matching only after the RT has independently passed marker hard constraints and Feature inlier support/p90 checks.
+- Low marker projection error is necessary but is not a ground-truth guarantee when the marker is very small; calibration accuracy and marker corner localization remain limiting factors.
+
+---
+
 本檔用來記錄 ArUco、全畫面特徵匹配、影格配對選擇及相對姿態 `R/t` 計算流程的修改。
 
 ## 維護規則
