@@ -86,6 +86,7 @@ PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數
 ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
+DEFAULT_WOUND_HEIGHT_OFFSET_MM = 10.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
 MIN_BASELINE_MM       = 8.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
@@ -1583,6 +1584,20 @@ def main():
     # 使用分析得到的相對 R, t 和 baseline
     R_r = video_data['R_rel']
     t_r = video_data['t_rel']
+    _rt_left_value = video_data.get('rt_sift_points_left')
+    _rt_right_value = video_data.get('rt_sift_points_right')
+    rt_sift_points_left = np.asarray(
+        [] if _rt_left_value is None else _rt_left_value, dtype=np.float64).reshape(-1, 2)
+    rt_sift_points_right = np.asarray(
+        [] if _rt_right_value is None else _rt_right_value, dtype=np.float64).reshape(-1, 2)
+    rt_sift_inlier_count = min(len(rt_sift_points_left), len(rt_sift_points_right))
+    rt_sift_points_left = rt_sift_points_left[:rt_sift_inlier_count]
+    rt_sift_points_right = rt_sift_points_right[:rt_sift_inlier_count]
+    rt_sift_match_count = int(video_data.get('rt_sift_match_count', rt_sift_inlier_count))
+    rt_sift_applied = bool(video_data.get('rt_sift_applied', False))
+    rt_sift_role = video_data.get(
+        'rt_sift_role', 'final_rt' if rt_sift_applied else 'validation_only')
+    rt_sift_diagnostics_path = video_data.get('rt_sift_diagnostics_path')
     
     sift = cv2.SIFT_create(contrastThreshold=0.005)
     orb = cv2.ORB_create(nfeatures=1000)
@@ -1793,6 +1808,15 @@ def main():
             
             for line in COMBINATION_LOG:
                 f.write(line + "\n")
+            f.write("\n=== RT SIFT recoverPose inlier pixel pairs ===\n")
+            f.write(
+                f"role={rt_sift_role}, applied={rt_sift_applied}, "
+                f"inliers={rt_sift_inlier_count}/{rt_sift_match_count}\n")
+            for i, (pt_left, pt_right) in enumerate(
+                    zip(rt_sift_points_left, rt_sift_points_right), start=1):
+                f.write(
+                    f"#{i:03d}: left=({pt_left[0]:.3f}, {pt_left[1]:.3f}), "
+                    f"right=({pt_right[0]:.3f}, {pt_right[1]:.3f})\n")
             f.write("\n==================================================\n\n")
         print(f"💾 已初始化分析日誌至: {init_txt_path}")
     except Exception as e:
@@ -1810,6 +1834,15 @@ def main():
     scatter_grad_match = ax_B.scatter([], [], s=18, c='#0047AB', alpha=0.9, zorder=4)
     scatter_mid_grad_inject = ax_A.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
     scatter_mid_grad_match = ax_B.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
+    rt_sift_colors = np.linspace(0.0, 1.0, rt_sift_inlier_count) if rt_sift_inlier_count else []
+    scatter_rt_sift_A = ax_A.scatter(
+        rt_sift_points_left[:, 0], rt_sift_points_left[:, 1],
+        s=30, c=rt_sift_colors, cmap='turbo', vmin=0.0, vmax=1.0,
+        edgecolors='black', linewidths=0.35, alpha=0.95, zorder=7, visible=False)
+    scatter_rt_sift_B = ax_B.scatter(
+        rt_sift_points_right[:, 0], rt_sift_points_right[:, 1],
+        s=30, c=rt_sift_colors, cmap='turbo', vmin=0.0, vmax=1.0,
+        edgecolors='black', linewidths=0.35, alpha=0.95, zorder=7, visible=False)
     epi_line, = ax_B.plot([], [], 'yellow', lw=1, alpha=0.6, zorder=4)
     sift_rect = Rectangle((0, 0), 0, 0, linewidth=1, edgecolor='magenta', facecolor='none', linestyle='--', alpha=0.8, zorder=4)
     ax_B.add_patch(sift_rect)
@@ -2039,6 +2072,7 @@ def main():
                   'show_high_grad_points': False,
                   'show_mid_grad_points': False,
                   'show_aruco_overlay': False,
+                  'show_rt_sift_points': False,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
@@ -2976,10 +3010,12 @@ def main():
                 p_dist = (np.dot(current_cand['plane_n'], _p3d_plane - current_cand['plane_c']))
                 if auto_calc_active:
                     plane_dist_history.append(p_dist)
-                    p_dist_str = f"\nWound Height: {np.mean(plane_dist_history):.1f}mm"
+                    display_wound_height = np.mean(plane_dist_history) - DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                    p_dist_str = f"\nWound Height: {display_wound_height:.1f}mm"
                 else:
                     plane_dist_history.clear()
-                    p_dist_str = f"\nWound Height: {p_dist:.1f}mm"
+                    display_wound_height = p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                    p_dist_str = f"\nWound Height: {display_wound_height:.1f}mm"
             
             if res['depth'] is not None:
                 # 這裡的 res['depth'] 就是左相機坐標系下的 z 座標
@@ -3208,6 +3244,9 @@ def main():
     ax_btn_aruco_overlay = fig.add_axes([0.78, 0.74, 0.08, 0.04])
     btn_aruco_overlay = Button(ax_btn_aruco_overlay, "ArUco標記: Off", **btn_style)
 
+    ax_btn_rt_sift = fig.add_axes([0.88, 0.74, 0.08, 0.04])
+    btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
+
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
@@ -3231,7 +3270,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -3506,6 +3545,25 @@ def main():
     btn_aruco_overlay.on_clicked(on_aruco_overlay_toggle)
     apply_aruco_overlay_visibility()  # 預設隱藏 ArUco 偵測框與 ID 標籤
 
+    def on_rt_sift_toggle(event):
+        if rt_sift_inlier_count == 0:
+            print("⚠️ 此最佳影像對沒有可顯示的 RT SIFT recoverPose 內點。")
+            return
+        view_state['show_rt_sift_points'] = not view_state['show_rt_sift_points']
+        visible = view_state['show_rt_sift_points']
+        scatter_rt_sift_A.set_visible(visible)
+        scatter_rt_sift_B.set_visible(visible)
+        btn_rt_sift.label.set_text("RT SIFT: On" if visible else "RT SIFT: Off")
+        if visible:
+            role_text = "已套用於最終 RT" if rt_sift_applied else "僅參與 RT 驗證，最終保留 ArUco RT"
+            diagnostics_text = rt_sift_diagnostics_path or init_txt_path
+            print(
+                f"📍 RT SIFT recoverPose 內點: {rt_sift_inlier_count}/{rt_sift_match_count}，"
+                f"{role_text}；完整分層診斷已記錄於 {diagnostics_text}")
+        request_blit_refresh()
+
+    btn_rt_sift.on_clicked(on_rt_sift_toggle)
+
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
     btn_calc.on_clicked(on_calc)
@@ -3528,7 +3586,7 @@ def main():
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
-                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay]),
+                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]
@@ -3656,6 +3714,7 @@ def main():
         ax_A.draw_artist(scatter_mid_grad_ref_A)
         ax_A.draw_artist(scatter_grad_inject)
         ax_A.draw_artist(scatter_mid_grad_inject)
+        ax_A.draw_artist(scatter_rt_sift_A)
         for a in custom_plane_artists:
             ax_A.draw_artist(a)
         
@@ -3667,6 +3726,7 @@ def main():
             ax_B.draw_artist(scatter_mid_grad_ref_B)
             ax_B.draw_artist(scatter_grad_match)
             ax_B.draw_artist(scatter_mid_grad_match)
+            ax_B.draw_artist(scatter_rt_sift_B)
             ax_B.draw_artist(epi_line)
             ax_B.draw_artist(sift_rect)
             ax_B.draw_artist(sift_rect_center)

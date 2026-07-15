@@ -83,10 +83,10 @@ CAMERA_WIDTH          = 1920                       # 相機解析度寬
 CAMERA_HEIGHT         = 1080                       # 相機解析度高
 
 PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
-ACTUAL_MARKER_SIZE_MM =  10.0#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
+ACTUAL_MARKER_SIZE_MM =  8.25#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
-MIN_BASELINE_MM       = 40.0                        # 最小基準線限制 (mm)
+MIN_BASELINE_MM       = 20.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
 ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
@@ -132,6 +132,21 @@ CIRCLE_LABEL_INK_MIN_FRACTION = 0.26
 CIRCLE_LABEL_MIN_ELLIPSE_AXIS_RATIO = 0.45
 CIRCLE_LABEL_MIN_ELLIPSE_SUPPORT = 0.55
 CIRCLE_LABEL_ELLIPSE_VOTE_TOL = 0.28
+CIRCLE_LABEL_LOCAL_BG_KERNEL = 51
+CIRCLE_LABEL_LOCAL_DARK_DELTA = 16.0
+CIRCLE_LABEL_COLOR_SAT_MIN = 65
+CIRCLE_LABEL_COLOR_SAT_DELTA = 12.0
+CIRCLE_LABEL_VERY_DARK_GRAY_MAX = 78
+CIRCLE_LABEL_HOUGH_ENABLED = True
+CIRCLE_LABEL_HOUGH_DP = 1.2
+CIRCLE_LABEL_HOUGH_PARAM1 = 90
+CIRCLE_LABEL_HOUGH_PARAM2 = 13
+CIRCLE_LABEL_HOUGH_MAX_DIM = 960
+CIRCLE_LABEL_HOUGH_MAX_CANDIDATES = 128
+CIRCLE_LABEL_DISK_MIN_INK_FRACTION = 0.16
+CIRCLE_LABEL_DISK_MIN_CONTRAST = 14.0
+CIRCLE_LABEL_DISK_MIN_SAT_DELTA = 16.0
+CIRCLE_LABEL_DISK_MIN_COLOR_SAT = 58.0
 CIRCLE_LABEL_DEBUG_REASON_ORDER = (
     'accepted',
     'area',
@@ -147,6 +162,7 @@ CIRCLE_LABEL_DEBUG_REASON_ORDER = (
     'light ring',
     'low-sat ring',
     'fill ratio',
+    'disk evidence',
     'unknown',
 )
 CIRCLE_LABEL_DEBUG_REASON_COLORS_RGB = {
@@ -164,6 +180,7 @@ CIRCLE_LABEL_DEBUG_REASON_COLORS_RGB = {
     'light ring': (255, 130, 180),
     'low-sat ring': (80, 255, 255),
     'fill ratio': (190, 125, 35),
+    'disk evidence': (255, 185, 90),
     'unknown': (180, 180, 180),
 }
 
@@ -237,6 +254,54 @@ def ellipse_contour_vote_score(contour, ellipse, vote_tol=CIRCLE_LABEL_ELLIPSE_V
     axis_ratio = minor / major
     return support, axis_ratio
 
+def _circle_label_bg_kernel(gray):
+    h, w = gray.shape[:2]
+    max_kernel = max(5, min(h, w))
+    if max_kernel % 2 == 0:
+        max_kernel -= 1
+    kernel = min(int(CIRCLE_LABEL_LOCAL_BG_KERNEL), max_kernel)
+    if kernel % 2 == 0:
+        kernel -= 1
+    return max(5, kernel)
+
+def _circle_label_local_features(gray, hsv):
+    kernel = _circle_label_bg_kernel(gray)
+    gray_f = gray.astype(np.float32)
+    sat_f = hsv[:, :, 1].astype(np.float32)
+    local_gray = cv2.GaussianBlur(gray, (kernel, kernel), 0).astype(np.float32)
+    local_sat = cv2.GaussianBlur(hsv[:, :, 1], (kernel, kernel), 0).astype(np.float32)
+    dark_delta = local_gray - gray_f
+    sat_delta = sat_f - local_sat
+    return local_gray, local_sat, dark_delta, sat_delta
+
+def _circle_label_contour_from_disk(x, y, radius, num_points=64):
+    angles = np.linspace(0.0, 2.0 * np.pi, int(num_points), endpoint=False)
+    pts = np.stack([
+        float(x) + np.cos(angles) * float(radius),
+        float(y) + np.sin(angles) * float(radius),
+    ], axis=1)
+    return np.round(pts).astype(np.int32).reshape(-1, 1, 2)
+
+def _circle_label_radial_roi(center, radius, image_shape, inner_scale, ring_inner_scale, ring_outer_scale):
+    h, w = image_shape[:2]
+    x, y = float(center[0]), float(center[1])
+    outer_radius = float(radius) * float(ring_outer_scale)
+    x0 = max(0, int(np.floor(x - outer_radius)))
+    x1 = min(w, int(np.ceil(x + outer_radius)) + 1)
+    y0 = max(0, int(np.floor(y - outer_radius)))
+    y1 = min(h, int(np.ceil(y + outer_radius)) + 1)
+    if x0 >= x1 or y0 >= y1:
+        return None
+
+    local_y, local_x = np.ogrid[y0:y1, x0:x1]
+    dist2 = (local_x - x) ** 2 + (local_y - y) ** 2
+    inner = dist2 <= (float(radius) * float(inner_scale)) ** 2
+    ring = (
+        (dist2 >= (float(radius) * float(ring_inner_scale)) ** 2) &
+        (dist2 <= outer_radius ** 2)
+    )
+    return (slice(y0, y1), slice(x0, x1)), inner, ring
+
 def build_circle_label_ink_mask(bgr):
     if bgr is None or bgr.size == 0:
         return None, None, None
@@ -245,15 +310,167 @@ def build_circle_label_ink_mask(bgr):
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV) if bgr.ndim == 3 else cv2.cvtColor(cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2HSV)
     sat = hsv[:, :, 1]
     val = hsv[:, :, 2]
-    dark_or_colored_label = (
-        (gray < 118) |
-        ((sat > 90) & (gray < 150) & (val < 210))
+    _local_gray, _local_sat, dark_delta, sat_delta = _circle_label_local_features(gray, hsv)
+
+    # Absolute gray thresholds make shaded gray paper turn into one connected blob.
+    # Use local contrast for black disks and saturation contrast for colored disks.
+    very_dark = gray <= CIRCLE_LABEL_VERY_DARK_GRAY_MAX
+    locally_dark = (dark_delta >= CIRCLE_LABEL_LOCAL_DARK_DELTA) & (gray < 185)
+    colored = (
+        (sat >= CIRCLE_LABEL_COLOR_SAT_MIN) &
+        (
+            (sat_delta >= CIRCLE_LABEL_COLOR_SAT_DELTA) |
+            (dark_delta >= 5.0) |
+            (val <= 220)
+        )
     )
+    dark_or_colored_label = very_dark | locally_dark | colored
     ink_mask = dark_or_colored_label.astype(np.uint8) * 255
     ink_mask = cv2.morphologyEx(ink_mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    ink_mask = cv2.morphologyEx(ink_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
     return gray, hsv, ink_mask
 
-def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy):
+def evaluate_circle_label_disk_candidate(center, radius, gray, hsv, ink_mask, source='hough'):
+    h, w = gray.shape[:2]
+    x, y = float(center[0]), float(center[1])
+    radius = float(radius)
+    cnt = _circle_label_contour_from_disk(x, y, radius)
+    info = {
+        'contour': cnt,
+        'ellipse': ((x, y), (radius * 2.0, radius * 2.0), 0.0),
+        'accepted': False,
+        'reason': '',
+        'source': source,
+    }
+
+    if radius < CIRCLE_LABEL_MIN_RADIUS_PX or radius > CIRCLE_LABEL_MAX_RADIUS_PX:
+        info['reason'] = 'radius'
+        return None, info
+    if x < radius or y < radius or x > w - radius or y > h - radius:
+        info['reason'] = 'border'
+        return None, info
+
+    radial_roi = _circle_label_radial_roi((x, y), radius, gray.shape, 0.85, 1.18, 2.30)
+    if radial_roi is None:
+        info['reason'] = 'empty ring'
+        return None, info
+    roi, inner, ring = radial_roi
+    inner_count = int(np.count_nonzero(inner))
+    ring_count = int(np.count_nonzero(ring))
+    if inner_count == 0 or ring_count == 0:
+        info['reason'] = 'empty ring'
+        return None, info
+
+    gray_roi = gray[roi]
+    sat_roi = hsv[roi][:, :, 1]
+    ink_roi = ink_mask[roi]
+    inner_gray = gray_roi[inner].astype(np.float32)
+    ring_gray = gray_roi[ring].astype(np.float32)
+    inner_sat = sat_roi[inner].astype(np.float32)
+    ring_sat = sat_roi[ring].astype(np.float32)
+
+    ink_fraction = float(np.count_nonzero(ink_roi[inner]) / inner_count)
+    ring_light_fraction = float(np.count_nonzero(ring_gray > 65) / ring_count)
+    ring_low_sat_fraction = float(np.count_nonzero(ring_sat < 115) / ring_count)
+    gray_contrast = float(np.percentile(ring_gray, 60) - np.percentile(inner_gray, 40))
+    sat_delta = float(np.percentile(inner_sat, 70) - np.percentile(ring_sat, 60))
+    inner_sat_ref = float(np.percentile(inner_sat, 70))
+    inner_gray_std = float(np.std(inner_gray))
+
+    has_dark_disk = gray_contrast >= CIRCLE_LABEL_DISK_MIN_CONTRAST
+    has_colored_disk = (
+        inner_sat_ref >= CIRCLE_LABEL_DISK_MIN_COLOR_SAT and
+        sat_delta >= CIRCLE_LABEL_DISK_MIN_SAT_DELTA
+    )
+    has_mask_support = ink_fraction >= CIRCLE_LABEL_DISK_MIN_INK_FRACTION
+    is_aruco_like_texture = inner_gray_std > 55.0 and inner_sat_ref < CIRCLE_LABEL_DISK_MIN_COLOR_SAT
+    if is_aruco_like_texture or not (has_dark_disk or has_colored_disk or has_mask_support):
+        info['reason'] = 'disk evidence'
+        return None, info
+    if ring_light_fraction < CIRCLE_LABEL_LIGHT_RING_MIN_FRACTION:
+        info['reason'] = 'light ring'
+        return None, info
+    if ring_low_sat_fraction < CIRCLE_LABEL_LOW_SAT_RING_MIN_FRACTION:
+        info['reason'] = 'low-sat ring'
+        return None, info
+
+    score = (
+        1.0 +
+        min(1.0, ink_fraction * 2.0) +
+        min(1.0, max(0.0, gray_contrast) / 35.0) +
+        min(1.0, max(0.0, sat_delta) / 45.0) +
+        ring_light_fraction +
+        ring_low_sat_fraction
+    )
+    info.update({
+        'accepted': True,
+        'reason': 'accepted',
+        'center': (x, y),
+        'radius': radius,
+        'support': float(has_dark_disk or has_colored_disk or has_mask_support),
+        'axis_ratio': 1.0,
+        'ink_fraction': ink_fraction,
+        'ring_light_fraction': ring_light_fraction,
+        'ring_low_sat_fraction': ring_low_sat_fraction,
+        'gray_contrast': gray_contrast,
+        'sat_delta': sat_delta,
+        'fill_ratio': 1.0,
+    })
+    return ((x, y), radius, score), info
+
+def collect_circle_label_hough_candidates(gray, hsv, ink_mask):
+    if not CIRCLE_LABEL_HOUGH_ENABLED:
+        return [], []
+
+    h, w = gray.shape[:2]
+    scale = min(1.0, float(CIRCLE_LABEL_HOUGH_MAX_DIM) / float(max(h, w)))
+    if scale < 1.0:
+        small_size = (max(1, int(round(w * scale))), max(1, int(round(h * scale))))
+        gray_search = cv2.resize(gray, small_size, interpolation=cv2.INTER_AREA)
+        hsv_search = cv2.resize(hsv, small_size, interpolation=cv2.INTER_AREA)
+    else:
+        gray_search = gray
+        hsv_search = hsv
+
+    sat = hsv_search[:, :, 1].astype(np.float32)
+    _local_gray, _local_sat, dark_delta, sat_delta = _circle_label_local_features(gray_search, hsv_search)
+    dark_evidence = np.clip(dark_delta * 5.0, 0.0, 255.0)
+    color_evidence = np.where(
+        sat >= CIRCLE_LABEL_COLOR_SAT_MIN,
+        np.clip(np.maximum(sat, sat_delta * 6.0), 0.0, 255.0),
+        0.0
+    )
+    evidence = np.maximum(dark_evidence, color_evidence).astype(np.uint8)
+    evidence = cv2.GaussianBlur(evidence, (5, 5), 0)
+
+    min_radius = max(3, int(round(CIRCLE_LABEL_MIN_RADIUS_PX * 0.75 * scale)))
+    max_radius = max(min_radius + 1, int(round(CIRCLE_LABEL_MAX_RADIUS_PX * 1.05 * scale)))
+    min_dist = max(5, int(round(CIRCLE_LABEL_MIN_RADIUS_PX * 1.35 * scale)))
+    circles = cv2.HoughCircles(
+        evidence,
+        cv2.HOUGH_GRADIENT,
+        dp=CIRCLE_LABEL_HOUGH_DP,
+        minDist=min_dist,
+        param1=CIRCLE_LABEL_HOUGH_PARAM1,
+        param2=CIRCLE_LABEL_HOUGH_PARAM2,
+        minRadius=min_radius,
+        maxRadius=max_radius,
+    )
+    if circles is None:
+        return [], []
+
+    candidates = []
+    infos = []
+    hough_rows = circles[0][:CIRCLE_LABEL_HOUGH_MAX_CANDIDATES].astype(np.float32)
+    hough_rows /= float(scale)
+    for x, y, radius in hough_rows:
+        candidate, info = evaluate_circle_label_disk_candidate((x, y), radius, gray, hsv, ink_mask, source='hough')
+        infos.append(info)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates, infos
+
+def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask):
     h, w = gray.shape[:2]
     sat = hsv[:, :, 1]
     info = {'contour': cnt, 'ellipse': None, 'accepted': False, 'reason': ''}
@@ -297,16 +514,23 @@ def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy):
         info['reason'] = 'ellipse vote'
         return None, info
 
-    dist2 = (xx - x) ** 2 + (yy - y) ** 2
-    inner = dist2 <= (radius * 0.95) ** 2
-    ring = (dist2 >= (radius * 1.20) ** 2) & (dist2 <= (radius * 2.40) ** 2)
-    if np.count_nonzero(inner) == 0 or np.count_nonzero(ring) == 0:
+    radial_roi = _circle_label_radial_roi((x, y), radius, gray.shape, 0.95, 1.20, 2.40)
+    if radial_roi is None:
+        info['reason'] = 'empty ring'
+        return None, info
+    roi, inner, ring = radial_roi
+    inner_count = int(np.count_nonzero(inner))
+    ring_count = int(np.count_nonzero(ring))
+    if inner_count == 0 or ring_count == 0:
         info['reason'] = 'empty ring'
         return None, info
 
-    ink_fraction = float(np.count_nonzero(ink_mask[inner]) / np.count_nonzero(inner))
-    ring_light_fraction = float(np.count_nonzero(gray[ring] > 105) / np.count_nonzero(ring))
-    ring_low_sat_fraction = float(np.count_nonzero(sat[ring] < 115) / np.count_nonzero(ring))
+    gray_roi = gray[roi]
+    sat_roi = sat[roi]
+    ink_roi = ink_mask[roi]
+    ink_fraction = float(np.count_nonzero(ink_roi[inner]) / inner_count)
+    ring_light_fraction = float(np.count_nonzero(gray_roi[ring] > 65) / ring_count)
+    ring_low_sat_fraction = float(np.count_nonzero(sat_roi[ring] < 115) / ring_count)
     if ink_fraction < CIRCLE_LABEL_INK_MIN_FRACTION:
         info['reason'] = 'ink fraction'
         return None, info
@@ -341,20 +565,44 @@ def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy):
 def collect_circle_label_contours(bgr):
     gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
     if gray is None:
-        return {'gray': None, 'mask': None, 'contours': [], 'centers': _empty_points(), 'radii': np.empty((0,), dtype=np.float32)}
+        return {
+            'gray': None,
+            'mask': None,
+            'contours': [],
+            'hough': [],
+            'centers': _empty_points(),
+            'radii': np.empty((0,), dtype=np.float32),
+        }
 
-    contours, _ = cv2.findContours(ink_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    yy, xx = np.indices(gray.shape)
-    candidates = []
+    # The bright area outside the target can enclose every label in the contour
+    # hierarchy. RETR_EXTERNAL would then return only that one outer component.
+    contours, _ = cv2.findContours(ink_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    contour_candidates = []
     contour_infos = []
     for cnt in contours:
-        candidate, info = evaluate_circle_label_contour(cnt, gray, hsv, ink_mask, xx, yy)
+        candidate, info = evaluate_circle_label_contour(cnt, gray, hsv, ink_mask)
         contour_infos.append(info)
         if candidate is not None:
-            candidates.append(candidate)
+            contour_candidates.append(candidate)
 
+    # Hough is only a last-resort fallback. Mixing all of its trial circles into
+    # the contour result creates many large false candidates and a misleading
+    # contour debug overlay.
+    hough_candidates = []
+    hough_infos = []
+    if not contour_candidates:
+        hough_candidates, hough_infos = collect_circle_label_hough_candidates(gray, hsv, ink_mask)
+
+    candidates = contour_candidates + hough_candidates
     centers, radii = merge_circle_candidates(candidates)
-    return {'gray': gray, 'mask': ink_mask, 'contours': contour_infos, 'centers': centers, 'radii': radii}
+    return {
+        'gray': gray,
+        'mask': ink_mask,
+        'contours': contour_infos,
+        'hough': hough_infos,
+        'centers': centers,
+        'radii': radii,
+    }
 
 def detect_circle_label_centers(bgr):
     debug = collect_circle_label_contours(bgr)
@@ -1941,6 +2189,20 @@ def main():
     # 使用分析得到的相對 R, t 和 baseline
     R_r = video_data['R_rel']
     t_r = video_data['t_rel']
+    _rt_left_value = video_data.get('rt_sift_points_left')
+    _rt_right_value = video_data.get('rt_sift_points_right')
+    rt_sift_points_left = np.asarray(
+        [] if _rt_left_value is None else _rt_left_value, dtype=np.float64).reshape(-1, 2)
+    rt_sift_points_right = np.asarray(
+        [] if _rt_right_value is None else _rt_right_value, dtype=np.float64).reshape(-1, 2)
+    rt_sift_inlier_count = min(len(rt_sift_points_left), len(rt_sift_points_right))
+    rt_sift_points_left = rt_sift_points_left[:rt_sift_inlier_count]
+    rt_sift_points_right = rt_sift_points_right[:rt_sift_inlier_count]
+    rt_sift_match_count = int(video_data.get('rt_sift_match_count', rt_sift_inlier_count))
+    rt_sift_applied = bool(video_data.get('rt_sift_applied', False))
+    rt_sift_role = video_data.get(
+        'rt_sift_role', 'final_rt' if rt_sift_applied else 'validation_only')
+    rt_sift_diagnostics_path = video_data.get('rt_sift_diagnostics_path')
     
     sift = cv2.SIFT_create(contrastThreshold=0.005)
     orb = cv2.ORB_create(nfeatures=1000)
@@ -2166,6 +2428,15 @@ def main():
             
             for line in COMBINATION_LOG:
                 f.write(line + "\n")
+            f.write("\n=== RT SIFT recoverPose inlier pixel pairs ===\n")
+            f.write(
+                f"role={rt_sift_role}, applied={rt_sift_applied}, "
+                f"inliers={rt_sift_inlier_count}/{rt_sift_match_count}\n")
+            for i, (pt_left, pt_right) in enumerate(
+                    zip(rt_sift_points_left, rt_sift_points_right), start=1):
+                f.write(
+                    f"#{i:03d}: left=({pt_left[0]:.3f}, {pt_left[1]:.3f}), "
+                    f"right=({pt_right[0]:.3f}, {pt_right[1]:.3f})\n")
             f.write("\n==================================================\n\n")
         print(f"💾 已初始化分析日誌至: {init_txt_path}")
     except Exception as e:
@@ -2183,6 +2454,15 @@ def main():
     scatter_grad_match = ax_B.scatter([], [], s=18, c='#0047AB', alpha=0.9, zorder=4)
     scatter_mid_grad_inject = ax_A.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
     scatter_mid_grad_match = ax_B.scatter([], [], s=18, c='#FF8C00', alpha=0.9, zorder=4)
+    rt_sift_colors = np.linspace(0.0, 1.0, rt_sift_inlier_count) if rt_sift_inlier_count else []
+    scatter_rt_sift_A = ax_A.scatter(
+        rt_sift_points_left[:, 0], rt_sift_points_left[:, 1],
+        s=30, c=rt_sift_colors, cmap='turbo', vmin=0.0, vmax=1.0,
+        edgecolors='black', linewidths=0.35, alpha=0.95, zorder=7, visible=False)
+    scatter_rt_sift_B = ax_B.scatter(
+        rt_sift_points_right[:, 0], rt_sift_points_right[:, 1],
+        s=30, c=rt_sift_colors, cmap='turbo', vmin=0.0, vmax=1.0,
+        edgecolors='black', linewidths=0.35, alpha=0.95, zorder=7, visible=False)
     scatter_circle_A = ax_A.scatter(
         circle_centers_L[:, 0] if len(circle_centers_L) else [],
         circle_centers_L[:, 1] if len(circle_centers_L) else [],
@@ -2424,6 +2704,7 @@ def main():
                   'show_high_grad_points': False,
                   'show_mid_grad_points': False,
                   'show_aruco_overlay': False,
+                  'show_rt_sift_points': False,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
@@ -3631,6 +3912,9 @@ def main():
     ax_btn_contour_debug = fig.add_axes([0.88, 0.74, 0.08, 0.04])
     btn_contour_debug = Button(ax_btn_contour_debug, "Show Contours", **btn_style)
 
+    ax_btn_rt_sift = fig.add_axes([0.88, 0.68, 0.08, 0.04])
+    btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
+
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
@@ -3654,7 +3938,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug, btn_rt_sift]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -3964,6 +4248,25 @@ def main():
     btn_aruco_overlay.on_clicked(on_aruco_overlay_toggle)
     apply_aruco_overlay_visibility()  # 預設隱藏 ArUco 偵測框與 ID 標籤
 
+    def on_rt_sift_toggle(event):
+        if rt_sift_inlier_count == 0:
+            print("⚠️ 此最佳影像對沒有可顯示的 RT SIFT recoverPose 內點。")
+            return
+        view_state['show_rt_sift_points'] = not view_state['show_rt_sift_points']
+        visible = view_state['show_rt_sift_points']
+        scatter_rt_sift_A.set_visible(visible)
+        scatter_rt_sift_B.set_visible(visible)
+        btn_rt_sift.label.set_text("RT SIFT: On" if visible else "RT SIFT: Off")
+        if visible:
+            role_text = "已套用於最終 RT" if rt_sift_applied else "僅參與 RT 驗證，最終保留 ArUco RT"
+            diagnostics_text = rt_sift_diagnostics_path or init_txt_path
+            print(
+                f"📍 RT SIFT recoverPose 內點: {rt_sift_inlier_count}/{rt_sift_match_count}，"
+                f"{role_text}；完整分層診斷已記錄於 {diagnostics_text}")
+        request_blit_refresh()
+
+    btn_rt_sift.on_clicked(on_rt_sift_toggle)
+
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
     btn_calc.on_clicked(on_calc)
@@ -3987,7 +4290,7 @@ def main():
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
-                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay]),
+                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]
@@ -4115,6 +4418,7 @@ def main():
         ax_A.draw_artist(scatter_mid_grad_ref_A)
         ax_A.draw_artist(scatter_grad_inject)
         ax_A.draw_artist(scatter_mid_grad_inject)
+        ax_A.draw_artist(scatter_rt_sift_A)
         ax_A.draw_artist(scatter_circle_A)
         for a in custom_plane_artists:
             ax_A.draw_artist(a)
@@ -4127,6 +4431,7 @@ def main():
             ax_B.draw_artist(scatter_mid_grad_ref_B)
             ax_B.draw_artist(scatter_grad_match)
             ax_B.draw_artist(scatter_mid_grad_match)
+            ax_B.draw_artist(scatter_rt_sift_B)
             ax_B.draw_artist(scatter_circle_B)
             ax_B.draw_artist(epi_line)
             ax_B.draw_artist(sift_rect)

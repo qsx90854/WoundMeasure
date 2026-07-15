@@ -11,6 +11,106 @@
 
 ---
 
+## 2026-07-14 - 獨立 RT SIFT 分層診斷報告
+
+### 修改目的
+
+- 將最佳影像對的 SIFT RT 處理過程輸出成可獨立分享的 TXT，釐清特徵是在偵測、匹配、Essential RANSAC、recoverPose 或最終仲裁哪一層被淘汰。
+- 避免只看到少量 recoverPose 點時，誤判為這些點一定參與了最終 RT。
+
+### 影響檔案
+
+- `Algorithm/video_pose_analysis.py`
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py`
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_circle.py`
+
+### 實作內容
+
+- 每次影片分析會在影片旁建立 `<影片檔名>_rt_sift_diagnostics.txt`。
+- 報告包含最佳左右影格索引、baseline、`final_rt` / `validation_only`、`rt_sift_applied` 與 `rt_reliable`。
+- 分層記錄左右 SIFT keypoint/descriptor 數量、KNN 數量、ratio test、mutual match、空間平衡、Essential RANSAC、recoverPose 與最終實際使用點數。
+- 記錄 inlier ratio、grid/hull coverage、parallax、homography ratio、planar degeneracy、feature/marker 誤差、旋轉一致性、pair score 與目前生效門檻。
+- 以 `6 x 4` 網格輸出原始 keypoint、候選匹配、Essential inlier 與 recoverPose inlier 的左右分布。
+- `MATCH_TABLE` 逐筆輸出左右去畸變 pixel 座標，以及 `essential_inlier`、`recoverpose_inlier`、`used_by_final_rt` 三個旗標。
+- Zebra 與 Circle 的 `RT SIFT` 按鈕訊息會顯示這份獨立診斷檔路徑。
+- 本次只新增診斷資料旁路，不修改匹配門檻、配對排序、RT 仲裁或深度計算。
+
+### 驗證
+
+- 三個修改程式的 Python 語法檢查通過。
+- 使用 `test_video_Zebra/video_20260601_172436.mp4` 完成端到端測試，成功建立 `video_20260601_172436_rt_sift_diagnostics.txt`。
+- 測試報告記錄 `1910/1926` 個左右 keypoint、`211` 個 ratio pass、`193` 個 mutual pass、`184` 個空間平衡候選與 `104` 個 final RT inlier。
+- `MATCH_TABLE` 共 `184` 筆，與 `rt_sift_match_count` 完全一致；必要 section 與各階段欄位均已檢查。
+
+### 已知限制
+
+- 目前報告只針對最終選定的最佳影像對，不逐一輸出所有 top-K 與次佳影像對。
+- 診斷檔可能包含數百筆配對座標，適合直接附檔分析，不建議只截取尾端片段。
+
+---
+
+## 2026-07-14 - RT SIFT 內點座標記錄與顯示開關
+
+### 修改目的
+
+- 記錄最佳左右影像對中，實際通過 `findEssentialMat` / `recoverPose` 的 SIFT inlier pixel 座標。
+- 讓使用者能直接在 Zebra 與 Zebra Circle 的畫面上檢查支撐特徵 RT 的位置與空間分布。
+- 明確區分特徵解已套用到最終 RT，或只參與驗證後由仲裁流程保留 ArUco RT。
+
+### 影響檔案
+
+- `Algorithm/video_pose_analysis.py`
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py`
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_circle.py`
+
+### 實作內容
+
+- `refine_rt_with_features()` 額外回傳特徵解是否被最終 RT 採用；RT 計算公式與仲裁門檻未變更。
+- 最佳影像對的分析結果新增：
+  - `rt_sift_points_left`：UI 左圖 `frame_B` 的 recoverPose inlier 座標。
+  - `rt_sift_points_right`：UI 右圖 `frame_A` 的對應 inlier 座標。
+  - `rt_sift_match_count`、`rt_sift_inlier_count`、`rt_sift_applied`、`rt_sift_role`。
+- 兩支 UI 新增 `RT SIFT: Off/On` 按鈕。開啟後，左右對應點使用相同彩虹色序列顯示，便於觀察是否集中在單側或小區域。
+- 顯示的是 recoverPose 最終內點，不包含 RANSAC 排除的候選匹配；按鈕訊息會顯示 `inlier / candidate match` 數量。
+- 原本影片旁的分析 `.txt` 新增 `RT SIFT recoverPose inlier pixel pairs` 區段，逐筆記錄左右浮點 pixel 座標及 `final_rt` / `validation_only` 狀態。
+
+### 驗證
+
+- 專案虛擬環境的 Python 對三個修改程式執行無 `.pyc` 寫入的語法編譯檢查，全部通過。
+- Matplotlib headless 測試確認內點數為 0 時仍可建立隱藏 scatter，不會阻止 UI 啟動。
+- 靜態確認兩支 UI 的左圖座標對應 `frame_B`、右圖座標對應 `frame_A`，與 RT 模組的 `idx_left` / `idx_right` 一致。
+- 使用 `test_video_Zebra/video_20260601_172436.mp4` 完成共享 RT 模組端到端測試：最佳配對 F41/F56 回傳左右各 `104 x 2` 座標，候選匹配 `184`、recoverPose 內點 `104`，且 `rt_sift_applied=True`、`rt_sift_role=final_rt`。
+
+### 已知限制
+
+- 目前按鈕只顯示最終最佳影像對的 RT SIFT 內點，不顯示次佳候選對。
+- 疊圖座標屬於啟動分析選出的原始最佳左右影格；若之後在 UI 改鎖其他影格，這組座標不代表新影格的特徵位置。
+- 本次修改是可觀測性與紀錄功能，不會直接改變 RT 數值或深度精度。
+
+---
+
+## 2026-07-14 - Zebra 預設 Wound Height 顯示 offset
+
+### 修改目的
+
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra.py` 在沒有設定 Custom Plane 時，Wound Height 顯示值需要扣除固定的 `10.0 mm`。
+- 使用者已完成 Custom Plane 擬合時，維持原本的 Custom Plane 高度，不套用此 offset。
+
+### 實作內容
+
+- 新增全域可調常數 `DEFAULT_WOUND_HEIGHT_OFFSET_MM = 10.0`。
+- 預設 marker plane 的單次 Wound Height 顯示改為 `p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM`。
+- 連續計算模式先計算原始高度平均，再從顯示平均值扣除相同 offset。
+- 此修改只影響 UI 的 `Wound Height` 顯示，不改變 RT、baseline、三角化 3D 點、Camera-to-Selected Position Distance、Custom Plane 高度或儲存資料。
+- `depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_circle.py` 未修改。
+
+### 驗證
+
+- 未設定 Custom Plane：Wound Height 顯示扣除 `10.0 mm`。
+- 已設定 Custom Plane：`Wound Height (Custom Plane)` 不扣除 offset。
+
+---
+
 ## 2026-07-11 - ArUco 與全畫面特徵融合 RT 優化
 
 ### 修改目的

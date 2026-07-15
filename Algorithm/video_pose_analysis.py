@@ -309,6 +309,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         return selected
 
     match_cache = {}
+    match_diagnostics_cache = {}
 
     def get_pair_matches(idx_left, idx_right):
         """左(結尾段)→右(開頭段) 的 SIFT 匹配 (ratio + mutual)，回傳已去畸變至 K_L 座標的點對。"""
@@ -317,26 +318,42 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             return match_cache[key]
         kpL, desL = get_frame_features(idx_left)
         kpR, desR = get_frame_features(idx_right)
+        diagnostics = {
+            'left_keypoint_count': int(len(kpL)),
+            'right_keypoint_count': int(len(kpR)),
+            'left_descriptor_count': 0 if desL is None else int(len(desL)),
+            'right_descriptor_count': 0 if desR is None else int(len(desR)),
+            'knn_pair_count': 0,
+            'ratio_pass_count': 0,
+            'mutual_pass_count': 0,
+            'spatially_balanced_count': 0,
+        }
         result = None
         if desL is not None and desR is not None and len(desL) >= 8 and len(desR) >= 8:
             bf = cv2.BFMatcher(cv2.NORM_L2)
             knn_lr = bf.knnMatch(desL, desR, k=2)
             knn_rl = bf.knnMatch(desR, desL, k=1)
+            diagnostics['knn_pair_count'] = int(len(knn_lr))
             reverse_best = {m[0].queryIdx: m[0].trainIdx for m in knn_rl if m}
             good = []
             for pair in knn_lr:
                 if len(pair) < 2:
                     continue
                 m, n = pair
-                if m.distance < FEATURE_MATCH_RATIO * n.distance and reverse_best.get(m.trainIdx) == m.queryIdx:
-                    good.append(m)
+                if m.distance < FEATURE_MATCH_RATIO * n.distance:
+                    diagnostics['ratio_pass_count'] += 1
+                    if reverse_best.get(m.trainIdx) == m.queryIdx:
+                        good.append(m)
+            diagnostics['mutual_pass_count'] = int(len(good))
             if len(good) >= 8:
                 good = spatially_balance_matches(good, kpL, kpR)
+                diagnostics['spatially_balanced_count'] = int(len(good))
                 ptsL = np.float32([kpL[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
                 ptsR = np.float32([kpR[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
                 ptsL_u = cv2.undistortPoints(ptsL, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
                 ptsR_u = cv2.undistortPoints(ptsR, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
                 result = (ptsL_u, ptsR_u)
+        match_diagnostics_cache[key] = diagnostics
         match_cache[key] = result
         return result
 
@@ -422,6 +439,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         essential_candidates = [E[i:i + 3] for i in range(0, E.shape[0], 3)]
         if mask_e is None:
             mask_e = np.ones((len(pts_left), 1), dtype=np.uint8)
+        essential_inlier_mask = np.asarray(mask_e).reshape(-1) != 0
+        if len(essential_inlier_mask) != len(pts_left):
+            essential_inlier_mask = np.ones(len(pts_left), dtype=bool)
+            mask_e = essential_inlier_mask.astype(np.uint8).reshape(-1, 1)
         best = None
         for E_cand in essential_candidates:
             try:
@@ -487,6 +508,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         result = {
             'R': R_E,
             't': t_E.reshape(3, 1),
+            'essential_inlier_mask': essential_inlier_mask,
+            'essential_inlier_count': int(np.count_nonzero(essential_inlier_mask)),
             'inlier_mask': inlier_mask,
             'match_count': int(len(pts_left)),
             'inlier_count': int(n_in),
@@ -601,14 +624,14 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
     def refine_rt_with_features(idx_left, idx_right, R_aruco, t_aruco, corners_left_u, corners_right_u,
                                 tag="", alt_rotations=None, single_marker=False):
-        """Fuse marker scale with a spatially validated, marker-independent feature pose."""
+        """Fuse marker scale with a spatially validated feature pose and report adoption."""
         if not ENABLE_FEATURE_RT_REFINE:
-            return R_aruco, t_aruco
+            return R_aruco, t_aruco, False
         matches_lr = get_pair_matches(idx_left, idx_right)
         geometry = estimate_feature_geometry(idx_left, idx_right)
         if matches_lr is None or geometry is None:
             log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，保留 ArUco RT。")
-            return R_aruco, t_aruco
+            return R_aruco, t_aruco, False
         ptsL_u, ptsR_u = matches_lr
         if not geometry['quality_ok']:
             reason = "平面/低視差退化" if geometry['planar_degenerate'] else "內點或空間覆蓋不足"
@@ -617,7 +640,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 f"inliers={geometry['inlier_count']}/{geometry['match_count']}, "
                 f"grid={geometry['grid_coverage']:.2f}, hull={geometry['hull_coverage']:.3f}, "
                 f"parallax={geometry['parallax_deg']:.3f}°，保留 ArUco RT。")
-            return R_aruco, t_aruco
+            return R_aruco, t_aruco, False
         R_E = geometry['R']
         t_E = geometry['t']
         n_in = geometry['inlier_count']
@@ -636,7 +659,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             feature_override = geometry['strong'] and ang <= FEATURE_ROT_DIFF_HARD_MAX_DEG
             if matched_alt is None and not feature_override:
                 log_and_print(f"⚠️ [RT精修{tag}] 特徵解與 ArUco 解及所有分支替代解差異過大 (dR={ang:.1f}°)，保留 ArUco RT。")
-                return R_aruco, t_aruco
+                return R_aruco, t_aruco, False
             if matched_alt is not None:
                 log_and_print(f"🔀 [RT精修{tag}] 特徵解與另一 IPPE 分支一致 (dR={matched_alt:.1f}°)，交由特徵/標籤共同仲裁。")
             else:
@@ -657,7 +680,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             log_and_print(f"⚠️ [RT精修{tag}] {scale_reason}，baseline 沿用 ArUco 值 {baseline_val:.2f} mm。")
         if t_dot <= 0 and bsl_tri is None:
             log_and_print(f"⚠️ [RT精修{tag}] 特徵平移方向與 marker 相反且無邊長尺度驗證，保留 ArUco RT。")
-            return R_aruco, t_aruco
+            return R_aruco, t_aruco, False
         t_hybrid = (t_E.flatten() * baseline_val).reshape(3, 1)
 
         feat_a = rt_epipolar_residual(ptsL_u, ptsR_u, R_a64, t_a64)
@@ -677,11 +700,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 f"標籤極線 {mk_str}px | dR={ang:.2f}° | E內點={n_in}/{len(ptsL_u)} | "
                 f"grid={geometry['grid_coverage']:.2f}, parallax={geometry['parallax_deg']:.3f}°"
             )
-            return R_E.astype(np.asarray(R_aruco).dtype), t_hybrid.astype(np.asarray(t_aruco).dtype)
+            return (R_E.astype(np.asarray(R_aruco).dtype),
+                    t_hybrid.astype(np.asarray(t_aruco).dtype), True)
         log_and_print(
             f"ℹ️ [RT精修{tag}] 混合解未通過仲裁 (特徵 {feat_a:.3f}→{feat_h:.3f}px, 標籤 {mk_str}px)，保留 ArUco RT。"
         )
-        return R_aruco, t_aruco
+        return R_aruco, t_aruco, False
 
     def compute_pair_quality_score(err, item_s, item_e, baseline_mm):
         shared_markers = set(item_s['corners'].keys()).intersection(item_e['corners'].keys())
@@ -1045,19 +1069,36 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
     # Feature geometry determines R/t direction; all valid marker edges independently anchor metric scale.
     _best_alts = build_alt_rotations(best_start, best_end, R_rel) if few_marker_mode else None
-    R_rel, t_rel = refine_rt_with_features(
+    R_rel, t_rel, best_feature_rt_applied = refine_rt_with_features(
         best_end['idx'], best_start['idx'], R_rel, t_rel,
         cornersB_undist, cornersA_undist, tag="-best",
         alt_rotations=_best_alts, single_marker=few_marker_mode
     )
     baseline = float(np.linalg.norm(t_rel))
 
+    # Keep the exact Essential/recoverPose inliers in undistorted display-pixel coordinates.
+    # pts_left belongs to frame_B (UI left); pts_right belongs to frame_A (UI right).
+    rt_sift_points_left = np.empty((0, 2), dtype=np.float64)
+    rt_sift_points_right = np.empty((0, 2), dtype=np.float64)
+    best_feature_matches = get_pair_matches(best_end['idx'], best_start['idx'])
+    best_feature_geometry = estimate_feature_geometry(best_end['idx'], best_start['idx'])
+    if best_feature_matches is not None and best_feature_geometry is not None:
+        inlier_mask = np.asarray(best_feature_geometry['inlier_mask'], dtype=bool).reshape(-1)
+        if len(inlier_mask) == len(best_feature_matches[0]):
+            rt_sift_points_left = np.asarray(best_feature_matches[0][inlier_mask], dtype=np.float64)
+            rt_sift_points_right = np.asarray(best_feature_matches[1][inlier_mask], dtype=np.float64)
+    rt_sift_role = "final_rt" if best_feature_rt_applied else "validation_only"
+    log_and_print(
+        f"📍 [RT SIFT像素] recoverPose 內點 {len(rt_sift_points_left)}/"
+        f"{0 if best_feature_matches is None else len(best_feature_matches[0])} | role={rt_sift_role}"
+    )
+
     # 包裝次優額外右圖組 (同樣做混合 RT 精修)
     extra_candidates_info = []
     for pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics in selected_extras:
         cornersA_e_undist = undistort_corners_dict(item_s['corners'])
         _extra_alts = build_alt_rotations(item_s, best_end, R_rel_c) if few_marker_mode else None
-        R_rel_c, t_rel_c = refine_rt_with_features(
+        R_rel_c, t_rel_c, _extra_feature_rt_applied = refine_rt_with_features(
             best_end['idx'], item_s['idx'], R_rel_c, t_rel_c,
             cornersB_undist, cornersA_e_undist, tag=f"-F{item_s['idx']}",
             alt_rotations=_extra_alts, single_marker=few_marker_mode
@@ -1118,6 +1159,144 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         and np.isfinite(best_reproj_err)
         and best_reproj_err < PAIR_EPI_EXTRA_PX
         and best_pair_metrics.get('feature_quality_ok', False))
+
+    def _diagnostic_grid(points):
+        grid = np.zeros((FEATURE_GRID_ROWS, FEATURE_GRID_COLS), dtype=np.int32)
+        for point in np.asarray(points, dtype=np.float64).reshape(-1, 2):
+            cell_x, cell_y = feature_cell(point)
+            grid[cell_y, cell_x] += 1
+        return grid
+
+    def _write_grid_section(file_obj, title, points):
+        file_obj.write(f"{title}\n")
+        for row in _diagnostic_grid(points):
+            file_obj.write("  " + " ".join(f"{int(value):4d}" for value in row) + "\n")
+
+    # This file is intentionally separate from the general analysis log so it can be
+    # attached as a compact, self-contained report when feature RT behaves unexpectedly.
+    rt_sift_diagnostics_path = os.path.splitext(video_path)[0] + "_rt_sift_diagnostics.txt"
+    try:
+        kp_diag_left, _des_diag_left = get_frame_features(best_end['idx'])
+        kp_diag_right, _des_diag_right = get_frame_features(best_start['idx'])
+        raw_keypoints_left = np.asarray([kp.pt for kp in kp_diag_left], dtype=np.float64).reshape(-1, 2)
+        raw_keypoints_right = np.asarray([kp.pt for kp in kp_diag_right], dtype=np.float64).reshape(-1, 2)
+        if best_feature_matches is None:
+            candidate_points_left = np.empty((0, 2), dtype=np.float64)
+            candidate_points_right = np.empty((0, 2), dtype=np.float64)
+        else:
+            candidate_points_left = np.asarray(best_feature_matches[0], dtype=np.float64).reshape(-1, 2)
+            candidate_points_right = np.asarray(best_feature_matches[1], dtype=np.float64).reshape(-1, 2)
+
+        candidate_count = min(len(candidate_points_left), len(candidate_points_right))
+        candidate_points_left = candidate_points_left[:candidate_count]
+        candidate_points_right = candidate_points_right[:candidate_count]
+        essential_mask = np.zeros(candidate_count, dtype=bool)
+        recover_mask = np.zeros(candidate_count, dtype=bool)
+        if best_feature_geometry is not None:
+            essential_mask_src = np.asarray(
+                best_feature_geometry.get('essential_inlier_mask', []), dtype=bool).reshape(-1)
+            recover_mask_src = np.asarray(
+                best_feature_geometry.get('inlier_mask', []), dtype=bool).reshape(-1)
+            if len(essential_mask_src) == candidate_count:
+                essential_mask = essential_mask_src
+            if len(recover_mask_src) == candidate_count:
+                recover_mask = recover_mask_src
+
+        match_diagnostics = match_diagnostics_cache.get(
+            (best_end['idx'], best_start['idx']), {})
+        geometry_diagnostics = best_feature_geometry or {}
+        with open(rt_sift_diagnostics_path, 'w', encoding='utf-8') as diag_file:
+            diag_file.write("=== RT SIFT DIAGNOSTICS ===\n")
+            diag_file.write("This report describes the selected best frame pair only.\n")
+            diag_file.write("Coordinates are undistorted display pixels: frame_B/UI-left -> frame_A/UI-right.\n\n")
+
+            diag_file.write("[SELECTED_PAIR]\n")
+            diag_file.write(f"video={video_path}\n")
+            diag_file.write(f"frame_left_B={best_end['idx']}\n")
+            diag_file.write(f"frame_right_A={best_start['idx']}\n")
+            diag_file.write(f"shared_markers={best_pair_metrics.get('shared_markers', 0)}\n")
+            diag_file.write(f"baseline_mm={baseline:.6f}\n")
+            diag_file.write(f"rt_sift_role={rt_sift_role}\n")
+            diag_file.write(f"rt_sift_applied={bool(best_feature_rt_applied)}\n")
+            diag_file.write(f"rt_reliable={bool(best_pair_metrics.get('rt_reliable', False))}\n\n")
+
+            diag_file.write("[PIPELINE_COUNTS]\n")
+            for field in (
+                    'left_keypoint_count', 'right_keypoint_count',
+                    'left_descriptor_count', 'right_descriptor_count',
+                    'knn_pair_count', 'ratio_pass_count', 'mutual_pass_count',
+                    'spatially_balanced_count'):
+                diag_file.write(f"{field}={int(match_diagnostics.get(field, 0))}\n")
+            diag_file.write(f"essential_ransac_inlier_count={int(np.count_nonzero(essential_mask))}\n")
+            diag_file.write(f"recoverpose_inlier_count={int(np.count_nonzero(recover_mask))}\n")
+            diag_file.write(
+                f"final_rt_sift_point_count="
+                f"{int(np.count_nonzero(recover_mask)) if best_feature_rt_applied else 0}\n\n")
+
+            diag_file.write("[FEATURE_QUALITY]\n")
+            quality_fields = (
+                'match_count', 'essential_inlier_count', 'inlier_count', 'inlier_ratio',
+                'grid_coverage', 'hull_coverage', 'parallax_deg', 'homography_ratio',
+                'planar_degenerate', 'model_epi_px', 'quality_penalty', 'quality_ok', 'strong')
+            for field in quality_fields:
+                diag_file.write(f"{field}={geometry_diagnostics.get(field, 'N/A')}\n")
+            diag_file.write(f"marker_rt_feature_epi_px={best_pair_metrics.get('feat_epi_px', 'N/A')}\n")
+            diag_file.write(f"final_feature_epi_px={best_pair_metrics.get('final_feature_epi_px', 'N/A')}\n")
+            diag_file.write(f"marker_pnp_reproj_px={marker_reproj_err if marker_reproj_err is not None else 'N/A'}\n")
+            diag_file.write(f"feature_rot_agreement_deg={best_pair_metrics.get('feature_rot_agreement_deg', 'N/A')}\n")
+            diag_file.write(f"pair_score={best_pair_metrics.get('score', 'N/A')}\n")
+            diag_file.write(f"combined_score={best_pair_metrics.get('combined_score', 'N/A')}\n")
+            diag_file.write(f"sharpness_min={best_pair_metrics.get('sharpness_min', 'N/A')}\n")
+            diag_file.write(f"marker_coverage={best_pair_metrics.get('coverage', 'N/A')}\n\n")
+
+            diag_file.write("[ACTIVE_THRESHOLDS]\n")
+            diag_file.write(f"sift_max_keypoints={FEATURE_MAX_KEYPOINTS}\n")
+            diag_file.write(f"sift_contrast_threshold=0.01\n")
+            diag_file.write(f"match_ratio={FEATURE_MATCH_RATIO}\n")
+            diag_file.write(f"ransac_threshold_px={FEATURE_E_RANSAC_THRESH_PX}\n")
+            diag_file.write(f"min_matches={FEATURE_MIN_MATCHES}\n")
+            diag_file.write(f"min_inlier_ratio={FEATURE_MIN_INLIER_RATIO}\n")
+            diag_file.write(f"min_grid_coverage={FEATURE_MIN_GRID_COVERAGE}\n")
+            diag_file.write(f"min_hull_coverage={FEATURE_MIN_HULL_COVERAGE}\n")
+            diag_file.write(f"min_parallax_deg={FEATURE_MIN_PARALLAX_DEG}\n")
+            diag_file.write(f"strong_inliers={FEATURE_STRONG_INLIERS}\n")
+            diag_file.write(f"strong_grid_coverage={FEATURE_STRONG_GRID_COVERAGE}\n\n")
+
+            diag_file.write("[FINAL_RT_LEFT_TO_RIGHT]\n")
+            for row_idx, row in enumerate(np.asarray(R_rel, dtype=np.float64).reshape(3, 3)):
+                diag_file.write(f"R{row_idx}=" + " ".join(f"{value:.12g}" for value in row) + "\n")
+            diag_file.write(
+                "t_mm=" + " ".join(
+                    f"{value:.12g}" for value in np.asarray(t_rel, dtype=np.float64).reshape(3)) + "\n\n")
+
+            diag_file.write(f"[GRID_COUNTS_{FEATURE_GRID_COLS}x{FEATURE_GRID_ROWS}]\n")
+            _write_grid_section(diag_file, "raw_keypoints_left", raw_keypoints_left)
+            _write_grid_section(diag_file, "raw_keypoints_right", raw_keypoints_right)
+            _write_grid_section(diag_file, "balanced_candidates_left", candidate_points_left)
+            _write_grid_section(diag_file, "balanced_candidates_right", candidate_points_right)
+            _write_grid_section(diag_file, "essential_inliers_left", candidate_points_left[essential_mask])
+            _write_grid_section(diag_file, "essential_inliers_right", candidate_points_right[essential_mask])
+            _write_grid_section(diag_file, "recoverpose_inliers_left", candidate_points_left[recover_mask])
+            _write_grid_section(diag_file, "recoverpose_inliers_right", candidate_points_right[recover_mask])
+            diag_file.write("\n")
+
+            diag_file.write("[MATCH_TABLE]\n")
+            diag_file.write(
+                "index,left_x,left_y,right_x,right_y,essential_inlier,"
+                "recoverpose_inlier,used_by_final_rt\n")
+            for index, (point_left, point_right) in enumerate(
+                    zip(candidate_points_left, candidate_points_right), start=1):
+                match_idx = index - 1
+                used_by_final_rt = bool(best_feature_rt_applied and recover_mask[match_idx])
+                diag_file.write(
+                    f"{index},{point_left[0]:.6f},{point_left[1]:.6f},"
+                    f"{point_right[0]:.6f},{point_right[1]:.6f},"
+                    f"{int(essential_mask[match_idx])},{int(recover_mask[match_idx])},"
+                    f"{int(used_by_final_rt)}\n")
+        log_and_print(f"🧾 [RT SIFT診斷] 已輸出: {rt_sift_diagnostics_path}")
+    except Exception as diag_error:
+        log_and_print(f"⚠️ [RT SIFT診斷] 輸出失敗: {diag_error}")
+        rt_sift_diagnostics_path = None
         
     if progress_callback:
         progress_callback(92, "階段 3/6：影像校正...")
@@ -1191,6 +1370,13 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         'min_reproj_err': best_reproj_err,
         'marker_reproj_err': marker_reproj_err,
         'rt_quality': best_pair_metrics,
+        'rt_sift_points_left': rt_sift_points_left,
+        'rt_sift_points_right': rt_sift_points_right,
+        'rt_sift_match_count': 0 if best_feature_matches is None else int(len(best_feature_matches[0])),
+        'rt_sift_inlier_count': int(len(rt_sift_points_left)),
+        'rt_sift_applied': bool(best_feature_rt_applied),
+        'rt_sift_role': rt_sift_role,
+        'rt_sift_diagnostics_path': rt_sift_diagnostics_path,
         'global_plane_n': global_plane_n,
         'global_plane_c': global_plane_c,
         'best_kpB': kb,

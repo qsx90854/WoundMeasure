@@ -854,7 +854,7 @@ def record_video_from_camera():
         os.makedirs(save_path)
 
     # 開啟相機
-    cap = cv2.VideoCapture(0, cv2.CAP_MSMF)
+    cap = cv2.VideoCapture(1, cv2.CAP_MSMF)
     if not cap.isOpened():
         print("❌ 錯誤：無法開啟相機")
         return None
