@@ -98,6 +98,7 @@ CLAHE_CLIP_LIMIT      = 2.0                        # CLAHE 對比度限制閾值
 CLAHE_TILE_GRID_SIZE  = (8, 8)                     # CLAHE 分塊大小 (8, 8) 代表 8x8 的網格
 ENABLE_IMPROVED_MATCHING_DEFAULT = False          # 預設是否啟用改良版特徵匹配流程 (高光遮罩 + Harris Corner + 收緊幾何門檻 + 金字塔 ECC)
 SHOW_SCORE_DEFAULT = False                         # 預設是否顯示匹配品質與信心分數
+SHOW_LEFT_REPROJECTION_CIRCLE = False              # 是否顯示右圖匹配點反投影回左圖的粉紅虛線圓圈
 DISABLE_EXTRA_CANDS_ECC_PRECISE = True            # 預設是否在多影格融合的次要影格中停用 ECC 與 Precise 精修 (設為 True 可大幅提升點選反應速度)
 ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT = False        # 用候選點只估初始範圍，再沿點選點自己的極線重新搜尋最佳匹配
 EPIPOLAR_SEARCH_HALF_LEN = 55                      # 極線方向搜尋半長度 (pixels)
@@ -1822,13 +1823,13 @@ def ui_progress_status_english(status_text):
     return text
 
 def ui_failure_reason_english(reason):
-    text = str(reason or "No matching point")
+    text = str(reason or "No Valid Depth")
     replacements = (
         ("未偵測到 ArUco", "ArUco not detected"),
         ("視差不合規範", "Baseline out of range"),
         ("追蹤影格數不足", "Not enough tracked frames"),
         ("三角化失敗", "Triangulation failed"),
-        ("無匹配點", "No matching point"),
+        ("無匹配點", "No Valid Depth"),
         ("深度為負(在相機後方)", "Negative depth (behind camera)"),
         ("超過最大深度", "Exceeds max depth"),
         ("匹配點偏離RT/平面預測", "Match point deviates from RT/plane prediction"),
@@ -2443,7 +2444,9 @@ def main():
         print(f"❌ 初始化日誌失敗: {e}")
 
     scatter_A = ax_A.scatter([], [], s=80, c='red', marker='x', zorder=5)
-    scatter_A_reproj = ax_A.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
+    scatter_A_reproj = ax_A.scatter(
+        [], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o',
+        linestyle='--', lw=1.5, zorder=6, visible=SHOW_LEFT_REPROJECTION_CIRCLE)
     scatter_B = ax_B.scatter([], [], s=80, c='lime', marker='x', zorder=5)
     scatter_B_reproj = ax_B.scatter([], [], s=120, facecolors='none', edgecolors='#FF00FF', marker='o', linestyle='--', lw=1.5, zorder=6)
     scatter_grad_ref_A = ax_A.scatter([], [], s=5, c='#8FD3FF', alpha=0.65, zorder=3)
@@ -3699,8 +3702,11 @@ def main():
             scatter_B_reproj.set_offsets(np.empty((0,2)))
             scatter_A_reproj.set_offsets(np.empty((0,2)))
             epi_line.set_data([], [])
-            fail_reason = ui_failure_reason_english(res.get('fail_reason', 'No matching point'))
-            main_text = f"Invalid point ({fail_reason})\nPose source: {pose_info_str}"
+            fail_reason = ui_failure_reason_english(res.get('fail_reason', 'No Valid Depth'))
+            if fail_reason == "No Valid Depth":
+                main_text = fail_reason
+            else:
+                main_text = f"Invalid point ({fail_reason})\nPose source: {pose_info_str}"
         if res.get('custom_plane_pick_mode'):
             if res.get('custom_plane_pick_valid'):
                 main_text = (

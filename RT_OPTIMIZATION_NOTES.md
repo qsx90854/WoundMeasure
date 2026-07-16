@@ -1,5 +1,26 @@
 # RT Optimization Notes
 
+## 2026-07-15 - Hide left-image reprojection circle
+
+- Zebra and Circle now default `SHOW_LEFT_REPROJECTION_CIRCLE` to `False`.
+- The red selected-point `x` remains visible; only the pink dashed reprojection circle on the left image is hidden.
+- Reprojection calculations, error logging, and the right-image overlays are unchanged.
+
+## 2026-07-15 - Current RT flow documentation
+
+- Added `flowcharts/rt_calculation_flow.md` with a code-based description of the shared Zebra/Circle RT pipeline, coordinate convention, active thresholds, fallback behavior, and metric-scale recovery.
+- Added `flowcharts/rt_calculation_flow.png` plus its reproducible Pillow generator `flowcharts/generate_rt_calculation_flow.py`.
+- Added the focused single-marker diagram `flowcharts/single_aruco_rt_flow.png` and generator `flowcharts/generate_single_aruco_rt_flow.py`; this removes the multi-marker branch and expands IPPE ambiguity handling.
+- Added the title-only single-marker diagram `flowcharts/single_aruco_rt_titles_flow.png` and generator `flowcharts/generate_single_aruco_rt_titles_flow.py` for compact presentation use.
+- Simplified the title-only diagram by consolidating sampling, marker detection, IPPE branching, frame-pair enumeration, and pre-ranking into one candidate-frame-selection block.
+- Documentation only; RT selection, optimization, and measurement behavior are unchanged.
+
+## 2026-07-15 - Depth matching failure UI wording
+
+- Zebra and Circle now display only `No Valid Depth` when no reasonable feature match is available for depth estimation; the `Pose source` line is hidden in this case.
+- Other failure causes keep their existing detailed messages.
+- This is a UI-only change; feature matching, triangulation, and RT logic are unchanged.
+
 ## 2026-07-15 - ArUco hard constraint + robust Feature joint RT refinement
 
 ### Goal
