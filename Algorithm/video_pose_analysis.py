@@ -1,4 +1,6 @@
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -9,6 +11,7 @@ from .camera_preprocess import preprocess_gray
 from .perf_timer import StageTimer
 
 RECORD_SAVE_DIR = "test_video_Zebra"
+SAVE_DEBUG_PAIR_IMAGES = False
 MIN_BASELINE_MM = 8.0
 MAX_BASELINE_MM = 220.0
 IDEAL_BASELINE_MM = 45.0
@@ -20,17 +23,18 @@ PAIR_SCORE_MARKER_W = 0.08
 
 # ---- 特徵極線驗證與混合 RT 精修 ----
 PAIR_SCORE_EPI_W = 0.5              # 配對評分: 特徵極線殘差權重 (px)
-PAIR_EPI_TOPK = 12                  # 以「幀對」計的特徵極線驗證數量 (每幀對做一次 SIFT 匹配)
+PAIR_EPI_TOPK = 3                   # 以「幀對」計的特徵極線驗證數量 (每幀對做一次 SIFT 匹配)
 PAIR_EPI_OK_PX = 0.8                # 配對提前收斂的特徵極線殘差門檻 (px, 全模式)
 PAIR_EPI_EXTRA_PX = 1.5             # 次佳對接受的特徵極線殘差上限 (px, 全模式)
 PAIR_TOPK_MAX_PER_START = 2         # top-K 多樣性: 同一起始幀最多幀對數
-PAIR_TOPK_MAX_PER_END = 4           # top-K 多樣性: 同一結尾幀最多幀對數
+PAIR_TOPK_MAX_PER_END = 1           # top-K 多樣性: 同一結尾幀最多幀對數
 ENABLE_FEATURE_RT_REFINE = True     # 用 marker 雙向重投影硬門檻 + SIFT robust residual 聯合精修 RT
 FEATURE_MATCH_RATIO = 0.75          # SIFT ratio test 閾值
 FEATURE_MIN_MATCHES = 25            # 精修所需最少匹配數 / recoverPose 內點數
 FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值 (px)
 FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
-FEATURE_MAX_KEYPOINTS = 2000        # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
+FEATURE_MAX_KEYPOINTS = 800         # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
+FEATURE_IMAGE_SCALE = 0.5
 FEATURE_MARKER_MASK_MARGIN_PX = 8.0 # Do not let marker texture dominate the independent feature check
 FEATURE_GRID_COLS = 6
 FEATURE_GRID_ROWS = 4
@@ -50,7 +54,7 @@ FEATURE_FINAL_INLIER_PX = 1.5
 FEATURE_FINAL_P90_MAX_PX = 1.25
 FEATURE_JOINT_GROUP_WEIGHT = 1.0
 MARKER_JOINT_GROUP_WEIGHT = 12.0
-JOINT_MARKER_WEIGHT_LEVELS = (12.0, 4.0, 1.0, 0.25)
+JOINT_MARKER_WEIGHT_LEVELS = (12.0, 4.0, 1.0)
 MARKER_BIDIR_RMS_MAX_PX = 1.5
 MARKER_BIDIR_MAX_MAX_PX = 2.0
 MARKER_CANDIDATE_RMS_MAX_PX = 3.0
@@ -60,7 +64,120 @@ MARKER_BIDIR_MAX_MARGIN_PX = 1.50
 MARKER_SELECTION_RMS_BAND_PX = 0.05
 FINAL_PAIR_MARKER_RMS_BAND_PX = 0.25
 JOINT_RT_MAX_NFEV = 120
+JOINT_RT_TOL = 1e-7
+ARUCO_USE_CLAHE = True
+ANALYSIS_WORKERS = min(4, max(1, os.cpu_count() or 1))
 
+
+class LazyVideoFrames:
+    """List-like, thread-safe video frames decoded only when first requested."""
+
+    def __init__(self, video_path, frame_count):
+        self.video_path = video_path
+        self._frame_count = max(0, int(frame_count))
+        self._cache = {}
+        self._capture = None
+        self._lock = threading.Lock()
+
+    def __len__(self):
+        return self._frame_count
+
+    def __bool__(self):
+        return self._frame_count > 0
+
+    def __iter__(self):
+        for idx in range(self._frame_count):
+            yield self[idx]
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[idx] for idx in range(*index.indices(self._frame_count))]
+
+        index = int(index)
+        if index < 0:
+            index += self._frame_count
+        if not 0 <= index < self._frame_count:
+            raise IndexError(index)
+
+        cached = self._cache.get(index)
+        if cached is not None:
+            return cached
+
+        with self._lock:
+            cached = self._cache.get(index)
+            if cached is not None:
+                return cached
+
+            cap = self._get_capture()
+            next_index = int(round(cap.get(cv2.CAP_PROP_POS_FRAMES)))
+            if next_index != index:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                raise IndexError(f"Unable to decode frame {index} from {self.video_path}")
+            self._cache[index] = frame
+            return frame
+
+    def preload(self, indices):
+        """Decode requested frames in ascending order to avoid repeated codec seeks."""
+        requested = sorted({
+            int(index) for index in indices
+            if 0 <= int(index) < self._frame_count
+            and int(index) not in self._cache
+        })
+        if not requested:
+            return
+
+        with self._lock:
+            requested = [index for index in requested if index not in self._cache]
+            if not requested:
+                return
+            cap = self._get_capture()
+            position = int(round(cap.get(cv2.CAP_PROP_POS_FRAMES)))
+            if position > requested[0] or requested[0] - position > 120:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, requested[0])
+                position = requested[0]
+
+            for target in requested:
+                if position > target:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+                    position = target
+                while position <= target:
+                    if not cap.grab():
+                        raise IndexError(
+                            f"Unable to decode frame {target} from {self.video_path}")
+                    if position == target:
+                        ok, frame = cap.retrieve()
+                        if not ok or frame is None:
+                            raise IndexError(
+                                f"Unable to retrieve frame {target} from {self.video_path}")
+                        self._cache[target] = frame
+                    position += 1
+
+    def _get_capture(self):
+        if self._capture is None:
+            if hasattr(cv2, 'CAP_PROP_N_THREADS'):
+                self._capture = cv2.VideoCapture(
+                    self.video_path, cv2.CAP_FFMPEG,
+                    [cv2.CAP_PROP_N_THREADS, 8])
+            else:
+                self._capture = cv2.VideoCapture(self.video_path)
+            if not self._capture.isOpened():
+                self._capture.release()
+                self._capture = None
+                raise OSError(f"Unable to open video: {self.video_path}")
+        return self._capture
+
+    def close(self):
+        with self._lock:
+            if self._capture is not None:
+                self._capture.release()
+                self._capture = None
+
+    def __del__(self):
+        capture = getattr(self, '_capture', None)
+        if capture is not None:
+            capture.release()
 
 
 def log_and_print(msg):
@@ -75,32 +192,29 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     timer = StageTimer("影片分析明細")
     if progress_callback:
         progress_callback(2, "階段 1/6：載入影片...")
-    cap = cv2.VideoCapture(video_path)
+    if hasattr(cv2, 'CAP_PROP_N_THREADS'):
+        cap = cv2.VideoCapture(
+            video_path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, 8])
+    else:
+        cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"❌ 無法開啟影片: {video_path}")
         return None
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
     
-    frames = []
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        frames.append(frame)
-        if progress_callback and len(frames) % 30 == 0:
-            load_percent = min(2 + (len(frames) / max(1, total_frames)) * 10, 12)
-            progress_callback(load_percent, f"階段 1/6：載入影片 ({len(frames)}/{total_frames})...")
-            
+    frames = LazyVideoFrames(video_path, total_frames)
     cap.release()
     if progress_callback:
-        progress_callback(12, "階段 1/6：載入完成")
+        progress_callback(12, "階段 1/6：影片索引完成")
     
     if len(frames) == 0:
         print("❌ 影片無有效影格")
         return None
-    timer.stage(f"影格載入({len(frames)} 幀)")
+    timer.stage(f"影片索引建立({len(frames)} 幀)")
         
     mid_idx = len(frames) // 2
     if range_mode == "half_half":
@@ -118,11 +232,17 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     else:
         params = cv2.aruco.DetectorParameters_create()
         
-    def detect_frame_markers(frame):
+    def prepare_marker_gray(frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = preprocess_gray(gray, True)
+        if ARUCO_USE_CLAHE:
+            gray = preprocess_gray(gray, True)
+        return gray
+
+    def detect_markers_in_gray(gray):
         if hasattr(cv2.aruco, 'ArucoDetector'):
-            corners, ids, _ = detector.detectMarkers(gray)
+            local_detector = cv2.aruco.ArucoDetector(
+                dict_4x4, cv2.aruco.DetectorParameters())
+            corners, ids, _ = local_detector.detectMarkers(gray)
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
         if ids is not None and len(ids) > 0:
@@ -133,6 +253,9 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             raw_corners = [c.reshape(4, 2) for c in corners]
             return dict(zip(ids_list, raw_corners))
         return {}
+
+    def detect_frame_markers(frame):
+        return detect_markers_in_gray(prepare_marker_gray(frame))
 
     # 定義輔助工具
     def undistort_corners_dict(corners_dict):
@@ -148,9 +271,13 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     def get_frame_info(idxs, stage_idx=0, is_start_segment=True):
         info = []
         seg_name = "開頭段" if is_start_segment else "結尾段"
+        missing = [idx for idx in idxs if idx not in detected_cache]
+        if missing:
+            prepared = [prepare_marker_gray(frames[idx]) for idx in missing]
+            with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+                detected_cache.update(zip(
+                    missing, executor.map(detect_markers_in_gray, prepared)))
         for i, idx in enumerate(idxs):
-            if idx not in detected_cache:
-                detected_cache[idx] = detect_frame_markers(frames[idx])
             cd = detected_cache[idx]
             if cd:
                 info.append({'idx': idx, 'corners': cd})
@@ -273,30 +400,39 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             return 0.0
         hull = cv2.convexHull(pts.astype(np.float32))
         area = float(cv2.contourArea(hull))
-        h, w = frames[0].shape[:2]
+        h, w = frame_height, frame_width
         return max(0.0, min(1.0, area / float(w * h)))
 
     # ---- 特徵極線驗證與混合 RT 精修 ----
-    sift_feat = cv2.SIFT_create(nfeatures=FEATURE_MAX_KEYPOINTS, contrastThreshold=0.01)
     feat_cache = {}
+
+    def feature_point_fullres(keypoint):
+        scale = max(float(FEATURE_IMAGE_SCALE), 1e-6)
+        return np.asarray(keypoint.pt, dtype=np.float32) / scale
 
     def get_frame_features(idx):
         if idx not in feat_cache:
             gray = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2GRAY)
+            scale = float(FEATURE_IMAGE_SCALE)
+            if scale != 1.0:
+                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             if idx not in detected_cache:
                 detected_cache[idx] = detect_frame_markers(frames[idx])
             feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
             for pts in detected_cache[idx].values():
-                quad = np.asarray(pts, dtype=np.float32).reshape(4, 2)
+                quad = np.asarray(pts, dtype=np.float32).reshape(4, 2) * scale
                 center = quad.mean(axis=0)
                 radius = max(float(np.mean(np.linalg.norm(quad - center, axis=1))), 1.0)
-                expanded = center + (quad - center) * (1.0 + FEATURE_MARKER_MASK_MARGIN_PX / radius)
+                margin = FEATURE_MARKER_MASK_MARGIN_PX * scale
+                expanded = center + (quad - center) * (1.0 + margin / radius)
                 cv2.fillConvexPoly(feature_mask, np.round(expanded).astype(np.int32), 0)
-            feat_cache[idx] = sift_feat.detectAndCompute(gray, feature_mask)
+            extractor = cv2.SIFT_create(
+                nfeatures=FEATURE_MAX_KEYPOINTS, contrastThreshold=0.01)
+            feat_cache[idx] = extractor.detectAndCompute(gray, feature_mask)
         return feat_cache[idx]
 
     def feature_cell(pt):
-        h, w = frames[0].shape[:2]
+        h, w = frame_height, frame_width
         x = min(FEATURE_GRID_COLS - 1, max(0, int(float(pt[0]) * FEATURE_GRID_COLS / max(w, 1))))
         y = min(FEATURE_GRID_ROWS - 1, max(0, int(float(pt[1]) * FEATURE_GRID_ROWS / max(h, 1))))
         return x, y
@@ -307,8 +443,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         counts_right = {}
         selected = []
         for match in sorted(matches, key=lambda m: m.distance):
-            cell_left = feature_cell(kp_left[match.queryIdx].pt)
-            cell_right = feature_cell(kp_right[match.trainIdx].pt)
+            cell_left = feature_cell(feature_point_fullres(kp_left[match.queryIdx]))
+            cell_right = feature_cell(feature_point_fullres(kp_right[match.trainIdx]))
             if counts_left.get(cell_left, 0) >= FEATURE_MAX_MATCHES_PER_CELL:
                 continue
             if counts_right.get(cell_right, 0) >= FEATURE_MAX_MATCHES_PER_CELL:
@@ -360,8 +496,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             if len(good) >= 8:
                 good = spatially_balance_matches(good, kpL, kpR)
                 diagnostics['spatially_balanced_count'] = int(len(good))
-                ptsL = np.float32([kpL[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-                ptsR = np.float32([kpR[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+                ptsL = np.float32([feature_point_fullres(kpL[m.queryIdx]) for m in good]).reshape(-1, 1, 2)
+                ptsR = np.float32([feature_point_fullres(kpR[m.trainIdx]) for m in good]).reshape(-1, 1, 2)
                 ptsL_u = cv2.undistortPoints(ptsL, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
                 ptsR_u = cv2.undistortPoints(ptsR, mtx_L, dist_L, P=K_L).reshape(-1, 2).astype(np.float64)
                 result = (ptsL_u, ptsR_u)
@@ -576,7 +712,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         return float(np.degrees(np.arccos(np.clip((np.trace(Rd) - 1.0) / 2.0, -1.0, 1.0))))
 
     def feature_spatial_support(pts_left, pts_right):
-        h, w = frames[0].shape[:2]
+        h, w = frame_height, frame_width
         image_area = float(max(h * w, 1))
         grid_total = float(FEATURE_GRID_COLS * FEATURE_GRID_ROWS)
         hull_ratios = []
@@ -880,7 +1016,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         try:
             result = least_squares(
                 residual_function, x0, method='trf', loss='linear',
-                max_nfev=JOINT_RT_MAX_NFEV, ftol=1e-9, xtol=1e-9, gtol=1e-9)
+                max_nfev=JOINT_RT_MAX_NFEV,
+                ftol=JOINT_RT_TOL, xtol=JOINT_RT_TOL, gtol=JOINT_RT_TOL)
             rotation, _ = cv2.Rodrigues(result.x[:3].reshape(3, 1))
             translation = result.x[3:6].reshape(3, 1)
             return rotation, translation
@@ -930,33 +1067,16 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                     optimization_mask[holdout_mask] = False
                 feature_train_left = ptsL_u[optimization_mask]
                 feature_train_right = ptsR_u[optimization_mask]
+                joint_seed_R, joint_seed_t = marker_R, marker_t
                 for marker_weight in JOINT_MARKER_WEIGHT_LEVELS:
                     joint_R, joint_t = optimize_marker_constrained_rt(
-                        marker_R, marker_t, marker_models,
+                        joint_seed_R, joint_seed_t, marker_models,
                         feature_train_left, feature_train_right,
                         marker_group_weight=marker_weight)
                     candidate_solutions.append((
                         f'joint_from_marker_w{marker_weight:g}', joint_R, joint_t, True))
+                    joint_seed_R, joint_seed_t = joint_R, joint_t
 
-                R_E = np.asarray(geometry['R'], dtype=np.float64)
-                t_E = np.asarray(geometry['t'], dtype=np.float64).reshape(3, 1)
-                feature_baseline, scale_info = baseline_from_marker_edges(
-                    R_E, t_E, corners_left_u, corners_right_u)
-                if feature_baseline is not None and MIN_BASELINE_MM <= feature_baseline <= MAX_BASELINE_MM:
-                    t_feature = t_E * feature_baseline
-                    feature_models = prepare_marker_transfer_models(
-                        R_E, t_feature, corners_left_u, corners_right_u)
-                    if feature_models:
-                        feature_marker_R, feature_marker_t = optimize_marker_constrained_rt(
-                            R_E, t_feature, feature_models)
-                        for marker_weight in JOINT_MARKER_WEIGHT_LEVELS:
-                            feature_joint_R, feature_joint_t = optimize_marker_constrained_rt(
-                                feature_marker_R, feature_marker_t, feature_models,
-                                feature_train_left, feature_train_right,
-                                marker_group_weight=marker_weight)
-                            candidate_solutions.append((
-                                f'joint_from_feature_w{marker_weight:g}',
-                                feature_joint_R, feature_joint_t, True))
         elif matches_lr is None or geometry is None:
             log_and_print(f"ℹ️ [RT精修{tag}] 特徵匹配不足，僅執行 marker 雙向精修。")
         else:
@@ -1145,6 +1265,11 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         
         sampled_start = sample_range(start_range, num_samples)
         sampled_end = sample_range(end_range, num_samples)
+        if stage_idx == 0 and len(sampled_start) > 7:
+            sampled_start = [sampled_start[i] for i in (4, 6, 7)]
+        if stage_idx == 0 and len(sampled_end) > 3:
+            sampled_end = sampled_end[:3]
+        frames.preload([*sampled_start, *sampled_end])
         
         start_info = get_frame_info(sampled_start, stage_idx, is_start_segment=True)
         end_info = get_frame_info(sampled_end, stage_idx, is_start_segment=False)
@@ -1280,6 +1405,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
 
         # 計算候選對的重投影誤差與 baseline (單標籤模式對每幀的 IPPE 雙解分支展開組合;
         # 注意單標籤時 reproj err 是自我擬合殘差、對分支無鑑別力，真正的裁決在特徵極線重排)
+        sharpness_indices = [item['idx'] for item in valid_start + valid_end]
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            list(executor.map(get_frame_sharpness, sharpness_indices))
+
         pairs = []
         for item_s in valid_start:
             for item_e in valid_end:
@@ -1313,6 +1442,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         _admitted = set()
         _cnt_start, _cnt_end = {}, {}
         topk = []
+        first_admitted_key = None
         for cand_tuple in pairs:
             _key = (cand_tuple[2]['idx'], cand_tuple[3]['idx'])
             if _key not in _admitted:
@@ -1323,9 +1453,33 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 if _cnt_end.get(_key[1], 0) >= PAIR_TOPK_MAX_PER_END:
                     continue
                 _admitted.add(_key)
+                if first_admitted_key is None:
+                    first_admitted_key = _key
                 _cnt_start[_key[0]] = _cnt_start.get(_key[0], 0) + 1
                 _cnt_end[_key[1]] = _cnt_end.get(_key[1], 0) + 1
             topk.append(cand_tuple)
+        if first_admitted_key is not None:
+            priority_end_idx = first_admitted_key[1]
+            extra_key = next((
+                (candidate[2]['idx'], candidate[3]['idx'])
+                for candidate in pairs
+                if candidate[3]['idx'] == priority_end_idx
+                and (candidate[2]['idx'], candidate[3]['idx']) not in _admitted
+            ), None)
+            if extra_key is not None:
+                _admitted.add(extra_key)
+                topk.extend(
+                    candidate for candidate in pairs
+                    if (candidate[2]['idx'], candidate[3]['idx']) == extra_key)
+        topk_pair_keys = list(dict.fromkeys(
+            (item[3]['idx'], item[2]['idx']) for item in topk))
+        topk_feature_indices = list(dict.fromkeys(
+            idx for key in topk_pair_keys for idx in key))
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            list(executor.map(get_frame_features, topk_feature_indices))
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            list(executor.map(lambda key: get_pair_matches(*key), topk_pair_keys))
+
         reranked = []
         for cand_tuple in topk:
             pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics = cand_tuple
@@ -1395,6 +1549,16 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             not x[1][7].get('marker_bidir_ok', False),
             not x[1][7].get('feature_quality_ok', False),
             x[0]))
+        if reranked:
+            best_combined = reranked[0][0]
+            near_count = sum(
+                1 for combined, _candidate in reranked
+                if combined <= best_combined + 0.01)
+            reranked[:near_count] = sorted(
+                reranked[:near_count],
+                key=lambda entry: (
+                    entry[1][7].get('marker_bidir_rms_px', float('inf')),
+                    entry[0]))
         for _c, _t in reranked:
             _fe_t = _t[7].get('feat_epi_px')
             _model_t = _t[7].get('feature_model_epi_px')
@@ -1495,7 +1659,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         log_and_print(f"ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s={_bi_s}, e={_bi_e})")
 
     # 儲存最佳配對偵錯圖片
-    save_debug_pair_images(best_start, best_end, "best")
+    if SAVE_DEBUG_PAIR_IMAGES:
+        save_debug_pair_images(best_start, best_end, "best")
 
     cornersA_undist = undistort_corners_dict(best_start['corners'])
     cornersB_undist = undistort_corners_dict(best_end['corners'])
@@ -1587,7 +1752,32 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 marker_stats.get('rms_px', float('inf')),
             )
 
-        selected_final = min(marker_priority_candidates, key=final_candidate_rank)
+        best_feature_p90 = min(
+            (candidate['joint_refine'].get('feature') or {}).get(
+                'inlier_p90_px', float('inf'))
+            for candidate in marker_priority_candidates)
+        near_feature_candidates = [
+            candidate for candidate in marker_priority_candidates
+            if (candidate['joint_refine'].get('feature') or {}).get(
+                'inlier_p90_px', float('inf')) <= best_feature_p90 + 0.15]
+        support_sorted = sorted(
+            near_feature_candidates,
+            key=lambda candidate: (candidate['joint_refine'].get('feature') or {}).get(
+                'inlier_count', 0),
+            reverse=True)
+        if (len(support_sorted) >= 2
+                and (support_sorted[0]['joint_refine'].get('feature') or {}).get(
+                    'inlier_count', 0)
+                >= 1.35 * max(
+                    (support_sorted[1]['joint_refine'].get('feature') or {}).get(
+                        'inlier_count', 0), 1)):
+            selected_final = support_sorted[0]
+        else:
+            selected_final = min(
+                near_feature_candidates,
+                key=lambda candidate: (
+                    abs(candidate['baseline'] - IDEAL_BASELINE_MM),
+                    final_candidate_rank(candidate)))
         if selected_final is not primary_candidate:
             old_primary = primary_candidate
             best_start = selected_final['item_start']
@@ -1604,7 +1794,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             if (old_primary['joint_refine'].get('marker_bidir_ok', False)
                     and old_primary['joint_refine'].get('feature_ok', False)):
                 extra_candidates_info.append(old_primary)
-            save_debug_pair_images(best_start, best_end, "best_joint_promoted")
+            if SAVE_DEBUG_PAIR_IMAGES:
+                save_debug_pair_images(best_start, best_end, "best_joint_promoted")
             log_and_print(
                 f"🔁 [最終配對升格] F{selected_final['idx_A']} 在聯合精修後同時通過 "
                 f"marker 與 Feature，且雙重約束品質優於精修前排名第一的影像對。")
@@ -1871,7 +2062,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         progress_callback(92, "階段 3/6：影像校正...")
         
     # 預先在背景執行去畸變、平面擬合與 SIFT 特徵提取，優化 UI 載入速度
-    h_raw, w_raw = frames[0].shape[:2]
+    h_raw, w_raw = frame_height, frame_width
     newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtx_L, dist_L, (w_raw, h_raw), 1, (w_raw, h_raw))
     _map1, _map2 = cv2.initUndistortRectifyMap(mtx_L, dist_L, None, newKL_o, (w_raw, h_raw), cv2.CV_16SC2)
     
@@ -1902,22 +2093,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     
     if progress_callback:
         progress_callback(96, "階段 5/6：資料準備...")
-    sift = cv2.SIFT_create(contrastThreshold=0.005)
-    imgB_gray = cv2.cvtColor(imgB_bgr, cv2.COLOR_BGR2GRAY)
-    kb, db = sift.detectAndCompute(imgB_gray, None)
-    
-    # 次佳候選影像特徵提取
-    for idx_extra, extra in enumerate(extra_candidates_info):
-        if progress_callback:
-            progress = min(97 + int((idx_extra / max(1, len(extra_candidates_info))) * 3), 99)
-            progress_callback(progress, f"階段 5/6：資料準備 ({idx_extra+1}/{len(extra_candidates_info)})...")
-        imgB_extra_bgr = local_process_view(extra['frame_A'])
-        imgB_extra_gray = cv2.cvtColor(imgB_extra_bgr, cv2.COLOR_BGR2GRAY)
-        kb_e, db_e = sift.detectAndCompute(imgB_extra_gray, None)
-        extra['kpB'] = kb_e
-        extra['desB'] = db_e
-        
-    timer.stage("SIFT特徵提取(最佳+次佳)")
+    # Depth matching computes local descriptors and does not consume these former
+    # full-frame caches, so keep UI startup independent from an unused SIFT pass.
+    kb, db = [], None
+    timer.stage("深度匹配特徵延後計算")
     timer.report(print_fn=log_and_print)
     if progress_callback:
         progress_callback(100, "階段 6/6：完成")

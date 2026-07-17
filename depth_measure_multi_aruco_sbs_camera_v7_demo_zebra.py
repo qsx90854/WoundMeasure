@@ -1648,11 +1648,6 @@ def main():
     current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
     current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
     
-    # 若背景計算因任何理由未獲得特徵，則降級在主線程中計算
-    if not current_cand['kpB'] or current_cand['desB'] is None:
-        kb, db = sift.detectAndCompute(current_cand['gray'], None)
-        current_cand.update({'kpB': kb, 'desB': db})
-    
     extra_candidates_list = []
     for extra in video_data.get('extra_candidates', []):
         imgB_extra_bgr, _ = process_view(extra['frame_A'])
@@ -1678,10 +1673,6 @@ def main():
             'spec_spatial_mask': None,
             'spec_temporal_mask': None,
         }
-        # 若背景中未成功提取，才在主線程中提取特徵
-        if not extra_cand['kpB'] or extra_cand['desB'] is None:
-            kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
-            extra_cand.update({'kpB': kb_e, 'desB': db_e})
         extra_candidates_list.append(extra_cand)
         
     candidates = [current_cand]
