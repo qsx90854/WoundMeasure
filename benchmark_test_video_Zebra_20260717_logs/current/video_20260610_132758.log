@@ -1,0 +1,30 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_132758.mp4，總影格數: 79 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F29 B=F39 branch=(0, 0) marker_bidir=1.366px feature_inlier_epi=0.515px E_epi=0.387px inliers=101/146 grid=0.42 parallax=4.071° score=0.998 combined=0.265
+   [topK] A=F25 B=F47 branch=(0, 0) marker_bidir=1.777px feature_inlier_epi=1.351px E_epi=0.407px inliers=68/117 grid=0.50 parallax=10.425° score=0.863 combined=0.273
+   [topK] A=F29 B=F47 branch=(0, 0) marker_bidir=1.652px feature_inlier_epi=1.374px E_epi=0.453px inliers=69/116 grid=0.38 parallax=7.711° score=0.885 combined=0.314
+   [topK] A=F25 B=F43 branch=(0, 0) marker_bidir=2.491px feature_inlier_epi=1.018px E_epi=0.359px inliers=81/146 grid=0.38 parallax=7.591° score=0.968 combined=4.283
+🎯 [pair quality] score=0.998 | reproj=0.639px | marker_bidir=1.366px | feature_inlier_epi=0.515px | E_epi=0.387px | baseline=12.84mm | shared=2 | feature_grid=0.42 | parallax=4.071°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.387 px < 0.8 px | reproj 0.639 px
+   [RT候選-best] marker_only | marker=1.257px, max=2.137px | feature_seed_p90=1.697px, final_inliers=85
+   [RT候選-best] joint_from_marker_w12 | marker=1.267px, max=2.075px | feature_seed_p90=1.260px, final_inliers=99
+   [RT候選-best] joint_from_marker_w4 | marker=1.281px, max=2.258px | feature_seed_p90=1.151px, final_inliers=101
+   [RT候選-best] joint_from_marker_w1 | marker=1.337px, max=2.611px | feature_seed_p90=0.872px, final_inliers=101
+⚠️ [RT聯合精修-best] role=unreliable_marker_fallback | marker L→R=1.381px, R→L=1.120px, max=2.137px | feature inliers=85/146, median=0.637px, p90=1.359px | baseline=13.71mm
+📍 [RT SIFT像素] 101/146 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 29
+  - 左圖 (Frame B) 索引: 39
+  - 計算 Baseline: 13.71 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=1.381px, R→L=1.120px, max=2.137px | Feature inliers=85/146, median=0.637px, p90=1.359px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_132758_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.320 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.28 s
+   - 影片索引建立(79 幀)                    5.5 ms (  0.4%)
+   - ArUco偵測+配對搜尋(含極線重排)          1192.0 ms ( 93.0%)
+   - 混合RT精修+次佳打包                    51.6 ms (  4.0%)
+   - 去畸變+全域平面擬合                     32.6 ms (  2.5%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

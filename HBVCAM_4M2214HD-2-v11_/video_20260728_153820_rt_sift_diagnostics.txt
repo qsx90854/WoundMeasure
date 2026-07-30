@@ -1,0 +1,172 @@
+=== RT SIFT DIAGNOSTICS ===
+This report describes the selected best frame pair only.
+Coordinates are undistorted display pixels: frame_B/UI-left -> frame_A/UI-right.
+
+[SELECTED_PAIR]
+video=HBVCAM_4M2214HD-2-v11\video_20260728_153820.mp4
+frame_left_B=1
+frame_right_A=0
+shared_markers=1
+baseline_mm=59.927716
+rt_sift_role=validation_only
+rt_sift_applied=False
+rt_reliable=False
+
+[PIPELINE_COUNTS]
+left_keypoint_count=246
+right_keypoint_count=506
+left_descriptor_count=246
+right_descriptor_count=506
+knn_pair_count=246
+ratio_pass_count=15
+mutual_pass_count=14
+spatially_balanced_count=14
+essential_ransac_inlier_count=8
+recoverpose_inlier_count=8
+final_rt_sift_point_count=0
+final_rt_feature_inlier_count=3
+final_rt_feature_outlier_count=11
+
+[FEATURE_QUALITY]
+match_count=14
+essential_inlier_count=8
+inlier_count=8
+inlier_ratio=0.5714285714285714
+grid_coverage=0.08333333333333333
+hull_coverage=0.022343968566482894
+parallax_deg=11.049570071023522
+homography_ratio=0.42857142857142855
+planar_degenerate=False
+model_epi_px=1.0246753938800774e-12
+quality_penalty=0.23287678454235583
+quality_ok=False
+strong=False
+marker_rt_feature_epi_px=2.21120975329709
+final_feature_epi_px=0.4426827590322852
+final_feature_inlier_p90_px=0.8009067091234173
+final_feature_all_p90_px=105.2371579114507
+final_feature_holdout_median_px=None
+marker_bidir_rms_px=0.1644539880128676
+marker_left_to_right_rms_px=0.1450147122011356
+marker_right_to_left_rms_px=0.18182673508561553
+marker_bidir_max_px=0.18425179006662978
+marker_pnp_self_reproj_px=0.1634424328804016
+joint_solution_role=marker_only
+feature_rot_agreement_deg=7.817744984162815
+pair_score=0.647158180443222
+combined_score=0.4084184160165476
+sharpness_min=96.22213868394785
+marker_coverage=0.0004088383274229048
+
+[ACTIVE_THRESHOLDS]
+sift_max_keypoints=800
+sift_contrast_threshold=0.01
+match_ratio=0.75
+ransac_threshold_px=0.75
+min_matches=11
+min_inlier_ratio=0.28
+min_grid_coverage=0.16666666666666666
+min_hull_coverage=0.02
+min_parallax_deg=1.0
+strong_inliers=40
+strong_grid_coverage=0.25
+
+final_feature_inlier_px=1.5
+final_feature_p90_max_px=1.25
+marker_bidir_rms_max_px=1.5
+marker_bidir_point_max_px=2.0
+
+[FINAL_RT_LEFT_TO_RIGHT]
+R0=0.999905429852 0.00850344841792 -0.010808455844
+R1=-0.00845112891519 0.999952395024 0.00487710007338
+R2=0.0108494134766 -0.0047852951916 0.999929693117
+t_mm=-59.9272706267 -0.230212040019 -0.019362733595
+
+[GRID_COUNTS_6x4]
+raw_keypoints_left
+     9   56  114    0    0    0
+    13   52    2    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+raw_keypoints_right
+    20  317  143    0    0    0
+     6   17    3    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+balanced_candidates_left
+     0    0    0    0    0    0
+     0    0    4    3    6    0
+     0    0    1    0    0    0
+     0    0    0    0    0    0
+balanced_candidates_right
+     0    0    0    0    0    0
+     0    4    0    8    0    0
+     0    0    1    1    0    0
+     0    0    0    0    0    0
+essential_inliers_left
+     0    0    0    0    0    0
+     0    0    3    1    4    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+essential_inliers_right
+     0    0    0    0    0    0
+     0    3    0    5    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_left
+     0    0    0    0    0    0
+     0    0    3    1    4    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_right
+     0    0    0    0    0    0
+     0    3    0    5    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+joint_optimization_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+joint_optimization_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_left
+     0    0    0    0    0    0
+     0    0    1    0    2    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_right
+     0    0    0    0    0    0
+     0    1    0    2    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+
+[MATCH_TABLE]
+index,left_x,left_y,right_x,right_y,essential_inlier,recoverpose_inlier,optimization_used,holdout,final_rt_inlier,final_epipolar_px
+1,804.205017,334.082825,564.205017,337.287750,1,1,0,0,0,2.575874
+2,764.883179,365.774323,516.607361,369.101654,0,0,0,0,0,2.836699
+3,713.797913,387.257568,503.284454,372.232941,1,1,0,0,0,21.791112
+4,1278.380737,398.888580,980.010742,396.682465,1,1,0,0,0,4.115275
+5,802.596924,327.669617,558.134155,333.872437,1,1,0,0,1,0.442683
+6,1257.614990,500.750824,1095.620728,519.602051,0,0,0,0,0,16.383100
+7,1316.079956,273.038422,1044.414185,275.081909,1,1,0,0,1,0.050873
+8,1411.580078,283.770630,1118.800659,288.556549,1,1,0,0,0,3.459885
+9,1207.351074,444.631287,1021.083679,588.378601,0,0,0,0,0,140.857905
+10,1434.284546,351.853973,1116.007568,354.402985,0,0,0,0,0,1.792847
+11,947.880981,714.983154,750.557129,743.387024,0,0,0,0,0,22.122081
+12,1434.380493,342.123474,1117.532593,343.820068,1,1,0,0,1,0.890463
+13,1388.043457,278.858093,1102.238647,282.267822,1,1,0,0,0,1.873081
+14,1394.092285,296.867920,1186.245239,485.745728,0,0,0,0,0,187.481786

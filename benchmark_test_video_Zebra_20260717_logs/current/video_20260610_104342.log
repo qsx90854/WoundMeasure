@@ -1,0 +1,36 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_104342.mp4，總影格數: 128 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 9 作為世界坐標系原點
+   [topK] A=F42 B=F64 branch=(0, 0) marker_bidir=1.108px feature_inlier_epi=0.931px E_epi=0.219px inliers=44/70 grid=0.50 parallax=4.812° score=0.998 combined=0.251
+   [topK] A=F28 B=F64 branch=(0, 0) marker_bidir=1.361px feature_inlier_epi=1.044px E_epi=0.441px inliers=42/63 grid=0.46 parallax=5.088° score=0.998 combined=0.310
+   [topK] A=F42 B=F71 branch=(0, 0) marker_bidir=1.827px feature_inlier_epi=1.768px E_epi=0.489px inliers=37/57 grid=0.42 parallax=5.056° score=1.110 combined=0.362
+   [topK] A=F28 B=F78 branch=(0, 0) marker_bidir=2.254px feature_inlier_epi=2.279px E_epi=0.262px inliers=21/46 grid=0.21 parallax=3.620° score=1.091 combined=0.445
+🎯 [pair quality] score=0.998 | reproj=0.684px | marker_bidir=1.108px | feature_inlier_epi=0.931px | E_epi=0.219px | baseline=12.87mm | shared=2 | feature_grid=0.50 | parallax=4.812°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.219 px < 0.8 px | reproj 0.684 px
+   [RT候選-best] marker_only | marker=0.665px, max=1.053px | feature_seed_p90=5.403px, final_inliers=26
+   [RT候選-best] joint_from_marker_w12 | marker=0.753px, max=1.718px | feature_seed_p90=1.705px, final_inliers=37
+   [RT候選-best] joint_from_marker_w4 | marker=0.806px, max=1.885px | feature_seed_p90=1.077px, final_inliers=42
+   [RT候選-best] joint_from_marker_w1 | marker=0.870px, max=1.883px | feature_seed_p90=0.830px, final_inliers=43
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.834px, R→L=0.661px, max=1.718px | feature inliers=37/70, median=0.420px, p90=0.949px | baseline=13.81mm
+   [RT候選-F28] marker_only | marker=0.993px, max=2.217px | feature_seed_p90=4.341px, final_inliers=23
+   [RT候選-F28] joint_from_marker_w12 | marker=0.899px, max=1.772px | feature_seed_p90=3.092px, final_inliers=32
+   [RT候選-F28] joint_from_marker_w4 | marker=0.908px, max=1.527px | feature_seed_p90=1.711px, final_inliers=36
+   [RT候選-F28] joint_from_marker_w1 | marker=1.005px, max=1.979px | feature_seed_p90=1.080px, final_inliers=39
+✅ [RT聯合精修-F28] role=joint_from_marker_w4 | marker L→R=0.821px, R→L=0.987px, max=1.527px | feature inliers=36/63, median=0.409px, p90=1.095px | baseline=17.75mm
+➕ [次佳配對] 額外右圖 (Frame A) 索引: 28 | 重投影誤差: 0.699 px | Baseline: 17.75 mm
+🔁 [最終配對升格] F28 在聯合精修後同時通過 marker 與 Feature，且雙重約束品質優於精修前排名第一的影像對。
+📍 [RT SIFT像素] 33/63 | role=final_rt
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 28
+  - 左圖 (Frame B) 索引: 64
+  - 計算 Baseline: 17.75 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.821px, R→L=0.987px, max=1.527px | Feature inliers=36/63, median=0.409px, p90=1.095px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_104342_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.225 mm
+✅ [參考平面] 由 ref 標籤 ID:9 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.40 s
+   - 影片索引建立(128 幀)                   4.6 ms (  0.3%)
+   - ArUco偵測+配對搜尋(含極線重排)          1232.4 ms ( 87.8%)
+   - 混合RT精修+次佳打包                   125.7 ms (  9.0%)
+   - 去畸變+全域平面擬合                     41.1 ms (  2.9%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

@@ -1,0 +1,30 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_153911(影片有果凍效應).mp4，總影格數: 77 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F24 B=F38 branch=(0, 0) marker_bidir=2.167px feature_inlier_epi=0.531px E_epi=0.528px inliers=64/109 grid=0.33 parallax=7.512° score=2.324 combined=0.486
+   [topK] A=F24 B=F46 branch=(0, 0) marker_bidir=3.828px feature_inlier_epi=0.823px E_epi=0.390px inliers=57/111 grid=0.29 parallax=10.682° score=1.986 combined=4.421
+   [topK] A=F16 B=F46 branch=(0, 0) marker_bidir=4.524px feature_inlier_epi=1.043px E_epi=0.459px inliers=56/103 grid=0.29 parallax=16.474° score=1.960 combined=4.483
+   [topK] A=F16 B=F42 branch=(0, 0) marker_bidir=3.911px feature_inlier_epi=1.383px E_epi=0.399px inliers=57/99 grid=0.33 parallax=11.307° score=2.061 combined=4.485
+🎯 [pair quality] score=2.324 | reproj=1.753px | marker_bidir=2.167px | feature_inlier_epi=0.531px | E_epi=0.528px | baseline=27.40mm | shared=2 | feature_grid=0.33 | parallax=7.512°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.528 px < 0.8 px | reproj 1.753 px
+   [RT候選-best] marker_only | marker=1.456px, max=2.493px | feature_seed_p90=1.204px, final_inliers=62
+   [RT候選-best] joint_from_marker_w12 | marker=1.457px, max=2.472px | feature_seed_p90=1.089px, final_inliers=63
+   [RT候選-best] joint_from_marker_w4 | marker=1.462px, max=2.447px | feature_seed_p90=1.049px, final_inliers=64
+   [RT候選-best] joint_from_marker_w1 | marker=1.481px, max=2.401px | feature_seed_p90=0.952px, final_inliers=64
+⚠️ [RT聯合精修-best] role=unreliable_marker_fallback | marker L→R=1.553px, R→L=1.353px, max=2.493px | feature inliers=62/109, median=0.513px, p90=1.024px | baseline=28.29mm
+📍 [RT SIFT像素] 64/109 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 24
+  - 左圖 (Frame B) 索引: 38
+  - 計算 Baseline: 28.29 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=1.553px, R→L=1.353px, max=2.493px | Feature inliers=62/109, median=0.513px, p90=1.024px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260610_153911(影片有果凍效應)_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.341 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.30 s
+   - 影片索引建立(77 幀)                    5.2 ms (  0.4%)
+   - ArUco偵測+配對搜尋(含極線重排)          1210.0 ms ( 93.3%)
+   - 混合RT精修+次佳打包                    42.2 ms (  3.3%)
+   - 去畸變+全域平面擬合                     39.2 ms (  3.0%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

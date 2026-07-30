@@ -1,0 +1,44 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260707_193915.mp4，總影格數: 199 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 12 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F76 B=F121 branch=(0, 0) marker_bidir=0.176px feature_inlier_epi=38.534px E_epi=0.246px inliers=64/101 grid=0.38 parallax=13.141° score=0.532 combined=0.449
+   [topK] A=F65 B=F99 branch=(0, 1) marker_bidir=0.152px feature_inlier_epi=13.987px E_epi=0.481px inliers=88/133 grid=0.50 parallax=10.290° score=0.587 combined=0.541
+   [topK] A=F65 B=F99 branch=(0, 0) marker_bidir=0.143px feature_inlier_epi=70.594px E_epi=0.481px inliers=88/133 grid=0.50 parallax=10.290° score=0.761 combined=0.574
+   [topK] A=F65 B=F110 branch=(0, 0) marker_bidir=0.227px feature_inlier_epi=111.715px E_epi=0.270px inliers=64/106 grid=0.21 parallax=10.464° score=0.885 combined=0.597
+   [topK] A=F76 B=F121 branch=(1, 0) marker_bidir=0.180px feature_inlier_epi=107.360px E_epi=0.246px inliers=64/101 grid=0.38 parallax=13.141° score=0.912 combined=0.600
+   [topK] A=F65 B=F110 branch=(1, 0) marker_bidir=0.245px feature_inlier_epi=30.651px E_epi=0.270px inliers=64/106 grid=0.21 parallax=10.464° score=0.637 combined=0.611
+   [topK] A=F65 B=F110 branch=(0, 1) marker_bidir=0.403px feature_inlier_epi=33.761px E_epi=0.270px inliers=64/106 grid=0.21 parallax=10.464° score=0.637 combined=0.617
+   [topK] A=F65 B=F99 branch=(1, 0) marker_bidir=0.170px feature_inlier_epi=71.201px E_epi=0.481px inliers=88/133 grid=0.50 parallax=10.290° score=0.587 combined=0.630
+   [topK] A=F76 B=F121 branch=(1, 1) marker_bidir=0.379px feature_inlier_epi=71.987px E_epi=0.246px inliers=64/101 grid=0.38 parallax=13.141° score=0.532 combined=0.726
+   [topK] A=F76 B=F121 branch=(0, 1) marker_bidir=0.377px feature_inlier_epi=99.318px E_epi=0.246px inliers=64/101 grid=0.38 parallax=13.141° score=0.912 combined=0.792
+   [topK] A=F65 B=F110 branch=(1, 1) marker_bidir=0.414px feature_inlier_epi=86.083px E_epi=0.270px inliers=64/106 grid=0.21 parallax=10.464° score=0.886 combined=0.814
+   [topK] A=F65 B=F99 branch=(1, 1) marker_bidir=0.177px feature_inlier_epi=96.226px E_epi=0.481px inliers=88/133 grid=0.50 parallax=10.290° score=0.761 combined=0.822
+   [topK] A=F65 B=F121 branch=(1, 0) marker_bidir=0.203px feature_inlier_epi=132.623px E_epi=0.322px inliers=59/90 grid=0.12 parallax=10.107° score=0.549 combined=0.621
+   [topK] A=F65 B=F121 branch=(0, 0) marker_bidir=0.181px feature_inlier_epi=91.892px E_epi=0.322px inliers=59/90 grid=0.12 parallax=10.107° score=0.944 combined=0.716
+   [topK] A=F65 B=F121 branch=(0, 1) marker_bidir=0.380px feature_inlier_epi=67.440px E_epi=0.322px inliers=59/90 grid=0.12 parallax=10.107° score=0.549 combined=0.793
+   [topK] A=F65 B=F121 branch=(1, 1) marker_bidir=0.391px feature_inlier_epi=100.662px E_epi=0.322px inliers=59/90 grid=0.12 parallax=10.107° score=0.944 combined=0.877
+🎯 [pair quality] score=0.532 | reproj=0.172px | marker_bidir=0.176px | feature_inlier_epi=38.534px | E_epi=0.246px | baseline=45.18mm | shared=1 | feature_grid=0.38 | parallax=13.141°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.246 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.176px, max=0.224px | feature_seed_p90=101.604px, final_inliers=5
+   [RT候選-best] joint_from_marker_w12 | marker=1.937px, max=3.706px | feature_seed_p90=1.206px, final_inliers=61
+   [RT候選-best] joint_from_marker_w4 | marker=1.944px, max=3.716px | feature_seed_p90=0.782px, final_inliers=62
+   [RT候選-best] joint_from_marker_w1 | marker=1.953px, max=3.731px | feature_seed_p90=0.739px, final_inliers=63
+✅ [RT聯合精修-best] role=marker_only | marker L→R=0.136px, R→L=0.208px, max=0.224px | feature inliers=5/101, median=0.487px, p90=0.562px | baseline=45.23mm
+📍 [RT SIFT像素] 64/101 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 76
+  - 左圖 (Frame B) 索引: 121
+  - 計算 Baseline: 45.23 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.136px, R→L=0.208px, max=0.224px | Feature inliers=5/101, median=0.487px, p90=0.562px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260707_193915_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.054 mm
+✅ [參考平面] 由 ref 標籤 ID:12 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.20 s
+   - 影片索引建立(199 幀)                   5.3 ms (  0.4%)
+   - ArUco偵測+配對搜尋(含極線重排)          1120.2 ms ( 93.2%)
+   - 混合RT精修+次佳打包                    42.1 ms (  3.5%)
+   - 去畸變+全域平面擬合                     34.9 ms (  2.9%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

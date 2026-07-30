@@ -1,0 +1,27 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260603_162226.mp4，總影格數: 78 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F16 B=F47 branch=(0, 0) marker_bidir=0.596px feature_inlier_epi=8.729px E_epi=0.295px inliers=199/251 grid=0.50 parallax=1.984° score=1.091 combined=0.405
+   [topK] A=F16 B=F39 branch=(0, 0) marker_bidir=0.694px feature_inlier_epi=9.952px E_epi=0.383px inliers=174/235 grid=0.54 parallax=3.841° score=1.068 combined=0.434
+🎯 [pair quality] score=1.091 | reproj=0.726px | marker_bidir=0.596px | feature_inlier_epi=8.729px | E_epi=0.295px | baseline=8.46mm | shared=2 | feature_grid=0.50 | parallax=1.984°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.295 px < 0.8 px | reproj 0.726 px
+   [RT候選-best] joint_from_marker_w12 | marker=0.584px, max=1.381px | feature_seed_p90=0.944px, final_inliers=196
+   [RT候選-best] joint_from_marker_w4 | marker=0.589px, max=1.388px | feature_seed_p90=0.955px, final_inliers=196
+   [RT候選-best] joint_from_marker_w1 | marker=0.610px, max=1.436px | feature_seed_p90=0.927px, final_inliers=198
+✅ [RT聯合精修-best] role=joint_from_marker_w1 | marker L→R=0.669px, R→L=0.546px, max=1.436px | feature inliers=198/251, median=0.371px, p90=0.902px | baseline=8.01mm
+📍 [RT SIFT像素] 159/251 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 16
+  - 左圖 (Frame B) 索引: 47
+  - 計算 Baseline: 8.01 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.669px, R→L=0.546px, max=1.436px | Feature inliers=198/251, median=0.371px, p90=0.902px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260603_162226_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.396 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.90 s
+   - 影片索引建立(78 幀)                    4.5 ms (  0.5%)
+   - ArUco偵測+配對搜尋(含極線重排)           796.0 ms ( 88.3%)
+   - 混合RT精修+次佳打包                    58.6 ms (  6.5%)
+   - 去畸變+全域平面擬合                     42.4 ms (  4.7%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

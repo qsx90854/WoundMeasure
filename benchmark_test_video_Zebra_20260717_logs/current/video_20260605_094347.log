@@ -1,0 +1,27 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_094347.mp4，總影格數: 128 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F28 B=F78 branch=(0, 0) marker_bidir=0.554px feature_inlier_epi=1.147px E_epi=0.414px inliers=101/166 grid=0.71 parallax=3.603° score=0.761 combined=0.265
+🎯 [pair quality] score=0.761 | reproj=0.337px | marker_bidir=0.554px | feature_inlier_epi=1.147px | E_epi=0.414px | baseline=8.07mm | shared=2 | feature_grid=0.71 | parallax=3.603°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.414 px < 0.8 px | reproj 0.337 px
+   [RT候選-best] marker_only | marker=0.549px, max=1.219px | feature_seed_p90=5.394px, final_inliers=58
+   [RT候選-best] joint_from_marker_w12 | marker=0.663px, max=1.986px | feature_seed_p90=2.651px, final_inliers=79
+   [RT候選-best] joint_from_marker_w4 | marker=0.817px, max=2.465px | feature_seed_p90=1.073px, final_inliers=99
+   [RT候選-best] joint_from_marker_w1 | marker=0.893px, max=2.643px | feature_seed_p90=0.831px, final_inliers=101
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.731px, R→L=0.587px, max=1.986px | feature inliers=79/166, median=0.508px, p90=1.196px | baseline=8.26mm
+📍 [RT SIFT像素] 80/166 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 28
+  - 左圖 (Frame B) 索引: 78
+  - 計算 Baseline: 8.26 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.731px, R→L=0.587px, max=1.986px | Feature inliers=79/166, median=0.508px, p90=1.196px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_094347_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.103 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.83 s
+   - 影片索引建立(128 幀)                   5.8 ms (  0.7%)
+   - ArUco偵測+配對搜尋(含極線重排)           732.5 ms ( 87.9%)
+   - 混合RT精修+次佳打包                    62.4 ms (  7.5%)
+   - 去畸變+全域平面擬合                     33.2 ms (  4.0%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

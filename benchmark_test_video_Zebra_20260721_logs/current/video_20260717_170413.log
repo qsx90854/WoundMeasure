@@ -1,0 +1,40 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\test_rt\video_20260717_170413.mp4，總影格數: 394 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F152 B=F218 branch=(0, 0) marker_bidir=0.167px feature_inlier_epi=0.855px E_epi=0.376px inliers=55/97 grid=0.33 parallax=9.205° score=0.517 combined=0.201
+   [topK] A=F152 B=F197 branch=(0, 0) marker_bidir=0.130px feature_inlier_epi=1.052px E_epi=0.412px inliers=71/108 grid=0.33 parallax=6.664° score=0.538 combined=0.213
+   [topK] A=F87 B=F197 branch=(0, 0) marker_bidir=0.059px feature_inlier_epi=2.873px E_epi=0.361px inliers=45/76 grid=0.33 parallax=16.304° score=0.457 combined=0.271
+   [topK] A=F152 B=F240 branch=(0, 0) marker_bidir=0.158px feature_inlier_epi=4.492px E_epi=0.399px inliers=39/73 grid=0.21 parallax=8.295° score=0.581 combined=0.397
+   [topK] A=F152 B=F197 branch=(1, 1) marker_bidir=0.369px feature_inlier_epi=13.765px E_epi=0.412px inliers=71/108 grid=0.33 parallax=6.664° score=0.538 combined=0.518
+   [topK] A=F152 B=F218 branch=(1, 1) marker_bidir=0.334px feature_inlier_epi=28.688px E_epi=0.376px inliers=55/97 grid=0.33 parallax=9.205° score=0.517 combined=0.592
+   [topK] A=F152 B=F240 branch=(1, 1) marker_bidir=0.333px feature_inlier_epi=27.158px E_epi=0.399px inliers=39/73 grid=0.21 parallax=8.295° score=0.581 combined=0.691
+   [topK] A=F87 B=F197 branch=(1, 1) marker_bidir=0.430px feature_inlier_epi=33.884px E_epi=0.361px inliers=45/76 grid=0.33 parallax=16.304° score=0.457 combined=0.726
+   [topK] A=F152 B=F218 branch=(0, 1) marker_bidir=0.225px feature_inlier_epi=61.616px E_epi=0.376px inliers=55/97 grid=0.33 parallax=9.205° score=1.197 combined=0.864
+   [topK] A=F152 B=F218 branch=(1, 0) marker_bidir=0.298px feature_inlier_epi=99.887px E_epi=0.376px inliers=55/97 grid=0.33 parallax=9.205° score=1.197 combined=0.864
+   [topK] A=F152 B=F240 branch=(0, 1) marker_bidir=0.223px feature_inlier_epi=38.607px E_epi=0.399px inliers=39/73 grid=0.21 parallax=8.295° score=1.135 combined=0.881
+   [topK] A=F152 B=F240 branch=(1, 0) marker_bidir=0.293px feature_inlier_epi=98.899px E_epi=0.399px inliers=39/73 grid=0.21 parallax=8.295° score=1.135 combined=0.881
+🎯 [pair quality] score=0.517 | reproj=0.167px | marker_bidir=0.167px | feature_inlier_epi=0.855px | E_epi=0.376px | baseline=40.29mm | shared=1 | feature_grid=0.33 | parallax=9.205°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.376 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.167px, max=0.184px | feature_seed_p90=2.172px, final_inliers=44
+   [RT候選-best] joint_from_marker_w12 | marker=0.180px, max=0.241px | feature_seed_p90=1.230px, final_inliers=51
+   [RT候選-best] joint_from_marker_w4 | marker=0.206px, max=0.330px | feature_seed_p90=1.210px, final_inliers=51
+   [RT候選-best] joint_from_marker_w1 | marker=0.395px, max=0.657px | feature_seed_p90=1.139px, final_inliers=52
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.217px, R→L=0.194px, max=0.330px | feature inliers=51/97, median=0.410px, p90=1.051px | baseline=40.79mm
+📍 [RT SIFT像素] 44/97 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 152
+  - 左圖 (Frame B) 索引: 218
+  - 計算 Baseline: 40.79 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.217px, R→L=0.194px, max=0.330px | Feature inliers=51/97, median=0.410px, p90=1.051px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\test_rt\video_20260717_170413_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.126 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.85 s
+   - 影片索引建立(394 幀)                   8.5 ms (  0.5%)
+   - ArUco偵測+配對搜尋(含極線重排)          1723.0 ms ( 93.3%)
+   - 混合RT精修+次佳打包                    67.0 ms (  3.6%)
+   - 去畸變+全域平面擬合                     48.5 ms (  2.6%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

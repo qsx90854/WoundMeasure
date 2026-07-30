@@ -1,0 +1,44 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260602_171038.mp4，總影格數: 158 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F52 B=F87 branch=(0, 0) marker_bidir=2.878px feature_inlier_epi=0.730px E_epi=0.363px inliers=48/87 grid=0.21 parallax=9.458° score=2.105 combined=0.468
+   [topK] A=F34 B=F96 branch=(0, 0) marker_bidir=7.548px feature_inlier_epi=0.692px E_epi=0.425px inliers=31/54 grid=0.21 parallax=21.450° score=1.781 combined=4.434
+   [topK] A=F52 B=F96 branch=(0, 0) marker_bidir=3.483px feature_inlier_epi=0.706px E_epi=0.451px inliers=44/86 grid=0.25 parallax=12.143° score=2.080 combined=4.493
+   [topK] A=F34 B=F79 branch=(0, 0) marker_bidir=8.736px feature_inlier_epi=1.036px E_epi=0.447px inliers=24/47 grid=0.17 parallax=24.522° score=1.794 combined=4.476
+🎯 [pair quality] score=2.105 | reproj=1.643px | marker_bidir=2.878px | feature_inlier_epi=0.730px | E_epi=0.363px | baseline=38.57mm | shared=2 | feature_grid=0.21 | parallax=9.458°
+ℹ️ 第 1 階段：最佳特徵極線殘差 0.363 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 2 階段抽樣評估 (抽樣張數: 各段最多 20 張)...
+📌 [第 2 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F69 B=F120 branch=(0, 0) marker_bidir=0.198px feature_inlier_epi=3.315px E_epi=0.291px inliers=84/139 grid=0.33 parallax=1.291° score=0.715 combined=0.352
+   [topK] A=F0 B=F124 branch=(0, 0) marker_bidir=0.995px feature_inlier_epi=6.970px E_epi=0.221px inliers=27/51 grid=0.21 parallax=22.992° score=0.943 combined=0.403
+   [topK] A=F0 B=F120 branch=(0, 0) marker_bidir=1.205px feature_inlier_epi=21.304px E_epi=0.327px inliers=26/51 grid=0.21 parallax=23.408° score=0.882 combined=0.737
+   [topK] A=F69 B=F91 branch=(0, 0) marker_bidir=4.128px feature_inlier_epi=9.068px E_epi=0.344px inliers=114/138 grid=0.46 parallax=2.543° score=0.935 combined=4.634
+🎯 [pair quality] score=0.715 | reproj=0.172px | marker_bidir=0.198px | feature_inlier_epi=3.315px | E_epi=0.291px | baseline=24.87mm | shared=1 | feature_grid=0.33 | parallax=1.291°
+🎉 第 2 階段搜尋成功！特徵極線殘差 0.291 px < 0.8 px | reproj 0.172 px
+   [RT候選-best] marker_only | marker=0.190px, max=0.264px | feature_seed_p90=23.552px, final_inliers=10
+   [RT候選-best] joint_from_marker_w12 | marker=0.565px, max=0.814px | feature_seed_p90=1.485px, final_inliers=75
+   [RT候選-best] joint_from_marker_w4 | marker=0.582px, max=0.805px | feature_seed_p90=1.429px, final_inliers=76
+   [RT候選-best] joint_from_marker_w1 | marker=0.618px, max=0.798px | feature_seed_p90=1.347px, final_inliers=76
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.606px, R→L=0.557px, max=0.805px | feature inliers=76/139, median=0.346px, p90=0.958px | baseline=12.85mm
+   [RT候選-F0] marker_only | marker=0.134px, max=0.166px | feature_seed_p90=120.904px, final_inliers=1
+   [RT候選-F0] joint_from_marker_w12 | marker=2.324px, max=3.864px | feature_seed_p90=15.501px, final_inliers=1
+   [RT候選-F0] joint_from_marker_w4 | marker=2.822px, max=4.836px | feature_seed_p90=9.882px, final_inliers=7
+   [RT候選-F0] joint_from_marker_w1 | marker=1.866px, max=2.803px | feature_seed_p90=4.102px, final_inliers=17
+✅ [RT聯合精修-F0] role=marker_only | marker L→R=0.162px, R→L=0.097px, max=0.166px | feature inliers=1/51, median=0.160px, p90=0.160px | baseline=109.90mm
+⚠️ [次佳配對] F0 未同時通過 marker 雙向投影與 Feature 內點驗證 (feature=0.160px)，已排除，不參與深度融合。
+📍 [RT SIFT像素] 67/139 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 69
+  - 左圖 (Frame B) 索引: 120
+  - 計算 Baseline: 12.85 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.606px, R→L=0.557px, max=0.805px | Feature inliers=76/139, median=0.346px, p90=0.958px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260602_171038_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.664 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 4.71 s
+   - 影片索引建立(158 幀)                   5.1 ms (  0.1%)
+   - ArUco偵測+配對搜尋(含極線重排)          4572.9 ms ( 97.0%)
+   - 混合RT精修+次佳打包                   104.4 ms (  2.2%)
+   - 去畸變+全域平面擬合                     31.1 ms (  0.7%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

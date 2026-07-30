@@ -1,0 +1,28 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_153838.mp4，總影格數: 85 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F31 B=F46 branch=(0, 0) marker_bidir=1.991px feature_inlier_epi=1.845px E_epi=0.297px inliers=106/147 grid=0.58 parallax=3.756° score=4.819 combined=0.871
+   [topK] A=F27 B=F46 branch=(0, 0) marker_bidir=2.462px feature_inlier_epi=1.730px E_epi=0.455px inliers=96/134 grid=0.54 parallax=3.947° score=4.892 combined=4.894
+   [topK] A=F31 B=F51 branch=(0, 0) marker_bidir=2.541px feature_inlier_epi=1.207px E_epi=0.466px inliers=86/138 grid=0.42 parallax=3.825° score=4.933 combined=4.898
+🎯 [pair quality] score=4.819 | reproj=4.393px | marker_bidir=1.991px | feature_inlier_epi=1.845px | E_epi=0.297px | baseline=10.98mm | shared=2 | feature_grid=0.58 | parallax=3.756°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.297 px < 0.8 px | reproj 4.393 px
+   [RT候選-best] joint_from_marker_w12 | marker=1.757px, max=4.991px | feature_seed_p90=0.929px, final_inliers=100
+   [RT候選-best] joint_from_marker_w4 | marker=1.771px, max=5.056px | feature_seed_p90=0.925px, final_inliers=101
+   [RT候選-best] joint_from_marker_w1 | marker=1.794px, max=5.217px | feature_seed_p90=0.936px, final_inliers=100
+⚠️ [RT聯合精修-best] role=unreliable_marker_fallback | marker L→R=1.886px, R→L=1.618px, max=4.991px | feature inliers=100/147, median=0.321px, p90=0.741px | baseline=8.28mm
+📍 [RT SIFT像素] 106/147 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 31
+  - 左圖 (Frame B) 索引: 46
+  - 計算 Baseline: 8.28 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=1.886px, R→L=1.618px, max=4.991px | Feature inliers=100/147, median=0.321px, p90=0.741px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_153838_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.028 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.57 s
+   - 影片索引建立(85 幀)                    5.7 ms (  0.4%)
+   - ArUco偵測+配對搜尋(含極線重排)          1411.2 ms ( 89.6%)
+   - 混合RT精修+次佳打包                    92.3 ms (  5.9%)
+   - 去畸變+全域平面擬合                     65.4 ms (  4.2%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

@@ -1,0 +1,359 @@
+=== 影片分析與挑選最優對日誌 ===
+🎬 錄影就緒，準備載入: SU01\video_20260729_144738.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_144738.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=91.37mm parallax=40.14deg depth_sigma=0.93mm score=0.760
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.218px feature_inlier_epi=16.451px E_epi=0.341px inliers=46/61 grid=0.17 parallax=8.056° score=0.760 combined=0.832
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.320px feature_inlier_epi=43.983px E_epi=0.341px inliers=46/61 grid=0.17 parallax=8.056° score=0.760 combined=0.832
+🎯 [pair quality] score=0.760 | reproj=0.047px | marker_bidir=0.218px | feature_inlier_epi=16.451px | E_epi=0.341px | baseline=91.37mm | shared=1 | marker_parallax=40.14deg | predicted_depth_sigma=0.93mm | feature_grid=0.17 | parallax=8.056°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.341 px < 0.8 px (IPPE 分支 (0, 1))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=1)
+   [RT候選-best] marker_only | marker=0.217px, max=0.313px | feature_seed_p90=50.032px, final_inliers=5, final_p90=1.283px, holdout_median=36.71961435958853
+   [RT候選-best] joint_from_marker_w12 | marker=0.117px, max=0.205px | feature_seed_p90=0.989px, final_inliers=45, final_p90=0.976px, holdout_median=0.5120638643524129
+   [RT候選-best] joint_from_marker_w4 | marker=0.126px, max=0.164px | feature_seed_p90=0.940px, final_inliers=46, final_p90=0.940px, holdout_median=0.3073872250541696
+   [RT候選-best] joint_from_marker_w1 | marker=0.188px, max=0.288px | feature_seed_p90=0.940px, final_inliers=46, final_p90=0.940px, holdout_median=0.30113884199055363
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.127px, R→L=0.125px, max=0.164px | feature inliers=46/61, median=0.307px, p90=0.940px | baseline=20.66mm
+📍 [RT SIFT像素] 36/61 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 20.66 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.127px, R→L=0.125px, max=0.164px | Feature inliers=46/61, median=0.307px, p90=0.940px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_144738_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.091 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.00 s
+   - 影片索引建立(2 幀)                    25.6 ms (  2.6%)
+   - ArUco偵測+配對搜尋(含極線重排)           697.0 ms ( 69.5%)
+   - 混合RT精修+次佳打包                   181.9 ms ( 18.1%)
+   - 去畸變+全域平面擬合                     98.7 ms (  9.8%)
+   - 深度匹配特徵延後計算                      0.1 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.6794 deg
+Translation L2 error: 2.2478 mm | direction error: 6.2156 deg
+Baseline: algorithm=20.6627 mm | JSON=20.3228 mm | delta=+0.3399 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.06px / 右 0.06px (量極線幾何) | 三角化邊長 8.24mm vs 已知 8.25mm (尺度偏差 -0.1%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_144833.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_144833.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=89.49mm parallax=39.28deg depth_sigma=0.96mm score=0.786
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.251px feature_inlier_epi=17.059px E_epi=0.468px inliers=38/62 grid=0.17 parallax=7.409° score=0.786 combined=0.865
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.325px feature_inlier_epi=39.524px E_epi=0.468px inliers=38/62 grid=0.17 parallax=7.409° score=0.786 combined=0.865
+🎯 [pair quality] score=0.786 | reproj=0.045px | marker_bidir=0.251px | feature_inlier_epi=17.059px | E_epi=0.468px | baseline=89.49mm | shared=1 | marker_parallax=39.28deg | predicted_depth_sigma=0.96mm | feature_grid=0.17 | parallax=7.409°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.468 px < 0.8 px (IPPE 分支 (0, 1))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=1)
+   [RT候選-best] marker_only | marker=0.250px, max=0.363px | feature_seed_p90=50.194px, final_inliers=0, final_p90=infpx, holdout_median=17.85157351889576
+   [RT候選-best] joint_from_marker_w12 | marker=0.166px, max=0.264px | feature_seed_p90=1.357px, final_inliers=35, final_p90=0.947px, holdout_median=0.756725913714839
+   [RT候選-best] joint_from_marker_w4 | marker=0.176px, max=0.268px | feature_seed_p90=1.200px, final_inliers=36, final_p90=0.887px, holdout_median=0.48838264314811225
+   [RT候選-best] joint_from_marker_w1 | marker=0.242px, max=0.350px | feature_seed_p90=1.004px, final_inliers=38, final_p90=1.004px, holdout_median=0.2759890999378523
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.169px, R→L=0.183px, max=0.268px | feature inliers=36/62, median=0.356px, p90=0.887px | baseline=22.28mm
+📍 [RT SIFT像素] 30/62 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 22.28 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.169px, R→L=0.183px, max=0.268px | Feature inliers=36/62, median=0.356px, p90=0.887px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_144833_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.075 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.88 s
+   - 影片索引建立(2 幀)                     8.9 ms (  1.0%)
+   - ArUco偵測+配對搜尋(含極線重排)           624.0 ms ( 71.2%)
+   - 混合RT精修+次佳打包                   152.6 ms ( 17.4%)
+   - 去畸變+全域平面擬合                     90.1 ms ( 10.3%)
+   - 深度匹配特徵延後計算                      0.3 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.9409 deg
+Translation L2 error: 2.3756 mm | direction error: 3.6359 deg
+Baseline: algorithm=22.2775 mm | JSON=20.3228 mm | delta=+1.9547 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.05px / 右 0.05px (量極線幾何) | 三角化邊長 8.20mm vs 已知 8.25mm (尺度偏差 -0.5%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_145006.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_145006.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=22.80mm parallax=9.67deg depth_sigma=4.59mm score=0.671
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.032px feature_inlier_epi=1.730px E_epi=0.491px inliers=44/62 grid=0.17 parallax=8.850° score=0.671 combined=0.346
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.400px feature_inlier_epi=12.652px E_epi=0.491px inliers=44/62 grid=0.17 parallax=8.850° score=0.671 combined=0.680
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.218px feature_inlier_epi=27.754px E_epi=0.491px inliers=44/62 grid=0.17 parallax=8.850° score=0.768 combined=0.867
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.336px feature_inlier_epi=29.689px E_epi=0.491px inliers=44/62 grid=0.17 parallax=8.850° score=0.768 combined=0.867
+🎯 [pair quality] score=0.671 | reproj=0.031px | marker_bidir=0.032px | feature_inlier_epi=1.730px | E_epi=0.491px | baseline=22.76mm | shared=1 | marker_parallax=9.62deg | predicted_depth_sigma=4.61mm | feature_grid=0.17 | parallax=8.850°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.491 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.031px, max=0.035px | feature_seed_p90=3.623px, final_inliers=18, final_p90=1.075px, holdout_median=1.771860037898217
+   [RT候選-best] joint_from_marker_w12 | marker=0.200px, max=0.358px | feature_seed_p90=1.773px, final_inliers=38, final_p90=1.118px, holdout_median=0.6567213681443416
+   [RT候選-best] joint_from_marker_w4 | marker=0.390px, max=0.685px | feature_seed_p90=1.627px, final_inliers=38, final_p90=1.273px, holdout_median=0.7303665843929611
+   [RT候選-best] joint_from_marker_w1 | marker=0.667px, max=1.086px | feature_seed_p90=1.705px, final_inliers=38, final_p90=1.148px, holdout_median=0.7622665258677928
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.218px, R→L=0.180px, max=0.358px | feature inliers=38/62, median=0.522px, p90=1.118px | baseline=19.80mm
+📍 [RT SIFT像素] 35/62 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 19.80 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.218px, R→L=0.180px, max=0.358px | Feature inliers=38/62, median=0.522px, p90=1.118px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_145006_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.050 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.92 s
+   - 影片索引建立(2 幀)                    22.6 ms (  2.5%)
+   - ArUco偵測+配對搜尋(含極線重排)           597.9 ms ( 64.9%)
+   - 混合RT精修+次佳打包                   212.6 ms ( 23.1%)
+   - 去畸變+全域平面擬合                     88.0 ms (  9.6%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.4141 deg
+Translation L2 error: 1.2235 mm | direction error: 3.1612 deg
+Baseline: algorithm=19.8010 mm | JSON=20.3228 mm | delta=-0.5218 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.04px / 右 0.04px (量極線幾何) | 三角化邊長 8.31mm vs 已知 8.25mm (尺度偏差 +0.7%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_145150.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_145150.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=22.72mm parallax=9.52deg depth_sigma=4.67mm score=0.704
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.037px feature_inlier_epi=0.693px E_epi=0.403px inliers=39/51 grid=0.17 parallax=9.986° score=0.704 combined=0.284
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.394px feature_inlier_epi=11.629px E_epi=0.403px inliers=39/51 grid=0.17 parallax=9.986° score=0.704 combined=0.689
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.246px feature_inlier_epi=23.812px E_epi=0.403px inliers=39/51 grid=0.17 parallax=9.986° score=0.798 combined=0.852
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.310px feature_inlier_epi=27.864px E_epi=0.403px inliers=39/51 grid=0.17 parallax=9.986° score=0.798 combined=0.852
+🎯 [pair quality] score=0.704 | reproj=0.037px | marker_bidir=0.037px | feature_inlier_epi=0.693px | E_epi=0.403px | baseline=22.70mm | shared=1 | marker_parallax=9.49deg | predicted_depth_sigma=4.68mm | feature_grid=0.17 | parallax=9.986°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.403 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.037px, max=0.040px | feature_seed_p90=1.839px, final_inliers=32, final_p90=1.166px, holdout_median=0.6405544714270489
+   [RT候選-best] joint_from_marker_w12 | marker=0.096px, max=0.156px | feature_seed_p90=0.821px, final_inliers=39, final_p90=0.821px, holdout_median=0.22659143061110662
+   [RT候選-best] joint_from_marker_w4 | marker=0.108px, max=0.162px | feature_seed_p90=0.824px, final_inliers=39, final_p90=0.824px, holdout_median=0.21466381203999407
+   [RT候選-best] joint_from_marker_w1 | marker=0.139px, max=0.193px | feature_seed_p90=0.819px, final_inliers=39, final_p90=0.819px, holdout_median=0.22951421110169362
+✅ [RT聯合精修-best] role=marker_only | marker L→R=0.039px, R→L=0.035px, max=0.040px | feature inliers=32/51, median=0.610px, p90=1.166px | baseline=22.69mm
+📍 [RT SIFT像素] 39/51 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 22.69 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.039px, R→L=0.035px, max=0.040px | Feature inliers=32/51, median=0.610px, p90=1.166px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_145150_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.009 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.95 s
+   - 影片索引建立(2 幀)                    21.4 ms (  2.3%)
+   - ArUco偵測+配對搜尋(含極線重排)           676.4 ms ( 71.2%)
+   - 混合RT精修+次佳打包                   158.0 ms ( 16.6%)
+   - 去畸變+全域平面擬合                     93.9 ms (  9.9%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 1.2580 deg
+Translation L2 error: 2.7785 mm | direction error: 3.8936 deg
+Baseline: algorithm=22.6875 mm | JSON=20.3228 mm | delta=+2.3647 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.00px / 右 0.00px (量極線幾何) | 三角化邊長 8.25mm vs 已知 8.25mm (尺度偏差 +0.0%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_145443.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_145443.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=24.71mm parallax=8.05deg depth_sigma=5.53mm score=0.900
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.245px feature_inlier_epi=2.956px E_epi=0.409px inliers=20/79 grid=0.17 parallax=0.821° score=0.900 combined=0.572
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.575px feature_inlier_epi=14.659px E_epi=0.409px inliers=20/79 grid=0.17 parallax=0.821° score=0.901 combined=0.611
+🎯 [pair quality] score=0.900 | reproj=0.243px | marker_bidir=0.245px | feature_inlier_epi=2.956px | E_epi=0.409px | baseline=24.71mm | shared=1 | marker_parallax=8.05deg | predicted_depth_sigma=5.53mm | feature_grid=0.17 | parallax=0.821°
+ℹ️ 快速橋接幀的特徵極線殘差為 0.409 px (前置門檻 0.8 px)，交由聯合精修與最終品質檢查。
+⚠️ 快速橋接幀未達前置門檻，仍保留當前最佳候選 (feat_epi 0.409 px, reproj 0.243 px)，後續由品質旗標決定是否可信。
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+⚠️ [RT精修-best] 特徵幾何不可靠 (內點或空間覆蓋不足)，僅執行 marker 雙向精修。
+   [RT候選-best] marker_only | marker=0.245px, max=0.282px | feature_seed_p90=3.834px, final_inliers=1, final_p90=0.653px, holdout_median=None
+✅ [RT聯合精修-best] role=marker_only | marker L→R=0.275px, R→L=0.211px, max=0.282px | feature inliers=1/79, median=0.653px, p90=0.653px | baseline=24.74mm
+📍 [RT SIFT像素] 20/79 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 24.74 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.275px, R→L=0.211px, max=0.282px | Feature inliers=1/79, median=0.653px, p90=0.653px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_145443_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.091 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.74 s
+   - 影片索引建立(2 幀)                    19.8 ms (  2.7%)
+   - ArUco偵測+配對搜尋(含極線重排)           536.2 ms ( 72.9%)
+   - 混合RT精修+次佳打包                    62.3 ms (  8.5%)
+   - 去畸變+全域平面擬合                    117.5 ms ( 16.0%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 1.2615 deg
+Translation L2 error: 4.8148 mm | direction error: 4.8768 deg
+Baseline: algorithm=24.7434 mm | JSON=20.3228 mm | delta=+4.4206 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.02px / 右 0.02px (量極線幾何) | 三角化邊長 8.26mm vs 已知 8.25mm (尺度偏差 +0.1%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_145714.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_145714.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=23.39mm parallax=7.54deg depth_sigma=5.91mm score=0.926
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.272px feature_inlier_epi=3.555px E_epi=0.527px inliers=61/80 grid=0.21 parallax=10.863° score=0.926 combined=0.409
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.601px feature_inlier_epi=10.588px E_epi=0.527px inliers=61/80 grid=0.21 parallax=10.863° score=0.926 combined=0.672
+🎯 [pair quality] score=0.926 | reproj=0.271px | marker_bidir=0.272px | feature_inlier_epi=3.555px | E_epi=0.527px | baseline=23.39mm | shared=1 | marker_parallax=7.54deg | predicted_depth_sigma=5.91mm | feature_grid=0.21 | parallax=10.863°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.527 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.272px, max=0.303px | feature_seed_p90=5.107px, final_inliers=0, final_p90=infpx, holdout_median=3.597447186582123
+   [RT候選-best] joint_from_marker_w12 | marker=0.410px, max=0.585px | feature_seed_p90=1.529px, final_inliers=54, final_p90=1.002px, holdout_median=0.21399093611712244
+   [RT候選-best] joint_from_marker_w4 | marker=0.542px, max=0.920px | feature_seed_p90=1.275px, final_inliers=56, final_p90=0.936px, holdout_median=0.25404294250774373
+   [RT候選-best] joint_from_marker_w1 | marker=0.601px, max=1.030px | feature_seed_p90=1.034px, final_inliers=59, final_p90=0.934px, holdout_median=0.27578920084819714
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.433px, R→L=0.385px, max=0.585px | feature inliers=54/80, median=0.261px, p90=1.002px | baseline=21.78mm
+📍 [RT SIFT像素] 48/80 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 21.78 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.433px, R→L=0.385px, max=0.585px | Feature inliers=54/80, median=0.261px, p90=1.002px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_145714_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.126 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.94 s
+   - 影片索引建立(2 幀)                    18.1 ms (  1.9%)
+   - ArUco偵測+配對搜尋(含極線重排)           577.1 ms ( 61.4%)
+   - 混合RT精修+次佳打包                   204.9 ms ( 21.8%)
+   - 去畸變+全域平面擬合                    139.7 ms ( 14.9%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.4205 deg
+Translation L2 error: 2.2711 mm | direction error: 4.7353 deg
+Baseline: algorithm=21.7842 mm | JSON=20.3228 mm | delta=+1.4614 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.11px / 右 0.11px (量極線幾何) | 三角化邊長 8.37mm vs 已知 8.25mm (尺度偏差 +1.4%)
+🎬 錄影就緒，準備載入: SU01\video_20260729_145841.mp4
+✅ 已載入 SU01 左右內參: D:\Lightglue\lg_env\calibration_result_su01.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=2560x1024，Left=1280x1024，Right=1280x1024
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: SU01\video_20260729_145841.mp4，影像數: 2 (選幀範圍模式: half_half)
+🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: x=320:960, y=256:768 (640x512)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=22.67mm parallax=7.29deg depth_sigma=6.11mm score=0.978
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.235px feature_inlier_epi=3.473px E_epi=0.380px inliers=59/79 grid=0.17 parallax=8.080° score=0.978 combined=0.374
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.583px feature_inlier_epi=4.089px E_epi=0.380px inliers=59/79 grid=0.17 parallax=8.080° score=0.979 combined=0.575
+🎯 [pair quality] score=0.978 | reproj=0.234px | marker_bidir=0.235px | feature_inlier_epi=3.473px | E_epi=0.380px | baseline=22.67mm | shared=1 | marker_parallax=7.29deg | predicted_depth_sigma=6.11mm | feature_grid=0.17 | parallax=8.080°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.380 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.235px, max=0.263px | feature_seed_p90=5.322px, final_inliers=5, final_p90=1.364px, holdout_median=3.449606371817274
+   [RT候選-best] joint_from_marker_w12 | marker=0.373px, max=0.535px | feature_seed_p90=0.946px, final_inliers=57, final_p90=0.885px, holdout_median=0.4469315954421474
+   [RT候選-best] joint_from_marker_w4 | marker=0.413px, max=0.594px | feature_seed_p90=0.800px, final_inliers=58, final_p90=0.757px, holdout_median=0.34904494006933495
+   [RT候選-best] joint_from_marker_w1 | marker=0.443px, max=0.661px | feature_seed_p90=0.797px, final_inliers=58, final_p90=0.771px, holdout_median=0.41999310348786456
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.431px, R→L=0.394px, max=0.594px | feature inliers=58/79, median=0.279px, p90=0.757px | baseline=21.15mm
+📍 [RT SIFT像素] 47/79 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 21.15 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.431px, R→L=0.394px, max=0.594px | Feature inliers=58/79, median=0.279px, p90=0.757px
+🧾 [RT SIFT診斷] 已輸出: SU01\video_20260729_145841_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.019 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.77 s
+   - 影片索引建立(2 幀)                     6.7 ms (  0.9%)
+   - ArUco偵測+配對搜尋(含極線重排)           554.4 ms ( 72.1%)
+   - 混合RT精修+次佳打包                   132.5 ms ( 17.2%)
+   - 去畸變+全域平面擬合                     74.9 ms (  9.7%)
+   - 深度匹配特徵延後計算                      0.1 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.5290 deg
+Translation L2 error: 2.1915 mm | direction error: 5.6071 deg
+Baseline: algorithm=21.1528 mm | JSON=20.3228 mm | delta=+0.8300 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.11px / 右 0.11px (量極線幾何) | 三角化邊長 8.33mm vs 已知 8.25mm (尺度偏差 +1.0%)
+
+
+=== RT SIFT recoverPose inlier pixel pairs ===
+role=final_rt, applied=True, inliers=47/79
+#001: left=(569.389, 394.326), right=(495.289, 396.380)
+#002: left=(623.729, 528.312), right=(542.446, 530.570)
+#003: left=(807.674, 543.259), right=(725.588, 546.149)
+#004: left=(650.851, 602.259), right=(560.682, 605.465)
+#005: left=(628.808, 622.128), right=(536.990, 625.078)
+#006: left=(624.014, 527.484), right=(542.798, 529.936)
+#007: left=(619.033, 508.917), right=(540.019, 511.370)
+#008: left=(715.185, 489.681), right=(633.656, 491.666)
+#009: left=(671.054, 628.333), right=(580.542, 631.168)
+#010: left=(510.875, 466.284), right=(430.444, 468.373)
+#011: left=(709.024, 552.164), right=(625.357, 555.394)
+#012: left=(733.212, 552.830), right=(648.842, 555.504)
+#013: left=(663.480, 617.584), right=(575.010, 620.322)
+#014: left=(621.791, 597.191), right=(534.533, 599.883)
+#015: left=(580.430, 614.020), right=(488.655, 617.174)
+#016: left=(715.185, 489.681), right=(633.656, 491.666)
+#017: left=(696.389, 605.892), right=(605.570, 609.127)
+#018: left=(597.410, 465.044), right=(517.313, 467.864)
+#019: left=(723.331, 489.845), right=(642.771, 492.241)
+#020: left=(678.850, 596.248), right=(590.378, 598.574)
+#021: left=(703.328, 467.653), right=(624.674, 470.504)
+#022: left=(612.519, 461.597), right=(531.348, 463.748)
+#023: left=(675.139, 533.134), right=(594.685, 535.692)
+#024: left=(731.356, 561.048), right=(645.400, 564.067)
+#025: left=(618.836, 401.689), right=(544.667, 404.318)
+#026: left=(693.825, 463.809), right=(614.948, 466.252)
+#027: left=(687.621, 595.281), right=(599.026, 598.101)
+#028: left=(494.124, 553.893), right=(406.476, 557.305)
+#029: left=(634.781, 576.567), right=(547.937, 579.650)
+#030: left=(615.844, 436.241), right=(537.061, 439.152)
+#031: left=(755.173, 642.316), right=(665.374, 645.664)
+#032: left=(636.915, 540.779), right=(554.158, 543.438)
+#033: left=(492.868, 477.844), right=(408.396, 480.730)
+#034: left=(681.001, 499.854), right=(601.198, 503.360)
+#035: left=(474.188, 439.604), right=(394.420, 442.282)
+#036: left=(709.630, 598.989), right=(619.354, 603.224)
+#037: left=(555.142, 442.606), right=(477.257, 444.823)
+#038: left=(798.921, 515.451), right=(720.167, 518.469)
+#039: left=(783.239, 659.179), right=(693.243, 662.131)
+#040: left=(502.503, 500.064), right=(417.410, 502.660)
+#041: left=(550.124, 491.959), right=(469.955, 494.770)
+#042: left=(541.099, 440.990), right=(465.274, 442.807)
+#043: left=(457.437, 619.278), right=(364.229, 623.393)
+#044: left=(585.402, 491.915), right=(503.985, 495.414)
+#045: left=(583.747, 417.832), right=(506.992, 420.322)
+#046: left=(466.303, 554.324), right=(379.178, 556.244)
+#047: left=(460.464, 588.884), right=(368.502, 592.616)
+
+==================================================
+

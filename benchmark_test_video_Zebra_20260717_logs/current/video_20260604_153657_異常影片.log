@@ -1,0 +1,26 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260604_153657_異常影片.mp4，總影格數: 103 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F33 B=F51 branch=(0, 0) marker_bidir=1.720px feature_inlier_epi=1.402px E_epi=0.330px inliers=101/132 grid=0.46 parallax=0.477° score=1.791 combined=0.405
+   [topK] A=F22 B=F56 branch=(0, 0) marker_bidir=2.394px feature_inlier_epi=2.357px E_epi=0.388px inliers=106/133 grid=0.38 parallax=4.154° score=1.812 combined=0.451
+   [topK] A=F22 B=F62 branch=(0, 0) marker_bidir=3.149px feature_inlier_epi=2.765px E_epi=0.375px inliers=95/122 grid=0.38 parallax=8.071° score=1.703 combined=4.450
+   [topK] A=F33 B=F62 branch=(0, 0) marker_bidir=2.902px feature_inlier_epi=2.106px E_epi=0.419px inliers=88/118 grid=0.29 parallax=9.345° score=1.686 combined=4.463
+🎯 [pair quality] score=1.791 | reproj=1.339px | marker_bidir=1.720px | feature_inlier_epi=1.402px | E_epi=0.330px | baseline=8.93mm | shared=2 | feature_grid=0.46 | parallax=0.477°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.330 px < 0.8 px | reproj 1.339 px
+⚠️ [RT精修-best] 無有效聯合候選，保留 ArUco RT。
+📍 [RT SIFT像素] 101/132 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 33
+  - 左圖 (Frame B) 索引: 51
+  - 計算 Baseline: 8.93 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=1.670px, R→L=1.770px, max=3.916px | Feature inliers=58/132, median=0.841px, p90=1.418px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260604_153657_異常影片_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 1.397 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.19 s
+   - 影片索引建立(103 幀)                   5.5 ms (  0.5%)
+   - ArUco偵測+配對搜尋(含極線重排)          1011.9 ms ( 85.4%)
+   - 混合RT精修+次佳打包                   116.2 ms (  9.8%)
+   - 去畸變+全域平面擬合                     51.8 ms (  4.4%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

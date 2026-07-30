@@ -1,0 +1,35 @@
+🎬 載入影片: test_video_Zebra\test_rt\video_20260717_170239.mp4，總影格數: 160 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F79 B=F88 branch=(0, 0) marker_bidir=0.129px feature_inlier_epi=2.610px E_epi=0.331px inliers=52/92 grid=0.33 parallax=5.587° score=0.719 combined=0.252
+   [topK] A=F79 B=F88 branch=(1, 1) marker_bidir=0.373px feature_inlier_epi=4.929px E_epi=0.331px inliers=52/92 grid=0.33 parallax=5.587° score=0.718 combined=0.447
+   [topK] A=F79 B=F88 branch=(1, 0) marker_bidir=0.224px feature_inlier_epi=27.249px E_epi=0.331px inliers=52/92 grid=0.33 parallax=5.587° score=1.320 combined=0.872
+   [topK] A=F79 B=F88 branch=(0, 1) marker_bidir=0.325px feature_inlier_epi=21.110px E_epi=0.331px inliers=52/92 grid=0.33 parallax=5.587° score=1.320 combined=0.873
+🎯 [pair quality] score=0.719 | reproj=0.125px | marker_bidir=0.129px | feature_inlier_epi=2.610px | E_epi=0.331px | baseline=21.73mm | shared=1 | feature_grid=0.33 | parallax=5.587°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.331 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.129px, max=0.160px | feature_seed_p90=3.519px, final_inliers=6, final_p90=1.473px, holdout_median=2.2407798301923303
+   [RT候選-best] joint_from_marker_w12 | marker=0.229px, max=0.385px | feature_seed_p90=1.003px, final_inliers=51, final_p90=0.905px, holdout_median=0.2673701017642093
+   [RT候選-best] joint_from_marker_w4 | marker=0.289px, max=0.475px | feature_seed_p90=0.828px, final_inliers=52, final_p90=0.828px, holdout_median=0.2836866903926347
+   [RT候選-best] joint_from_marker_w1 | marker=0.361px, max=0.565px | feature_seed_p90=0.738px, final_inliers=52, final_p90=0.738px, holdout_median=0.29176429668223847
+   [RT候選-best] joint_from_feature_w12 | marker=0.229px, max=0.385px | feature_seed_p90=1.003px, final_inliers=51, final_p90=0.905px, holdout_median=0.26736983455144636
+   [RT候選-best] joint_from_feature_w4 | marker=0.289px, max=0.475px | feature_seed_p90=0.828px, final_inliers=52, final_p90=0.828px, holdout_median=0.28368556635852643
+   [RT候選-best] joint_from_feature_w1 | marker=0.361px, max=0.565px | feature_seed_p90=0.738px, final_inliers=52, final_p90=0.738px, holdout_median=0.2917650729043323
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.240px, R→L=0.217px, max=0.385px | feature inliers=51/92, median=0.446px, p90=0.905px | baseline=19.67mm
+📍 [RT SIFT像素] 41/92 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 79
+  - 左圖 (Frame B) 索引: 88
+  - 計算 Baseline: 19.67 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.240px, R→L=0.217px, max=0.385px | Feature inliers=51/92, median=0.446px, p90=0.905px
+🧾 [RT SIFT診斷] 已輸出: test_video_Zebra\test_rt\video_20260717_170239_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.041 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.64 s
+   - 影片索引建立(160 幀)                  28.4 ms (  1.7%)
+   - ArUco偵測+配對搜尋(含極線重排)          1228.8 ms ( 75.0%)
+   - 混合RT精修+次佳打包                   233.3 ms ( 14.2%)
+   - 去畸變+全域平面擬合                    148.3 ms (  9.1%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

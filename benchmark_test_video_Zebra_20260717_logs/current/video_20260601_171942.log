@@ -1,0 +1,63 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260601_171942.mp4，總影格數: 197 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F43 B=F98 branch=(0, 0) marker_bidir=29.860px feature_inlier_epi=3.086px E_epi=0.375px inliers=35/83 grid=0.38 parallax=12.772° score=6.792 combined=5.206
+   [topK] A=F64 B=F108 branch=(0, 0) marker_bidir=66.701px feature_inlier_epi=2.925px E_epi=0.348px inliers=25/71 grid=0.25 parallax=17.161° score=6.727 combined=5.448
+   [topK] A=F64 B=F98 branch=(0, 0) marker_bidir=27.538px feature_inlier_epi=10.007px E_epi=0.496px inliers=4/88 grid=0.12 parallax=0.888° score=6.688 combined=5.749
+   [topK] A=F75 B=F119 branch=(0, 0) marker_bidir=76.380px feature_inlier_epi=35.308px E_epi=0.531px inliers=17/78 grid=0.12 parallax=4.715° score=6.894 combined=5.948
+🎯 [pair quality] score=6.792 | reproj=6.124px | marker_bidir=29.860px | feature_inlier_epi=3.086px | E_epi=0.375px | baseline=34.85mm | shared=2 | feature_grid=0.38 | parallax=12.772°
+ℹ️ 第 1 階段：最佳特徵極線殘差 0.375 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 2 階段抽樣評估 (抽樣張數: 各段最多 20 張)...
+📌 [第 2 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F86 B=F144 branch=(0, 0) marker_bidir=71.519px feature_inlier_epi=3.783px E_epi=0.336px inliers=20/56 grid=0.29 parallax=27.293° score=5.145 combined=5.160
+   [topK] A=F97 B=F149 branch=(0, 0) marker_bidir=30.757px feature_inlier_epi=3.825px E_epi=0.082px inliers=14/72 grid=0.21 parallax=0.871° score=4.763 combined=5.182
+   [topK] A=F97 B=F139 branch=(0, 0) marker_bidir=28.693px feature_inlier_epi=3.340px E_epi=0.231px inliers=7/65 grid=0.17 parallax=0.683° score=4.809 combined=5.244
+   [topK] A=F86 B=F149 branch=(0, 0) marker_bidir=73.499px feature_inlier_epi=5.585px E_epi=0.031px inliers=8/56 grid=0.17 parallax=7.999° score=5.128 combined=5.491
+🎯 [pair quality] score=5.145 | reproj=4.281px | marker_bidir=71.519px | feature_inlier_epi=3.783px | E_epi=0.336px | baseline=104.13mm | shared=2 | feature_grid=0.29 | parallax=27.293°
+ℹ️ 第 2 階段：最佳特徵極線殘差 0.336 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 3 階段抽樣評估 (抽樣張數: 各段最多 30 張)...
+📌 [第 3 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F97 B=F141 branch=(0, 0) marker_bidir=28.756px feature_inlier_epi=2.291px E_epi=0.263px inliers=27/66 grid=0.25 parallax=3.035° score=4.892 combined=5.037
+   [topK] A=F97 B=F152 branch=(0, 0) marker_bidir=31.327px feature_inlier_epi=3.272px E_epi=0.355px inliers=27/69 grid=0.21 parallax=1.334° score=4.918 combined=5.145
+   [topK] A=F93 B=F141 branch=(0, 0) marker_bidir=59.930px feature_inlier_epi=5.561px E_epi=0.376px inliers=24/58 grid=0.21 parallax=12.222° score=5.116 combined=5.316
+   [topK] A=F93 B=F148 branch=(0, 0) marker_bidir=60.902px feature_inlier_epi=45.590px E_epi=0.195px inliers=10/65 grid=0.12 parallax=3.713° score=5.172 combined=5.580
+🎯 [pair quality] score=4.892 | reproj=4.349px | marker_bidir=28.756px | feature_inlier_epi=2.291px | E_epi=0.263px | baseline=41.32mm | shared=2 | feature_grid=0.25 | parallax=3.035°
+ℹ️ 第 3 階段：最佳特徵極線殘差 0.263 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 4 階段抽樣評估 (抽樣張數: 各段最多 40 張)...
+📌 [第 4 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F97 B=F148 branch=(0, 0) marker_bidir=28.892px feature_inlier_epi=2.660px E_epi=0.300px inliers=29/68 grid=0.29 parallax=16.417° score=4.531 combined=4.830
+   [topK] A=F97 B=F150 branch=(0, 0) marker_bidir=30.182px feature_inlier_epi=2.227px E_epi=0.429px inliers=26/71 grid=0.29 parallax=18.477° score=4.459 combined=4.842
+   [topK] A=F94 B=F140 branch=(0, 0) marker_bidir=51.816px feature_inlier_epi=3.569px E_epi=0.203px inliers=15/54 grid=0.17 parallax=5.621° score=4.733 combined=5.336
+   [topK] A=F94 B=F150 branch=(0, 0) marker_bidir=53.216px feature_inlier_epi=3.438px E_epi=0.455px inliers=22/67 grid=0.25 parallax=0.674° score=4.652 combined=5.354
+🎯 [pair quality] score=4.531 | reproj=4.000px | marker_bidir=28.892px | feature_inlier_epi=2.660px | E_epi=0.300px | baseline=45.30mm | shared=2 | feature_grid=0.29 | parallax=16.417°
+ℹ️ 第 4 階段：最佳特徵極線殘差 0.300 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 5 階段抽樣評估 (抽樣張數: 各段最多 50 張)...
+📌 [第 5 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F97 B=F150 branch=(0, 0) marker_bidir=30.386px feature_inlier_epi=2.167px E_epi=0.429px inliers=26/71 grid=0.29 parallax=18.477° score=4.415 combined=4.832
+   [topK] A=F97 B=F152 branch=(0, 0) marker_bidir=30.523px feature_inlier_epi=1.899px E_epi=0.355px inliers=27/69 grid=0.21 parallax=1.334° score=4.482 combined=5.075
+   [topK] A=F95 B=F140 branch=(0, 0) marker_bidir=51.456px feature_inlier_epi=3.556px E_epi=0.320px inliers=21/55 grid=0.25 parallax=22.599° score=4.649 combined=5.012
+   [topK] A=F95 B=F150 branch=(0, 0) marker_bidir=53.896px feature_inlier_epi=3.570px E_epi=0.324px inliers=21/69 grid=0.25 parallax=0.697° score=4.568 combined=5.326
+🎯 [pair quality] score=4.415 | reproj=3.862px | marker_bidir=30.386px | feature_inlier_epi=2.167px | E_epi=0.429px | baseline=48.22mm | shared=2 | feature_grid=0.29 | parallax=18.477°
+ℹ️ 第 5 階段：最佳特徵極線殘差 0.429 px (門檻 0.8 px)，擴大抽樣
+⚠️ 達到最大抽樣張數 (50 張) 仍未達特徵極線門檻 0.8 px。降級使用殘差最小候選 (feat_epi 0.429 px, reproj 3.862 px)——量測品質可能不佳
+   [RT候選-best] marker_only | marker=3.325px, max=5.644px | feature_seed_p90=9.760px, final_inliers=4
+   [RT候選-best] joint_from_marker_w12 | marker=3.221px, max=5.098px | feature_seed_p90=7.446px, final_inliers=10
+   [RT候選-best] joint_from_marker_w4 | marker=3.152px, max=4.735px | feature_seed_p90=5.049px, final_inliers=11
+   [RT候選-best] joint_from_marker_w1 | marker=3.229px, max=4.652px | feature_seed_p90=2.650px, final_inliers=16
+⚠️ [RT聯合精修-best] role=unreliable_marker_fallback | marker L→R=3.089px, R→L=3.213px, max=4.735px | feature inliers=11/71, median=0.520px, p90=0.718px | baseline=51.93mm
+📍 [RT SIFT像素] 26/71 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 97
+  - 左圖 (Frame B) 索引: 150
+  - 計算 Baseline: 51.93 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=3.089px, R→L=3.213px, max=4.735px | Feature inliers=11/71, median=0.520px, p90=0.718px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260601_171942_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.105 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 19.23 s
+   - 影片索引建立(197 幀)                   5.2 ms (  0.0%)
+   - ArUco偵測+配對搜尋(含極線重排)         19110.4 ms ( 99.4%)
+   - 混合RT精修+次佳打包                    76.6 ms (  0.4%)
+   - 去畸變+全域平面擬合                     39.2 ms (  0.2%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

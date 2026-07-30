@@ -7,30 +7,40 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aruco_pose import average_rotations_svd, compute_global_plane as _compute_global_plane
-from .camera_preprocess import preprocess_gray
+from .camera_preprocess import centered_roi_bounds, preprocess_gray
 from .perf_timer import StageTimer
 
 RECORD_SAVE_DIR = "test_video_Zebra"
 SAVE_DEBUG_PAIR_IMAGES = False
-MIN_BASELINE_MM = 8.0
+MIN_BASELINE_MM = 20.0
+PAIR_CANDIDATE_MIN_BASELINE_MM = MIN_BASELINE_MM + 2.0
 MAX_BASELINE_MM = 220.0
-IDEAL_BASELINE_MM = 45.0
+IDEAL_BASELINE_MM = 30.0
 PAIR_SCORE_REPROJ_W = 1.00
-PAIR_SCORE_BASELINE_W = 0.18
+PAIR_SCORE_BASELINE_W = 0.20
+PAIR_SCORE_DEPTH_UNCERTAINTY_W = 0.25
 PAIR_SCORE_BLUR_W = 0.18
 PAIR_SCORE_COVER_W = 0.12
 PAIR_SCORE_MARKER_W = 0.08
+PAIR_DEPTH_REFERENCE_MM = 400.0
+PAIR_MATCH_SIGMA_PX = 1.0
+PAIR_TARGET_DEPTH_SIGMA_MM = 5.0
 
 # ---- 特徵極線驗證與混合 RT 精修 ----
 PAIR_SCORE_EPI_W = 0.5              # 配對評分: 特徵極線殘差權重 (px)
-PAIR_EPI_TOPK = 3                   # 以「幀對」計的特徵極線驗證數量 (每幀對做一次 SIFT 匹配)
+PAIR_EPI_TOPK = 2                   # 只讓兩組 ArUco 最佳候選進入較昂貴的 SIFT 重排
+PAIR_SECOND_SCORE_MARGIN = 0.16     # 第二候選必須與第一名足夠接近才值得做 SIFT
+PAIR_RERANK_MIN_IMPROVEMENT = 0.05 # 避免 SIFT 分數微小波動造成不必要換幀
+PAIR_SECOND_ROT_TRIGGER_DEG = 5.0
+PAIR_SECOND_MARKER_EPI_TRIGGER_PX = 6.0
+PAIR_SECOND_PARALLAX_TRIGGER_DEG = 5.0
 PAIR_EPI_OK_PX = 0.8                # 配對提前收斂的特徵極線殘差門檻 (px, 全模式)
 PAIR_EPI_EXTRA_PX = 1.5             # 次佳對接受的特徵極線殘差上限 (px, 全模式)
 PAIR_TOPK_MAX_PER_START = 2         # top-K 多樣性: 同一起始幀最多幀對數
 PAIR_TOPK_MAX_PER_END = 1           # top-K 多樣性: 同一結尾幀最多幀對數
 ENABLE_FEATURE_RT_REFINE = True     # 用 marker 雙向重投影硬門檻 + SIFT robust residual 聯合精修 RT
 FEATURE_MATCH_RATIO = 0.75          # SIFT ratio test 閾值
-FEATURE_MIN_MATCHES = 25            # 精修所需最少匹配數 / recoverPose 內點數
+FEATURE_MIN_MATCHES = 11            # 低紋理影片仍須有分散且可保留 holdout 的幾何支持
 FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值 (px)
 FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
 FEATURE_MAX_KEYPOINTS = 800         # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
@@ -39,10 +49,10 @@ FEATURE_MARKER_MASK_MARGIN_PX = 8.0 # Do not let marker texture dominate the ind
 FEATURE_GRID_COLS = 6
 FEATURE_GRID_ROWS = 4
 FEATURE_MAX_MATCHES_PER_CELL = 24
-FEATURE_MIN_INLIER_RATIO = 0.30
-FEATURE_MIN_GRID_COVERAGE = 0.17
+FEATURE_MIN_INLIER_RATIO = 0.28
+FEATURE_MIN_GRID_COVERAGE = 1.0 / 6.0
 FEATURE_MIN_HULL_COVERAGE = 0.02
-FEATURE_MIN_PARALLAX_DEG = 0.05
+FEATURE_MIN_PARALLAX_DEG = 1.0
 FEATURE_STRONG_INLIERS = 40
 FEATURE_STRONG_INLIER_RATIO = 0.35
 FEATURE_STRONG_GRID_COVERAGE = 0.25
@@ -67,6 +77,9 @@ JOINT_RT_MAX_NFEV = 120
 JOINT_RT_TOL = 1e-7
 ARUCO_USE_CLAHE = True
 ANALYSIS_WORKERS = min(4, max(1, os.cpu_count() or 1))
+PAIR_ADD_PRIORITY_EXTRA = False
+ADAPTIVE_START_RANGE_FRACTIONS = (0.80, 1.00)
+ADAPTIVE_END_RANGE_FRACTIONS = (0.10, 0.22, 0.40)
 
 
 class LazyVideoFrames:
@@ -188,26 +201,53 @@ def compute_global_plane(imgA_gray, K_L, marker_size_mm):
     return _compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print)
 
 
-def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None):
+def analyze_video_frames(
+    video_path,
+    start_n,
+    end_n,
+    K_L,
+    dist_L,
+    mtx_L,
+    marker_size_mm,
+    select_mode="average",
+    range_mode="fixed",
+    progress_callback=None,
+    frames_override=None,
+    detection_roi_ratio=None,
+):
     timer = StageTimer("影片分析明細")
     if progress_callback:
         progress_callback(2, "階段 1/6：載入影片...")
-    if hasattr(cv2, 'CAP_PROP_N_THREADS'):
-        cap = cv2.VideoCapture(
-            video_path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, 8])
+    if frames_override is None:
+        if hasattr(cv2, 'CAP_PROP_N_THREADS'):
+            cap = cv2.VideoCapture(
+                video_path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, 8])
+        else:
+            cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"❌ 無法開啟影片: {video_path}")
+            return None
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
+
+        frames = LazyVideoFrames(video_path, total_frames)
+        cap.release()
     else:
-        cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"❌ 無法開啟影片: {video_path}")
-        return None
-    
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    log_and_print(f"🎬 載入影片: {video_path}，總影格數: {total_frames} (選幀範圍模式: {range_mode})")
-    
-    frames = LazyVideoFrames(video_path, total_frames)
-    cap.release()
+        frames = [np.asarray(frame).copy() for frame in frames_override]
+        total_frames = len(frames)
+        if not frames:
+            print("❌ 固定影像對為空")
+            return None
+        frame_height, frame_width = frames[0].shape[:2]
+        if any(frame.shape[:2] != (frame_height, frame_width) for frame in frames):
+            print("❌ 固定影像對的影像尺寸不一致")
+            return None
+        log_and_print(
+            f"🎬 載入固定影像對: {video_path}，影像數: {total_frames} "
+            f"(選幀範圍模式: {range_mode})")
     if progress_callback:
         progress_callback(12, "階段 1/6：影片索引完成")
     
@@ -215,6 +255,22 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         print("❌ 影片無有效影格")
         return None
     timer.stage(f"影片索引建立({len(frames)} 幀)")
+
+    detection_roi_bounds = None
+    if detection_roi_ratio is not None:
+        if len(detection_roi_ratio) != 2:
+            raise ValueError("detection_roi_ratio must contain width and height ratios")
+        detection_roi_bounds = centered_roi_bounds(
+            frame_width,
+            frame_height,
+            detection_roi_ratio[0],
+            detection_roi_ratio[1],
+        )
+        roi_x0, roi_y0, roi_x1, roi_y1 = detection_roi_bounds
+        log_and_print(
+            "🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: "
+            f"x={roi_x0}:{roi_x1}, y={roi_y0}:{roi_y1} "
+            f"({roi_x1 - roi_x0}x{roi_y1 - roi_y0})")
         
     mid_idx = len(frames) // 2
     if range_mode == "half_half":
@@ -232,25 +288,39 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     else:
         params = cv2.aruco.DetectorParameters_create()
         
+    marker_preprocess_state = threading.local()
+
     def prepare_marker_gray(frame):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if ARUCO_USE_CLAHE:
-            gray = preprocess_gray(gray, True)
+            clahe = getattr(marker_preprocess_state, 'clahe', None)
+            if clahe is None:
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                marker_preprocess_state.clahe = clahe
+            gray = clahe.apply(gray)
         return gray
 
     def detect_markers_in_gray(gray):
+        detect_gray = gray
+        offset_x = 0
+        offset_y = 0
+        if detection_roi_bounds is not None:
+            offset_x, offset_y, roi_x1, roi_y1 = detection_roi_bounds
+            detect_gray = gray[offset_y:roi_y1, offset_x:roi_x1]
         if hasattr(cv2.aruco, 'ArucoDetector'):
             local_detector = cv2.aruco.ArucoDetector(
                 dict_4x4, cv2.aruco.DetectorParameters())
-            corners, ids, _ = local_detector.detectMarkers(gray)
+            corners, ids, _ = local_detector.detectMarkers(detect_gray)
         else:
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
+            corners, ids, _ = cv2.aruco.detectMarkers(
+                detect_gray, dict_4x4, parameters=params)
         if ids is not None and len(ids) > 0:
             ids_list = [i[0] for i in ids]
             term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
             for c in corners:
-                cv2.cornerSubPix(gray, c, (5, 5), (-1, -1), term)
-            raw_corners = [c.reshape(4, 2) for c in corners]
+                cv2.cornerSubPix(detect_gray, c, (5, 5), (-1, -1), term)
+            offset = np.array([offset_x, offset_y], dtype=np.float32)
+            raw_corners = [c.reshape(4, 2) + offset for c in corners]
             return dict(zip(ids_list, raw_corners))
         return {}
 
@@ -273,10 +343,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         seg_name = "開頭段" if is_start_segment else "結尾段"
         missing = [idx for idx in idxs if idx not in detected_cache]
         if missing:
-            prepared = [prepare_marker_gray(frames[idx]) for idx in missing]
+            def detect_index(index):
+                return detect_markers_in_gray(prepare_marker_gray(frames[index]))
+
             with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
                 detected_cache.update(zip(
-                    missing, executor.map(detect_markers_in_gray, prepared)))
+                    missing, executor.map(detect_index, missing)))
         for i, idx in enumerate(idxs):
             cd = detected_cache[idx]
             if cd:
@@ -290,12 +362,22 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 progress_callback(min(percent, 98.0), f"階段 2/6：分析影像 ({i + 1}/{len(idxs)})...")
         return info
 
-    def sample_range(r, n):
-        lst = list(r)
-        if len(lst) <= n:
-            return lst
-        idxs = np.linspace(0, len(lst) - 1, n, dtype=int)
-        return [lst[idx] for idx in idxs]
+    def select_adaptive_candidate_frames(first_range, second_range):
+        """Sample five frames spanning the useful middle-to-late video region."""
+        def select_fractions(frame_range, fractions):
+            values = list(frame_range)
+            if not values:
+                return []
+            selected = [
+                values[int(round((len(values) - 1) * fraction))]
+                for fraction in fractions
+            ]
+            return list(dict.fromkeys(selected))
+
+        return (
+            select_fractions(first_range, ADAPTIVE_START_RANGE_FRACTIONS),
+            select_fractions(second_range, ADAPTIVE_END_RANGE_FRACTIONS),
+        )
 
     def save_debug_pair_images(item_s, item_e, suffix):
         img_A = frames[item_s['idx']].copy()
@@ -418,7 +500,16 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             if idx not in detected_cache:
                 detected_cache[idx] = detect_frame_markers(frames[idx])
-            feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
+            if detection_roi_bounds is None:
+                feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
+            else:
+                feature_mask = np.zeros(gray.shape, dtype=np.uint8)
+                roi_x0, roi_y0, roi_x1, roi_y1 = detection_roi_bounds
+                scaled_x0 = max(0, min(gray.shape[1], int(round(roi_x0 * scale))))
+                scaled_y0 = max(0, min(gray.shape[0], int(round(roi_y0 * scale))))
+                scaled_x1 = max(0, min(gray.shape[1], int(round(roi_x1 * scale))))
+                scaled_y1 = max(0, min(gray.shape[0], int(round(roi_y1 * scale))))
+                feature_mask[scaled_y0:scaled_y1, scaled_x0:scaled_x1] = 255
             for pts in detected_cache[idx].values():
                 quad = np.asarray(pts, dtype=np.float32).reshape(4, 2) * scale
                 center = quad.mean(axis=0)
@@ -1062,7 +1153,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 optimization_mask = seed_mask.copy()
                 holdout_mask = np.zeros(len(seed_mask), dtype=bool)
                 seed_indices = np.flatnonzero(seed_mask)
-                if len(seed_indices) >= 35:
+                if len(seed_indices) >= 11:
                     holdout_mask[seed_indices[::5]] = True
                     optimization_mask[holdout_mask] = False
                 feature_train_left = ptsL_u[optimization_mask]
@@ -1124,7 +1215,9 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 f"   [RT候選{tag}] {candidate['role']} | marker={candidate['marker']['rms_px']:.3f}px, "
                 f"max={candidate['marker']['max_px']:.3f}px | "
                 f"feature_seed_p90={candidate_feature.get('seed_p90_px', float('inf')):.3f}px, "
-                f"final_inliers={candidate_feature.get('inlier_count', 0)}")
+                f"final_inliers={candidate_feature.get('inlier_count', 0)}, "
+                f"final_p90={candidate_feature.get('inlier_p90_px', float('inf')):.3f}px, "
+                f"holdout_median={candidate_feature.get('holdout_median_px')}")
 
         marker_only_evaluated = [item for item in evaluated if not item['uses_feature']]
         marker_floor = min(
@@ -1149,7 +1242,6 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 geometry is not None and geometry.get('quality_ok', False)
                 and stats is not None
                 and stats['inlier_count'] >= FEATURE_MIN_MATCHES
-                and stats['inlier_ratio'] >= FEATURE_MIN_INLIER_RATIO
                 and stats['inlier_p90_px'] <= FEATURE_FINAL_P90_MAX_PX
                 and (stats['holdout_median_px'] is None
                      or stats['holdout_median_px'] <= FEATURE_FINAL_INLIER_PX))
@@ -1214,7 +1306,26 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             solution_metrics,
         )
 
-    def compute_pair_quality_score(err, item_s, item_e, baseline_mm):
+    def marker_parallax_degrees(item_s, item_e, rotation_s_from_e):
+        angles = []
+        shared_markers = set(item_s['corners']).intersection(item_e['corners'])
+        for marker_id in shared_markers:
+            points_s = cv2.undistortPoints(
+                np.asarray(item_s['corners'][marker_id], dtype=np.float64).reshape(-1, 1, 2),
+                mtx_L, dist_L).reshape(-1, 2)
+            points_e = cv2.undistortPoints(
+                np.asarray(item_e['corners'][marker_id], dtype=np.float64).reshape(-1, 1, 2),
+                mtx_L, dist_L).reshape(-1, 2)
+            rays_s = np.column_stack((points_s, np.ones(len(points_s))))
+            rays_e = np.column_stack((points_e, np.ones(len(points_e))))
+            rays_s /= np.linalg.norm(rays_s, axis=1, keepdims=True)
+            rays_e_in_s = (rotation_s_from_e @ rays_e.T).T
+            rays_e_in_s /= np.linalg.norm(rays_e_in_s, axis=1, keepdims=True)
+            cosine = np.sum(rays_s * rays_e_in_s, axis=1)
+            angles.extend(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+        return float(np.median(angles)) if angles else 0.0
+
+    def compute_pair_quality_score(err, item_s, item_e, rotation_s_from_e, baseline_mm):
         shared_markers = set(item_s['corners'].keys()).intersection(item_e['corners'].keys())
         shared_count = len(shared_markers)
         sharp_s = get_frame_sharpness(item_s['idx'])
@@ -1227,9 +1338,22 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         coverage_penalty = max(0.0, 0.08 - cover) / 0.08
         marker_penalty = 1.0 / max(shared_count, 1)
         baseline_penalty = abs(baseline_mm - IDEAL_BASELINE_MM) / max(IDEAL_BASELINE_MM, 1e-6)
+        marker_parallax_deg = marker_parallax_degrees(
+            item_s, item_e, rotation_s_from_e)
+        parallax_rad = np.radians(max(marker_parallax_deg, 1e-6))
+        focal_px = 0.5 * (float(mtx_L[0, 0]) + float(mtx_L[1, 1]))
+        predicted_depth_sigma_mm = (
+            PAIR_DEPTH_REFERENCE_MM * PAIR_MATCH_SIGMA_PX
+            / max(focal_px * np.tan(parallax_rad), 1e-9)
+        )
+        effective_baseline_mm = PAIR_DEPTH_REFERENCE_MM * np.tan(parallax_rad)
+        uncertainty_penalty = min(max(
+            predicted_depth_sigma_mm / PAIR_TARGET_DEPTH_SIGMA_MM - 1.0,
+            0.0), 4.0)
         score = (
             PAIR_SCORE_REPROJ_W * float(err)
             + PAIR_SCORE_BASELINE_W * baseline_penalty
+            + PAIR_SCORE_DEPTH_UNCERTAINTY_W * uncertainty_penalty
             + PAIR_SCORE_BLUR_W * blur_penalty
             + PAIR_SCORE_COVER_W * coverage_penalty
             + PAIR_SCORE_MARKER_W * marker_penalty
@@ -1238,6 +1362,9 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             'score': float(score),
             'err': float(err),
             'baseline': float(baseline_mm),
+            'marker_parallax_deg': float(marker_parallax_deg),
+            'effective_baseline_mm': float(effective_baseline_mm),
+            'predicted_depth_sigma_mm': float(predicted_depth_sigma_mm),
             'shared_markers': int(shared_count),
             'sharpness_min': float(sharp_min),
             'coverage': float(cover),
@@ -1253,7 +1380,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     selected_extras = []
     marker_map = {}
     
-    stages = [10, 20, 30, 40, 50]
+    # Five cheap ArUco probes span the useful motion interval; only two pairs reach SIFT.
+    stages = [1]
     stage_success = False
     few_marker_mode = False
     best_branch = None
@@ -1261,15 +1389,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
     canon = np.array([[-half, half, 0], [half, half, 0], [half, -half, 0], [-half, -half, 0]], dtype=np.float32)
     
     for stage_idx, num_samples in enumerate(stages):
-        log_and_print(f"🔄 開始第 {stage_idx + 1} 階段抽樣評估 (抽樣張數: 各段最多 {num_samples} 張)...")
+        log_and_print("🔄 評估自適應跨段候選幀對...")
         
-        sampled_start = sample_range(start_range, num_samples)
-        sampled_end = sample_range(end_range, num_samples)
-        if stage_idx == 0 and len(sampled_start) > 7:
-            sampled_start = [sampled_start[i] for i in (4, 6, 7)]
-        if stage_idx == 0 and len(sampled_end) > 3:
-            sampled_end = sampled_end[:3]
-        frames.preload([*sampled_start, *sampled_end])
+        sampled_start, sampled_end = select_adaptive_candidate_frames(
+            start_range, end_range)
+        if hasattr(frames, "preload"):
+            frames.preload([*sampled_start, *sampled_end])
         
         start_info = get_frame_info(sampled_start, stage_idx, is_start_segment=True)
         end_info = get_frame_info(sampled_end, stage_idx, is_start_segment=False)
@@ -1418,13 +1543,14 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                         R_rel_cand = R_s @ R_e.T
                         t_rel_cand = t_s - R_rel_cand @ t_e
                         bsl = float(np.linalg.norm(t_rel_cand))
-                        if not (MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM):
+                        if not (PAIR_CANDIDATE_MIN_BASELINE_MM <= bsl <= MAX_BASELINE_MM):
                             continue
                         if err_pair is None:
                             err_pair = compute_pair_reprojection_error(item_s, item_e, mtx_L, dist_L)
                         if err_pair == float('inf'):
                             continue
-                        pair_score, pair_metrics = compute_pair_quality_score(err_pair, item_s, item_e, bsl)
+                        pair_score, pair_metrics = compute_pair_quality_score(
+                            err_pair, item_s, item_e, R_rel_cand, bsl)
                         pair_metrics['branch'] = (bi_s, bi_e)
                         pairs.append((pair_score, err_pair, item_s, item_e, R_rel_cand, t_rel_cand, bsl, pair_metrics))
 
@@ -1435,6 +1561,20 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         # 依誤差由小到大排序
         pairs.sort(key=lambda x: x[0])
 
+        logged_pair_keys = set()
+        for candidate in pairs:
+            candidate_key = (candidate[2]['idx'], candidate[3]['idx'])
+            if candidate_key in logged_pair_keys:
+                continue
+            logged_pair_keys.add(candidate_key)
+            candidate_metrics = candidate[7]
+            log_and_print(
+                f"   [ArUco候選] A=F{candidate_key[0]} B=F{candidate_key[1]} "
+                f"baseline={candidate[6]:.2f}mm "
+                f"parallax={candidate_metrics.get('marker_parallax_deg', 0.0):.2f}deg "
+                f"depth_sigma={candidate_metrics.get('predicted_depth_sigma_mm', float('inf')):.2f}mm "
+                f"score={candidate[0]:.3f}")
+
         # 前 K 個「幀對」加算特徵極線殘差後重排 (真正的品質裁決)：
         # 自我擬合殘差對極線幾何無鑑別力，收斂與否由特徵極線殘差決定。
         # 以幀對為單位套用多樣性配額，避免名額被相鄰近似幀塞滿；
@@ -1443,10 +1583,14 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         _cnt_start, _cnt_end = {}, {}
         topk = []
         first_admitted_key = None
+        first_admitted_score = None
         for cand_tuple in pairs:
             _key = (cand_tuple[2]['idx'], cand_tuple[3]['idx'])
             if _key not in _admitted:
                 if len(_admitted) >= PAIR_EPI_TOPK:
+                    continue
+                if (first_admitted_score is not None
+                        and cand_tuple[0] > first_admitted_score + PAIR_SECOND_SCORE_MARGIN):
                     continue
                 if _cnt_start.get(_key[0], 0) >= PAIR_TOPK_MAX_PER_START:
                     continue
@@ -1455,10 +1599,11 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 _admitted.add(_key)
                 if first_admitted_key is None:
                     first_admitted_key = _key
+                    first_admitted_score = cand_tuple[0]
                 _cnt_start[_key[0]] = _cnt_start.get(_key[0], 0) + 1
                 _cnt_end[_key[1]] = _cnt_end.get(_key[1], 0) + 1
             topk.append(cand_tuple)
-        if first_admitted_key is not None:
+        if PAIR_ADD_PRIORITY_EXTRA and first_admitted_key is not None:
             priority_end_idx = first_admitted_key[1]
             extra_key = next((
                 (candidate[2]['idx'], candidate[3]['idx'])
@@ -1473,6 +1618,50 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                     if (candidate[2]['idx'], candidate[3]['idx']) == extra_key)
         topk_pair_keys = list(dict.fromkeys(
             (item[3]['idx'], item[2]['idx']) for item in topk))
+        primary_pair_key = topk_pair_keys[0]
+        primary_feature_indices = list(dict.fromkeys(primary_pair_key))
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            list(executor.map(get_frame_features, primary_feature_indices))
+        primary_matches = get_pair_matches(*primary_pair_key)
+        primary_geometry = estimate_feature_geometry(*primary_pair_key)
+
+        use_second_pair = primary_geometry is None or not primary_geometry['quality_ok']
+        primary_marker_epi = float('inf')
+        primary_rotation_delta = float('inf')
+        if primary_matches is not None and primary_geometry is not None:
+            primary_seed_mask = np.asarray(
+                primary_geometry['inlier_mask'], dtype=bool).reshape(-1)
+            for candidate in topk:
+                candidate_key = (candidate[3]['idx'], candidate[2]['idx'])
+                if candidate_key != primary_pair_key:
+                    continue
+                residuals = rt_epipolar_residuals(
+                    primary_matches[0], primary_matches[1],
+                    candidate[4], candidate[5])
+                if len(primary_seed_mask) == len(residuals) and np.any(primary_seed_mask):
+                    residuals = residuals[primary_seed_mask]
+                if len(residuals):
+                    primary_marker_epi = min(
+                        primary_marker_epi, float(np.median(residuals)))
+                primary_rotation_delta = min(
+                    primary_rotation_delta,
+                    rot_angle_deg(primary_geometry['R'], candidate[4]))
+            use_second_pair = use_second_pair or (
+                primary_marker_epi > PAIR_SECOND_MARKER_EPI_TRIGGER_PX
+                or primary_rotation_delta > PAIR_SECOND_ROT_TRIGGER_DEG
+                or primary_geometry['parallax_deg'] < PAIR_SECOND_PARALLAX_TRIGGER_DEG)
+
+        if len(topk_pair_keys) > 1 and not use_second_pair:
+            log_and_print(
+                "   [SIFT預算] 第一候選幾何一致，略過第二候選 "
+                f"(marker_epi={primary_marker_epi:.3f}px, "
+                f"rotation_delta={primary_rotation_delta:.3f}deg)")
+            topk_pair_keys = topk_pair_keys[:1]
+            active_pair_keys = set(topk_pair_keys)
+            topk = [
+                candidate for candidate in topk
+                if (candidate[3]['idx'], candidate[2]['idx']) in active_pair_keys
+            ]
         topk_feature_indices = list(dict.fromkeys(
             idx for key in topk_pair_keys for idx in key))
         with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
@@ -1545,20 +1734,28 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 pair_metrics['feature_quality_ok'] = False
             pair_metrics['combined_score'] = float(combined)
             reranked.append((combined, cand_tuple))
-        reranked.sort(key=lambda x: (
-            not x[1][7].get('marker_bidir_ok', False),
-            not x[1][7].get('feature_quality_ok', False),
-            x[0]))
+        def effective_rerank_score(entry):
+            combined, candidate = entry
+            candidate_key = (candidate[3]['idx'], candidate[2]['idx'])
+            primary_bonus = (
+                PAIR_RERANK_MIN_IMPROVEMENT
+                if candidate_key == primary_pair_key else 0.0)
+            return combined - primary_bonus
+
+        reranked.sort(key=lambda entry: (
+            not entry[1][7].get('marker_bidir_ok', False),
+            not entry[1][7].get('feature_quality_ok', False),
+            effective_rerank_score(entry)))
         if reranked:
-            best_combined = reranked[0][0]
+            best_combined = effective_rerank_score(reranked[0])
             near_count = sum(
-                1 for combined, _candidate in reranked
-                if combined <= best_combined + 0.01)
+                1 for entry in reranked
+                if effective_rerank_score(entry) <= best_combined + 0.01)
             reranked[:near_count] = sorted(
                 reranked[:near_count],
                 key=lambda entry: (
                     entry[1][7].get('marker_bidir_rms_px', float('inf')),
-                    entry[0]))
+                    effective_rerank_score(entry)))
         for _c, _t in reranked:
             _fe_t = _t[7].get('feat_epi_px')
             _model_t = _t[7].get('feature_model_epi_px')
@@ -1591,6 +1788,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             f"feature_inlier_epi={f'{feat_epi:.3f}px' if feat_epi is not None else 'N/A'} | "
             f"E_epi={f'{feature_model_epi:.3f}px' if feature_model_epi is not None else 'N/A'} | "
             f"baseline={best_metrics['baseline']:.2f}mm | shared={best_metrics['shared_markers']} | "
+            f"marker_parallax={best_metrics.get('marker_parallax_deg', 0.0):.2f}deg | "
+            f"predicted_depth_sigma={best_metrics.get('predicted_depth_sigma_mm', float('inf')):.2f}mm | "
             f"feature_grid={best_metrics.get('feature_grid_coverage', 0.0):.2f} | "
             f"parallax={best_metrics.get('feature_parallax_deg', 0.0):.3f}°"
         )
@@ -1598,7 +1797,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         fe_str = f"{feature_model_epi:.3f}" if feature_model_epi is not None else "N/A"
         stage_ok = (
             best_metrics.get('marker_bidir_ok', False)
-            and best_metrics.get('feature_strong', False)
+            and best_metrics.get('feature_quality_ok', False)
             and feature_model_epi is not None
             and feature_model_epi < PAIR_EPI_OK_PX)
         if stage_ok:
@@ -1608,10 +1807,12 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
             log_and_print(f"🎉 第 {stage_idx + 1} 階段搜尋成功！特徵極線殘差 {fe_str} px < {PAIR_EPI_OK_PX} px{_branch_note}")
             stage_success = True
         else:
-            log_and_print(f"ℹ️ 第 {stage_idx + 1} 階段：最佳特徵極線殘差 {fe_str} px (門檻 {PAIR_EPI_OK_PX} px)，擴大抽樣")
+            log_and_print(
+                f"ℹ️ 快速橋接幀的特徵極線殘差為 {fe_str} px "
+                f"(前置門檻 {PAIR_EPI_OK_PX} px)，交由聯合精修與最終品質檢查。")
 
-        # 若本階段成功，或這已是最大抽樣張數的第二階段，即固定最佳與次佳解
-        if stage_success or num_samples == 50:
+        # The bounded search always forwards its best candidate to joint refinement.
+        if stage_success or stage_idx == len(stages) - 1:
             if not stage_success:
                 _validated = [
                     t for t in pairs
@@ -1622,9 +1823,10 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
                 best_start, best_end, R_rel, t_rel, baseline = best_cand[2], best_cand[3], best_cand[4], best_cand[5], best_cand[6]
                 best_branch = best_cand[7].get('branch')
                 _fe_fb = best_cand[7].get('feature_model_epi_px')
-                log_and_print(f"⚠️ 達到最大抽樣張數 (50 張) 仍未達特徵極線門檻 {PAIR_EPI_OK_PX} px。"
-                              f"降級使用殘差最小候選 (feat_epi {f'{_fe_fb:.3f}' if _fe_fb is not None else 'N/A'} px, "
-                              f"reproj {best_cand[1]:.3f} px)——量測品質可能不佳")
+                log_and_print(
+                    "⚠️ 快速橋接幀未達前置門檻，仍保留當前最佳候選 "
+                    f"(feat_epi {f'{_fe_fb:.3f}' if _fe_fb is not None else 'N/A'} px, "
+                    f"reproj {best_cand[1]:.3f} px)，後續由品質旗標決定是否可信。")
                 
             # 次佳對選取 (全模式統一)：只收已通過特徵極線驗證 (< PAIR_EPI_EXTRA_PX) 的候選，
             # 同一結尾幀、不同起始幀，每個起始幀只取排序最前 (最佳) 的一組
@@ -2063,11 +2265,19 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         
     # 預先在背景執行去畸變、平面擬合與 SIFT 特徵提取，優化 UI 載入速度
     h_raw, w_raw = frame_height, frame_width
-    newKL_o, _ = cv2.getOptimalNewCameraMatrix(mtx_L, dist_L, (w_raw, h_raw), 1, (w_raw, h_raw))
-    _map1, _map2 = cv2.initUndistortRectifyMap(mtx_L, dist_L, None, newKL_o, (w_raw, h_raw), cv2.CV_16SC2)
-    
-    def local_process_view(img):
-        return cv2.remap(img, _map1, _map2, cv2.INTER_LINEAR)
+    if frames_override is None:
+        newKL_o, _ = cv2.getOptimalNewCameraMatrix(
+            mtx_L, dist_L, (w_raw, h_raw), 1, (w_raw, h_raw))
+        _map1, _map2 = cv2.initUndistortRectifyMap(
+            mtx_L, dist_L, None, newKL_o, (w_raw, h_raw), cv2.CV_16SC2)
+
+        def local_process_view(img):
+            return cv2.remap(img, _map1, _map2, cv2.INTER_LINEAR)
+    else:
+        newKL_o = np.asarray(K_L, dtype=np.float64).copy()
+
+        def local_process_view(img):
+            return img.copy()
         
     imgA_bgr = local_process_view(frames[best_end['idx']])  # 結尾最優影格作為左圖 (B)
     imgB_bgr = local_process_view(frames[best_start['idx']])  # 開頭最優影格作為右圖 (A)
@@ -2127,6 +2337,7 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         'rt_sift_applied': bool(best_feature_rt_applied),
         'rt_sift_role': rt_sift_role,
         'rt_sift_diagnostics_path': rt_sift_diagnostics_path,
+        'detection_roi_bounds': detection_roi_bounds,
         'global_plane_n': global_plane_n,
         'global_plane_c': global_plane_c,
         'best_kpB': kb,

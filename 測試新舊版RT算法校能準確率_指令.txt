@@ -1,0 +1,1 @@
+python -B benchmark_rt_pipeline.py --video-dir D:\Lightglue\lg_env\test_video_Zebra --output benchmark_test_video_Zebra_20260717.json --baseline-git-ref --full-log-dir benchmark_test_video_Zebra_20260717_logs

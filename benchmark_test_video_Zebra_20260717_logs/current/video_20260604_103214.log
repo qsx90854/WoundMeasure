@@ -1,0 +1,45 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260604_103214.mp4，總影格數: 79 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F16 B=F39 branch=(0, 0) marker_bidir=1.714px feature_inlier_epi=0.490px E_epi=0.372px inliers=45/79 grid=0.21 parallax=14.443° score=0.786 combined=0.289
+   [topK] A=F16 B=F43 branch=(0, 0) marker_bidir=5.861px feature_inlier_epi=1.392px E_epi=0.349px inliers=50/75 grid=0.25 parallax=16.935° score=1.094 combined=4.365
+   [topK] A=F25 B=F39 branch=(0, 0) marker_bidir=2.517px feature_inlier_epi=3.048px E_epi=0.311px inliers=50/91 grid=0.29 parallax=13.958° score=1.055 combined=4.372
+   [topK] A=F25 B=F47 branch=(0, 0) marker_bidir=9.743px feature_inlier_epi=3.533px E_epi=0.417px inliers=46/82 grid=0.29 parallax=13.319° score=1.404 combined=4.435
+🎯 [pair quality] score=0.786 | reproj=0.556px | marker_bidir=1.714px | feature_inlier_epi=0.490px | E_epi=0.372px | baseline=39.20mm | shared=2 | feature_grid=0.21 | parallax=14.443°
+ℹ️ 第 1 階段：最佳特徵極線殘差 0.372 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 2 階段抽樣評估 (抽樣張數: 各段最多 20 張)...
+📌 [第 2 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F10 B=F39 branch=(0, 0) marker_bidir=1.974px feature_inlier_epi=0.390px E_epi=0.301px inliers=53/82 grid=0.25 parallax=12.245° score=0.809 combined=0.216
+   [topK] A=F36 B=F73 branch=(0, 0) marker_bidir=1.072px feature_inlier_epi=0.288px E_epi=0.283px inliers=42/70 grid=0.25 parallax=14.702° score=0.830 combined=0.231
+   [topK] A=F16 B=F41 branch=(0, 0) marker_bidir=1.865px feature_inlier_epi=0.712px E_epi=0.317px inliers=45/75 grid=0.25 parallax=14.217° score=0.779 combined=0.234
+   [topK] A=F16 B=F39 branch=(0, 0) marker_bidir=1.816px feature_inlier_epi=0.426px E_epi=0.372px inliers=45/79 grid=0.21 parallax=14.443° score=0.769 combined=0.281
+🎯 [pair quality] score=0.809 | reproj=0.577px | marker_bidir=1.974px | feature_inlier_epi=0.390px | E_epi=0.301px | baseline=40.09mm | shared=2 | feature_grid=0.25 | parallax=12.245°
+🎉 第 2 階段搜尋成功！特徵極線殘差 0.301 px < 0.8 px | reproj 0.577 px
+   [RT候選-best] marker_only | marker=1.567px, max=2.627px | feature_seed_p90=1.718px, final_inliers=46
+   [RT候選-best] joint_from_marker_w12 | marker=1.575px, max=2.644px | feature_seed_p90=1.186px, final_inliers=49
+   [RT候選-best] joint_from_marker_w4 | marker=1.586px, max=2.647px | feature_seed_p90=1.089px, final_inliers=53
+   [RT候選-best] joint_from_marker_w1 | marker=1.601px, max=2.640px | feature_seed_p90=0.986px, final_inliers=53
+⚠️ [RT聯合精修-best] role=unreliable_marker_fallback | marker L→R=1.354px, R→L=1.754px, max=2.627px | feature inliers=46/82, median=0.481px, p90=1.151px | baseline=37.52mm
+   [RT候選-F16] marker_only | marker=0.918px, max=1.499px | feature_seed_p90=1.170px, final_inliers=43
+   [RT候選-F16] joint_from_marker_w12 | marker=0.921px, max=1.587px | feature_seed_p90=1.115px, final_inliers=44
+   [RT候選-F16] joint_from_marker_w4 | marker=0.934px, max=1.683px | feature_seed_p90=0.999px, final_inliers=44
+   [RT候選-F16] joint_from_marker_w1 | marker=0.975px, max=1.816px | feature_seed_p90=0.828px, final_inliers=45
+✅ [RT聯合精修-F16] role=joint_from_marker_w4 | marker L→R=0.812px, R→L=1.042px, max=1.683px | feature inliers=44/79, median=0.468px, p90=0.988px | baseline=40.00mm
+➕ [次佳配對] 額外右圖 (Frame A) 索引: 16 | 重投影誤差: 0.543 px | Baseline: 40.00 mm
+🔁 [最終配對升格] F16 在聯合精修後同時通過 marker 與 Feature，且雙重約束品質優於精修前排名第一的影像對。
+📍 [RT SIFT像素] 36/79 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 16
+  - 左圖 (Frame B) 索引: 39
+  - 計算 Baseline: 40.00 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.812px, R→L=1.042px, max=1.683px | Feature inliers=44/79, median=0.468px, p90=0.988px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260604_103214_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.042 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 4.95 s
+   - 影片索引建立(79 幀)                    7.7 ms (  0.2%)
+   - ArUco偵測+配對搜尋(含極線重排)          4799.7 ms ( 97.0%)
+   - 混合RT精修+次佳打包                   108.5 ms (  2.2%)
+   - 去畸變+全域平面擬合                     34.5 ms (  0.7%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

@@ -1,0 +1,31 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_094856.mp4，總影格數: 141 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F53 B=F85 branch=(0, 0) marker_bidir=1.010px feature_inlier_epi=0.567px E_epi=0.263px inliers=77/135 grid=0.71 parallax=3.148° score=1.277 combined=0.276
+   [topK] A=F30 B=F77 branch=(0, 0) marker_bidir=1.072px feature_inlier_epi=0.657px E_epi=0.438px inliers=75/117 grid=0.58 parallax=3.132° score=1.321 combined=0.323
+   [topK] A=F30 B=F85 branch=(0, 0) marker_bidir=1.149px feature_inlier_epi=1.061px E_epi=0.474px inliers=60/105 grid=0.54 parallax=4.209° score=1.292 combined=0.345
+🎯 [pair quality] score=1.277 | reproj=0.790px | marker_bidir=1.010px | feature_inlier_epi=0.567px | E_epi=0.263px | baseline=8.24mm | shared=2 | feature_grid=0.71 | parallax=3.148°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.263 px < 0.8 px | reproj 0.790 px
+⚠️ [RT精修-best] 無有效聯合候選，保留 ArUco RT。
+   [RT候選-F30] marker_only | marker=0.917px, max=1.940px | feature_seed_p90=3.089px, final_inliers=45
+   [RT候選-F30] joint_from_marker_w12 | marker=0.937px, max=2.058px | feature_seed_p90=1.387px, final_inliers=55
+   [RT候選-F30] joint_from_marker_w4 | marker=0.950px, max=2.174px | feature_seed_p90=1.353px, final_inliers=56
+   [RT候選-F30] joint_from_marker_w1 | marker=1.018px, max=2.432px | feature_seed_p90=1.163px, final_inliers=56
+✅ [RT聯合精修-F30] role=marker_only | marker L→R=0.864px, R→L=0.967px, max=1.940px | feature inliers=45/105, median=0.675px, p90=1.270px | baseline=8.86mm
+⚠️ [次佳配對] F30 未同時通過 marker 雙向投影與 Feature 內點驗證 (feature=0.675px)，已排除，不參與深度融合。
+📍 [RT SIFT像素] 77/135 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 53
+  - 左圖 (Frame B) 索引: 85
+  - 計算 Baseline: 8.24 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=1.090px, R→L=0.923px, max=2.829px | Feature inliers=72/135, median=0.497px, p90=1.124px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260605_094856_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.101 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.13 s
+   - 影片索引建立(141 幀)                   4.3 ms (  0.4%)
+   - ArUco偵測+配對搜尋(含極線重排)          1014.2 ms ( 89.8%)
+   - 混合RT精修+次佳打包                    80.3 ms (  7.1%)
+   - 去畸變+全域平面擬合                     30.1 ms (  2.7%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

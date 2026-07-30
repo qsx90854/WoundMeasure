@@ -1,0 +1,1480 @@
+{
+  "thresholds": {
+    "max_time_s": 3.0,
+    "min_feature_inliers": 11,
+    "min_holdout_count": 3,
+    "max_holdout_median_px": 1.5,
+    "max_final_feature_p90_px": 1.25,
+    "max_marker_rms_px": 1.5,
+    "max_marker_point_px": 2.0,
+    "baseline_range_mm": [
+      20.0,
+      220.0
+    ]
+  },
+  "results": [
+    {
+      "video": "video_20260715_200415.mp4",
+      "success": true,
+      "elapsed_s": 2.4323649000143632,
+      "idx_A": 41,
+      "idx_B": 57,
+      "R": [
+        [
+          0.9971995777660126,
+          -0.06649633400913262,
+          -0.03422337894819929
+        ],
+        [
+          0.07084827954895,
+          0.9865097398123651,
+          0.14757728327995953
+        ],
+        [
+          0.02394834834054345,
+          -0.14958867209346258,
+          0.9884582468638088
+        ]
+      ],
+      "t": [
+        1.3970607633004921,
+        -46.28890525889675,
+        -4.34506940566918
+      ],
+      "baseline": 46.51337610820736,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.21271930089060626,
+      "feature_epi_px": 0.3683595181303707,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 142,
+        "feature_inlier_count": 102,
+        "feature_inlier_ratio": 0.7183098591549296,
+        "feature_grid_coverage": 0.375,
+        "feature_hull_coverage": 0.26379249433786756,
+        "feature_parallax_deg": 11.865987187861704,
+        "feature_model_epi_px": 0.3456260351391033,
+        "feature_rotation_agreement_deg": 1.5669976901912743,
+        "marker_parallax_deg": 11.729217168509198,
+        "effective_baseline_mm": 83.04876227236255,
+        "predicted_depth_sigma_mm": 1.1416604131039643,
+        "final_feature_inlier_count": 97,
+        "final_feature_inlier_ratio": 0.6830985915492958,
+        "final_feature_median_px": 0.3683595181303707,
+        "final_feature_p90_px": 1.193291912735216,
+        "holdout_count": 21,
+        "holdout_median_px": 0.3330335461718935,
+        "holdout_p90_px": 1.4154911352729038,
+        "marker_rms_px": 0.32916862962266147,
+        "marker_max_px": 0.6178210266095283,
+        "marker_left_to_right_rms_px": 0.26162251129788516,
+        "marker_right_to_left_rms_px": 0.38504238083295417
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.43 s",
+        "- 影片索引建立(105 幀)                 117.3 ms (  4.8%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2050.0 ms ( 84.5%)",
+        "- 混合RT精修+次佳打包                   128.3 ms (  5.3%)",
+        "- 去畸變+全域平面擬合                    131.1 ms (  5.4%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260715_201424.mp4",
+      "success": true,
+      "elapsed_s": 1.2140566999732982,
+      "idx_A": 55,
+      "idx_B": 68,
+      "R": [
+        [
+          0.9987563646460633,
+          -0.04937037336969834,
+          -0.006949123132907463
+        ],
+        [
+          0.04983681711443069,
+          0.9925753660841082,
+          0.1109523965622254
+        ],
+        [
+          0.0014197671930692474,
+          -0.11116073441793699,
+          0.9938014265358962
+        ]
+      ],
+      "t": [
+        4.402355614716782,
+        -26.572872027359296,
+        8.445512832298649
+      ],
+      "baseline": 28.22808795758869,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.17393577064952864,
+      "feature_epi_px": 0.4203712910809264,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 126,
+        "feature_inlier_count": 77,
+        "feature_inlier_ratio": 0.6111111111111112,
+        "feature_grid_coverage": 0.2916666666666667,
+        "feature_hull_coverage": 0.16105941051947148,
+        "feature_parallax_deg": 7.864656545131518,
+        "feature_model_epi_px": 0.41065057265448124,
+        "feature_rotation_agreement_deg": 4.67863066594007,
+        "marker_parallax_deg": 6.897556771368373,
+        "effective_baseline_mm": 48.38801205599267,
+        "predicted_depth_sigma_mm": 1.9594416099161915,
+        "final_feature_inlier_count": 76,
+        "final_feature_inlier_ratio": 0.6031746031746031,
+        "final_feature_median_px": 0.4203712910809264,
+        "final_feature_p90_px": 1.0150694957002189,
+        "holdout_count": 16,
+        "holdout_median_px": 0.413355101585002,
+        "holdout_p90_px": 1.2242978841362229,
+        "marker_rms_px": 0.5462571275839941,
+        "marker_max_px": 0.8237112824168763,
+        "marker_left_to_right_rms_px": 0.5602956208016024,
+        "marker_right_to_left_rms_px": 0.5318482078405256
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.21 s",
+        "- 影片索引建立(113 幀)                   8.6 ms (  0.7%)",
+        "- ArUco偵測+配對搜尋(含極線重排)           998.1 ms ( 82.7%)",
+        "- 混合RT精修+次佳打包                   100.1 ms (  8.3%)",
+        "- 去畸變+全域平面擬合                    100.5 ms (  8.3%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260715_202102.mp4",
+      "success": true,
+      "elapsed_s": 1.8751919000060298,
+      "idx_A": 67,
+      "idx_B": 83,
+      "R": [
+        [
+          0.9994056772886084,
+          -0.02642098670808716,
+          -0.022140995114694983
+        ],
+        [
+          0.029186194549074063,
+          0.9903267601623789,
+          0.13565055898900538
+        ],
+        [
+          0.01834279834271382,
+          -0.13621615017191283,
+          0.9905093145353563
+        ]
+      ],
+      "t": [
+        1.9606740721305231,
+        -35.34632995116829,
+        4.41797743071712
+      ],
+      "baseline": 35.67528287781763,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.08208007275391685,
+      "feature_epi_px": 0.5123905969309588,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 199,
+        "feature_inlier_count": 128,
+        "feature_inlier_ratio": 0.6432160804020101,
+        "feature_grid_coverage": 0.5416666666666666,
+        "feature_hull_coverage": 0.2938931305541126,
+        "feature_parallax_deg": 8.533583648050842,
+        "feature_model_epi_px": 0.3668575046075852,
+        "feature_rotation_agreement_deg": 3.472500681258889,
+        "marker_parallax_deg": 10.812054521682207,
+        "effective_baseline_mm": 76.3913032334249,
+        "predicted_depth_sigma_mm": 1.2411554749095164,
+        "final_feature_inlier_count": 116,
+        "final_feature_inlier_ratio": 0.5829145728643216,
+        "final_feature_median_px": 0.5123905969309588,
+        "final_feature_p90_px": 1.1161632342683903,
+        "holdout_count": 26,
+        "holdout_median_px": 0.5950332619720958,
+        "holdout_p90_px": 1.0772068724827704,
+        "marker_rms_px": 0.6210882005795952,
+        "marker_max_px": 0.9448765273445799,
+        "marker_left_to_right_rms_px": 0.6470257835483375,
+        "marker_right_to_left_rms_px": 0.594019142134375
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.86 s",
+        "- 影片索引建立(136 幀)                  61.4 ms (  3.3%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1506.2 ms ( 80.9%)",
+        "- 混合RT精修+次佳打包                   151.7 ms (  8.2%)",
+        "- 去畸變+全域平面擬合                    142.0 ms (  7.6%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260715_202902.mp4",
+      "success": true,
+      "elapsed_s": 1.9587002999905962,
+      "idx_A": 60,
+      "idx_B": 74,
+      "R": [
+        [
+          0.999093135079135,
+          -0.03824318765176579,
+          -0.01871806710045616
+        ],
+        [
+          0.03996640974122727,
+          0.9939261632447655,
+          0.1025352042468162
+        ],
+        [
+          0.014683103559591359,
+          -0.10319031260623165,
+          0.9945532493808898
+        ]
+      ],
+      "t": [
+        0.7445514867577335,
+        -33.568624780694584,
+        -1.9943114177042796
+      ],
+      "baseline": 33.63605512860094,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.12765801708347702,
+      "feature_epi_px": 0.47051299171742045,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 175,
+        "feature_inlier_count": 125,
+        "feature_inlier_ratio": 0.7142857142857143,
+        "feature_grid_coverage": 0.5416666666666666,
+        "feature_hull_coverage": 0.40645430453384407,
+        "feature_parallax_deg": 9.570295019904133,
+        "feature_model_epi_px": 0.33624942466027286,
+        "feature_rotation_agreement_deg": 1.4353638252098493,
+        "marker_parallax_deg": 7.863752662319918,
+        "effective_baseline_mm": 55.24668269333771,
+        "predicted_depth_sigma_mm": 1.7161842054830212,
+        "final_feature_inlier_count": 116,
+        "final_feature_inlier_ratio": 0.6628571428571428,
+        "final_feature_median_px": 0.47051299171742045,
+        "final_feature_p90_px": 1.1850926857274882,
+        "holdout_count": 25,
+        "holdout_median_px": 0.6092730156763821,
+        "holdout_p90_px": 1.5543451756702116,
+        "marker_rms_px": 0.28621695688908977,
+        "marker_max_px": 0.3760545736427706,
+        "marker_left_to_right_rms_px": 0.26106486199054185,
+        "marker_right_to_left_rms_px": 0.30933061706782516
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.95 s",
+        "- 影片索引建立(123 幀)                  14.7 ms (  0.8%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1686.2 ms ( 86.3%)",
+        "- 混合RT精修+次佳打包                    72.2 ms (  3.7%)",
+        "- 去畸變+全域平面擬合                    180.8 ms (  9.3%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260715_215757.mp4",
+      "success": true,
+      "elapsed_s": 1.7221488999784924,
+      "idx_A": 41,
+      "idx_B": 57,
+      "R": [
+        [
+          0.9988837347352302,
+          -0.03175089896411389,
+          -0.03497377440838896
+        ],
+        [
+          0.03666885918476032,
+          0.9879463145788805,
+          0.1503910711315531
+        ],
+        [
+          0.02977715982907822,
+          -0.15150564321165821,
+          0.9880077736675634
+        ]
+      ],
+      "t": [
+        3.2381671344459004,
+        -34.06262651823653,
+        0.3619718601291485
+      ],
+      "baseline": 34.21811326386949,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.10211614307761561,
+      "feature_epi_px": 0.4317132365100822,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 200,
+        "feature_inlier_count": 136,
+        "feature_inlier_ratio": 0.68,
+        "feature_grid_coverage": 0.5,
+        "feature_hull_coverage": 0.371366316244376,
+        "feature_parallax_deg": 9.882058463178492,
+        "feature_model_epi_px": 0.4263175328544224,
+        "feature_rotation_agreement_deg": 3.865615113697183,
+        "marker_parallax_deg": 12.415666791839648,
+        "effective_baseline_mm": 88.06037271474123,
+        "predicted_depth_sigma_mm": 1.0766872921464103,
+        "final_feature_inlier_count": 134,
+        "final_feature_inlier_ratio": 0.67,
+        "final_feature_median_px": 0.4317132365100822,
+        "final_feature_p90_px": 0.9653750961974156,
+        "holdout_count": 28,
+        "holdout_median_px": 0.420877769258158,
+        "holdout_p90_px": 1.2603941577843363,
+        "marker_rms_px": 0.5941743693930339,
+        "marker_max_px": 0.9744126928979053,
+        "marker_left_to_right_rms_px": 0.5546444934734146,
+        "marker_right_to_left_rms_px": 0.6312335925367394
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.72 s",
+        "- 影片索引建立(104 幀)                  39.8 ms (  2.3%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1389.4 ms ( 80.9%)",
+        "- 混合RT精修+次佳打包                   149.8 ms (  8.7%)",
+        "- 去畸變+全域平面擬合                    138.3 ms (  8.1%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_164813.mp4",
+      "success": true,
+      "elapsed_s": 1.831297299999278,
+      "idx_A": 80,
+      "idx_B": 99,
+      "R": [
+        [
+          0.9983622636232126,
+          -0.0049912214678741315,
+          -0.056990159513670605
+        ],
+        [
+          0.013652761144474546,
+          0.9881898552582706,
+          0.15262507027932867
+        ],
+        [
+          0.05555531195364592,
+          -0.1531531836851481,
+          0.986639604739662
+        ]
+      ],
+      "t": [
+        8.173009473236153,
+        -32.162151098665,
+        1.6985856783096334
+      ],
+      "baseline": 33.227808240230424,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.0233036867653422,
+      "feature_epi_px": 0.39054450703724924,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 100,
+        "feature_inlier_count": 63,
+        "feature_inlier_ratio": 0.63,
+        "feature_grid_coverage": 0.5,
+        "feature_hull_coverage": 0.36295407783618855,
+        "feature_parallax_deg": 9.930661755643246,
+        "feature_model_epi_px": 0.3488908758715691,
+        "feature_rotation_agreement_deg": 1.2897749050285574,
+        "marker_parallax_deg": 8.542395731429378,
+        "effective_baseline_mm": 60.08302294910085,
+        "predicted_depth_sigma_mm": 1.578041176855554,
+        "final_feature_inlier_count": 60,
+        "final_feature_inlier_ratio": 0.6,
+        "final_feature_median_px": 0.39054450703724924,
+        "final_feature_p90_px": 0.8569497039197822,
+        "holdout_count": 13,
+        "holdout_median_px": 0.3518876743864735,
+        "holdout_p90_px": 1.2367371321551985,
+        "marker_rms_px": 0.23732633375787238,
+        "marker_max_px": 0.4082862479311679,
+        "marker_left_to_right_rms_px": 0.19468510744028236,
+        "marker_right_to_left_rms_px": 0.2733958418317144
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.83 s",
+        "- 影片索引建立(163 幀)                  41.6 ms (  2.3%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1446.6 ms ( 79.2%)",
+        "- 混合RT精修+次佳打包                   151.0 ms (  8.3%)",
+        "- 去畸變+全域平面擬合                    187.0 ms ( 10.2%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_164907.mp4",
+      "success": true,
+      "elapsed_s": 1.77294319999055,
+      "idx_A": 91,
+      "idx_B": 101,
+      "R": [
+        [
+          0.9999231245026147,
+          -0.004750063224227479,
+          -0.01145347040396408
+        ],
+        [
+          0.005344279739802662,
+          0.9986107633783258,
+          0.05242119742070196
+        ],
+        [
+          0.011188554821395578,
+          -0.052478378064907044,
+          0.9985593803458487
+        ]
+      ],
+      "t": [
+        6.396421935473586,
+        -19.414364670638133,
+        -2.4974740751389337
+      ],
+      "baseline": 20.59293922433417,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.1275298299931696,
+      "feature_epi_px": 0.3334987831542706,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 133,
+        "feature_inlier_count": 85,
+        "feature_inlier_ratio": 0.6390977443609023,
+        "feature_grid_coverage": 0.4583333333333333,
+        "feature_hull_coverage": 0.6205118125372453,
+        "feature_parallax_deg": 5.059158934192335,
+        "feature_model_epi_px": 0.40951627683618297,
+        "feature_rotation_agreement_deg": 2.771342794468556,
+        "marker_parallax_deg": 5.12139106782576,
+        "effective_baseline_mm": 35.849581291036756,
+        "predicted_depth_sigma_mm": 2.644758483339497,
+        "final_feature_inlier_count": 85,
+        "final_feature_inlier_ratio": 0.6390977443609023,
+        "final_feature_median_px": 0.3334987831542706,
+        "final_feature_p90_px": 0.7967130566047509,
+        "holdout_count": 17,
+        "holdout_median_px": 0.36941520811809836,
+        "holdout_p90_px": 0.7408837112483502,
+        "marker_rms_px": 0.45904599573023297,
+        "marker_max_px": 0.8775725693419899,
+        "marker_left_to_right_rms_px": 0.4215495899380351,
+        "marker_right_to_left_rms_px": 0.49370274013316606
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.77 s",
+        "- 影片索引建立(184 幀)                  22.4 ms (  1.3%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1487.6 ms ( 84.2%)",
+        "- 混合RT精修+次佳打包                   164.2 ms (  9.3%)",
+        "- 去畸變+全域平面擬合                     93.4 ms (  5.3%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_164952.mp4",
+      "success": true,
+      "elapsed_s": 2.399196499987738,
+      "idx_A": 116,
+      "idx_B": 129,
+      "R": [
+        [
+          0.9986793549458974,
+          0.03754731930757794,
+          -0.03506771759982322
+        ],
+        [
+          -0.04154153419755056,
+          0.9917641080490012,
+          -0.12115384815301096
+        ],
+        [
+          0.03022990144476001,
+          0.12245061371256531,
+          0.992014112933912
+        ]
+      ],
+      "t": [
+        4.463688567569994,
+        34.77266132111543,
+        -9.089411457343388
+      ],
+      "baseline": 36.21712152590453,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.06400868985513666,
+      "feature_epi_px": 0.4241037025650366,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 91,
+        "feature_inlier_count": 53,
+        "feature_inlier_ratio": 0.5824175824175825,
+        "feature_grid_coverage": 0.25,
+        "feature_hull_coverage": 0.08576548150403293,
+        "feature_parallax_deg": 6.446265752852676,
+        "feature_model_epi_px": 0.44355845253492054,
+        "feature_rotation_agreement_deg": 1.0092384648117863,
+        "marker_parallax_deg": 7.897764244639477,
+        "effective_baseline_mm": 55.48867776691762,
+        "predicted_depth_sigma_mm": 1.7086996493574087,
+        "final_feature_inlier_count": 51,
+        "final_feature_inlier_ratio": 0.5604395604395604,
+        "final_feature_median_px": 0.4241037025650366,
+        "final_feature_p90_px": 0.8679028592914411,
+        "holdout_count": 11,
+        "holdout_median_px": 0.5820891305601587,
+        "holdout_p90_px": 0.8850356458498958,
+        "marker_rms_px": 0.11415022743150031,
+        "marker_max_px": 0.1808146465643129,
+        "marker_left_to_right_rms_px": 0.11107411231322811,
+        "marker_right_to_left_rms_px": 0.11714559496265696
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.39 s",
+        "- 影片索引建立(234 幀)                  39.9 ms (  1.7%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2194.8 ms ( 91.7%)",
+        "- 混合RT精修+次佳打包                    82.8 ms (  3.5%)",
+        "- 去畸變+全域平面擬合                     76.5 ms (  3.2%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_165048.mp4",
+      "success": true,
+      "elapsed_s": 1.900312700017821,
+      "idx_A": 147,
+      "idx_B": 203,
+      "R": [
+        [
+          0.9710613025895682,
+          0.07330920491467104,
+          -0.22730091748127593
+        ],
+        [
+          -0.07913993624242104,
+          0.9967247480481216,
+          -0.01663271234507263
+        ],
+        [
+          0.22533711879003995,
+          0.03413996343271578,
+          0.9736825179657979
+        ]
+      ],
+      "t": [
+        30.39872957616421,
+        -21.897900710952015,
+        34.70671929408532
+      ],
+      "baseline": 51.07012022259109,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.21532944307475374,
+      "feature_epi_px": 0.4776722025015539,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 58,
+        "feature_inlier_count": 34,
+        "feature_inlier_ratio": 0.5862068965517241,
+        "feature_grid_coverage": 0.25,
+        "feature_hull_coverage": 0.15764335595143011,
+        "feature_parallax_deg": 8.803889692842759,
+        "feature_model_epi_px": 0.35817947751582085,
+        "feature_rotation_agreement_deg": 2.4415614813579367,
+        "marker_parallax_deg": 9.280114365469977,
+        "effective_baseline_mm": 65.35996938669412,
+        "predicted_depth_sigma_mm": 1.4506353832983947,
+        "final_feature_inlier_count": 14,
+        "final_feature_inlier_ratio": 0.2413793103448276,
+        "final_feature_median_px": 0.4776722025015539,
+        "final_feature_p90_px": 1.0433282597887585,
+        "holdout_count": 7,
+        "holdout_median_px": 0.8599095633232675,
+        "holdout_p90_px": 8.810632793896772,
+        "marker_rms_px": 0.21525608711511052,
+        "marker_max_px": 0.2762725038862167,
+        "marker_left_to_right_rms_px": 0.2728678069882187,
+        "marker_right_to_left_rms_px": 0.1349574969746265
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.89 s",
+        "- 影片索引建立(371 幀)                  14.1 ms (  0.7%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1553.9 ms ( 82.0%)",
+        "- 混合RT精修+次佳打包                   155.1 ms (  8.2%)",
+        "- 去畸變+全域平面擬合                    171.3 ms (  9.0%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_165242.mp4",
+      "success": true,
+      "elapsed_s": 1.818674899986945,
+      "idx_A": 180,
+      "idx_B": 199,
+      "R": [
+        [
+          0.9993898814412449,
+          0.03488619629391322,
+          -0.0016787438747526097
+        ],
+        [
+          -0.03490984135671486,
+          0.9962696604548013,
+          -0.07891810079901868
+        ],
+        [
+          -0.0010806707655269996,
+          0.07892855608344565,
+          0.9968796894235928
+        ]
+      ],
+      "t": [
+        -0.7160093117667171,
+        29.283071457447544,
+        4.039813949102618
+      ],
+      "baseline": 29.56908926666291,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.07234090041561957,
+      "feature_epi_px": 0.20931638676061737,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 135,
+        "feature_inlier_count": 88,
+        "feature_inlier_ratio": 0.6518518518518519,
+        "feature_grid_coverage": 0.5,
+        "feature_hull_coverage": 0.605067970431057,
+        "feature_parallax_deg": 6.153292144839582,
+        "feature_model_epi_px": 0.2913030286575413,
+        "feature_rotation_agreement_deg": 1.759371614745056,
+        "marker_parallax_deg": 4.297665355679829,
+        "effective_baseline_mm": 30.05976009070846,
+        "predicted_depth_sigma_mm": 3.154166365850186,
+        "final_feature_inlier_count": 86,
+        "final_feature_inlier_ratio": 0.6370370370370371,
+        "final_feature_median_px": 0.20931638676061737,
+        "final_feature_p90_px": 0.7043986760876857,
+        "holdout_count": 18,
+        "holdout_median_px": 0.27582471141826437,
+        "holdout_p90_px": 0.7015136661235928,
+        "marker_rms_px": 0.29821636533131346,
+        "marker_max_px": 0.4788930889827886,
+        "marker_left_to_right_rms_px": 0.32201561615234886,
+        "marker_right_to_left_rms_px": 0.2723452662648315
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.81 s",
+        "- 影片索引建立(363 幀)                  39.9 ms (  2.2%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1534.5 ms ( 84.6%)",
+        "- 混合RT精修+次佳打包                   103.4 ms (  5.7%)",
+        "- 去畸變+全域平面擬合                    136.2 ms (  7.5%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_165457.mp4",
+      "success": true,
+      "elapsed_s": 2.370358899992425,
+      "idx_A": 130,
+      "idx_B": 144,
+      "R": [
+        [
+          0.9994530295403862,
+          -0.03296927876939068,
+          -0.0025823245284192116
+        ],
+        [
+          0.03306913340045564,
+          0.9970105504594993,
+          0.06983118707704504
+        ],
+        [
+          0.0002723209260037593,
+          -0.0698783867148677,
+          0.9975554806182164
+        ]
+      ],
+      "t": [
+        1.5618406720530476,
+        -22.44235613814967,
+        7.3562187482791215
+      ],
+      "baseline": 23.6688117485639,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.09012909065636092,
+      "feature_epi_px": 0.7589180387304915,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 51,
+        "feature_inlier_count": 25,
+        "feature_inlier_ratio": 0.49019607843137253,
+        "feature_grid_coverage": 0.375,
+        "feature_hull_coverage": 0.4083881499675123,
+        "feature_parallax_deg": 6.531773315246018,
+        "feature_model_epi_px": 0.32968106808857905,
+        "feature_rotation_agreement_deg": 0.4149584101457939,
+        "marker_parallax_deg": 5.959712662778444,
+        "effective_baseline_mm": 41.757349364479055,
+        "predicted_depth_sigma_mm": 2.2705819618975047,
+        "final_feature_inlier_count": 19,
+        "final_feature_inlier_ratio": 0.37254901960784315,
+        "final_feature_median_px": 0.7589180387304915,
+        "final_feature_p90_px": 1.051320782883518,
+        "holdout_count": 5,
+        "holdout_median_px": 0.7731735025602842,
+        "holdout_p90_px": 1.8789599599100013,
+        "marker_rms_px": 0.0901273460511721,
+        "marker_max_px": 0.10085807520415264,
+        "marker_left_to_right_rms_px": 0.07921541556489473,
+        "marker_right_to_left_rms_px": 0.09985386797383711
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.37 s",
+        "- 影片索引建立(262 幀)                  95.9 ms (  4.1%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2014.3 ms ( 85.1%)",
+        "- 混合RT精修+次佳打包                    97.5 ms (  4.1%)",
+        "- 去畸變+全域平面擬合                    158.6 ms (  6.7%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_165807.mp4",
+      "success": true,
+      "elapsed_s": 2.325453400000697,
+      "idx_A": 111,
+      "idx_B": 154,
+      "R": [
+        [
+          0.9979566440421078,
+          -0.04403786472053045,
+          -0.046294741419193625
+        ],
+        [
+          0.05056610404207486,
+          0.9872537333270779,
+          0.15090770409012635
+        ],
+        [
+          0.039059003241503784,
+          -0.15294029064508588,
+          0.9874632457783818
+        ]
+      ],
+      "t": [
+        6.803639519054327,
+        -45.50912505450219,
+        14.575352116836223
+      ],
+      "baseline": 48.2681143536944,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.15750717226237707,
+      "feature_epi_px": 0.5046138518806598,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 85,
+        "feature_inlier_count": 51,
+        "feature_inlier_ratio": 0.6,
+        "feature_grid_coverage": 0.25,
+        "feature_hull_coverage": 0.22812361647251064,
+        "feature_parallax_deg": 6.050525319028608,
+        "feature_model_epi_px": 0.2649029572781239,
+        "feature_rotation_agreement_deg": 2.0656759888179446,
+        "marker_parallax_deg": 8.856745599784196,
+        "effective_baseline_mm": 62.3289871832189,
+        "predicted_depth_sigma_mm": 1.5211780028597257,
+        "final_feature_inlier_count": 43,
+        "final_feature_inlier_ratio": 0.5058823529411764,
+        "final_feature_median_px": 0.5046138518806598,
+        "final_feature_p90_px": 1.0980843376433809,
+        "holdout_count": 11,
+        "holdout_median_px": 0.6598462761819821,
+        "holdout_p90_px": 1.582908319631465,
+        "marker_rms_px": 0.24214635810285737,
+        "marker_max_px": 0.37542999999559834,
+        "marker_left_to_right_rms_px": 0.24043767613817058,
+        "marker_right_to_left_rms_px": 0.24384306711126866
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.32 s",
+        "- 影片索引建立(280 幀)                  31.4 ms (  1.4%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2005.2 ms ( 86.5%)",
+        "- 混合RT精修+次佳打包                   123.2 ms (  5.3%)",
+        "- 去畸變+全域平面擬合                    157.6 ms (  6.8%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_165843.mp4",
+      "success": true,
+      "elapsed_s": 2.4192016999877524,
+      "idx_A": 141,
+      "idx_B": 156,
+      "R": [
+        [
+          0.9994461113144258,
+          -0.03318574099017995,
+          -0.0024853920022869934
+        ],
+        [
+          0.03327573194454115,
+          0.9955724204383262,
+          0.08791064398653803
+        ],
+        [
+          -0.00044299213016224916,
+          -0.08794465451353756,
+          0.9961252639605458
+        ]
+      ],
+      "t": [
+        2.082283158934844,
+        -30.16357387522531,
+        3.572362636674599
+      ],
+      "baseline": 30.445670741306838,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.07892551447818912,
+      "feature_epi_px": 0.3445343441778931,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 98,
+        "feature_inlier_count": 66,
+        "feature_inlier_ratio": 0.673469387755102,
+        "feature_grid_coverage": 0.4166666666666667,
+        "feature_hull_coverage": 0.5519653878114045,
+        "feature_parallax_deg": 5.591565989894322,
+        "feature_model_epi_px": 0.25130757160601547,
+        "feature_rotation_agreement_deg": 0.8414144511686612,
+        "marker_parallax_deg": 6.434612192071009,
+        "effective_baseline_mm": 45.11188434027454,
+        "predicted_depth_sigma_mm": 2.101740719329512,
+        "final_feature_inlier_count": 57,
+        "final_feature_inlier_ratio": 0.5816326530612245,
+        "final_feature_median_px": 0.3445343441778931,
+        "final_feature_p90_px": 0.9354431180281608,
+        "holdout_count": 14,
+        "holdout_median_px": 0.6235645762611596,
+        "holdout_p90_px": 1.6242726512438275,
+        "marker_rms_px": 0.37448288164831717,
+        "marker_max_px": 0.5096898674588051,
+        "marker_left_to_right_rms_px": 0.39194323071344506,
+        "marker_right_to_left_rms_px": 0.35616760267205977
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.42 s",
+        "- 影片索引建立(284 幀)                  88.4 ms (  3.7%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2172.4 ms ( 90.0%)",
+        "- 混合RT精修+次佳打包                    95.0 ms (  3.9%)",
+        "- 去畸變+全域平面擬合                     59.2 ms (  2.5%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170007.mp4",
+      "success": true,
+      "elapsed_s": 2.2896102000086103,
+      "idx_A": 175,
+      "idx_B": 215,
+      "R": [
+        [
+          0.9999702104005685,
+          0.006680366962714419,
+          -0.003866653422040526
+        ],
+        [
+          -0.007151006522863873,
+          0.990362823378607,
+          -0.13831247657121906
+        ],
+        [
+          0.0029054117010610244,
+          0.13833600676178828,
+          0.9903810922145322
+        ]
+      ],
+      "t": [
+        5.202890428792488,
+        27.99243778362514,
+        1.058957638835338
+      ],
+      "baseline": 28.491543186794786,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.19610383838414544,
+      "feature_epi_px": 0.1510419806227634,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 33,
+        "feature_inlier_count": 14,
+        "feature_inlier_ratio": 0.42424242424242425,
+        "feature_grid_coverage": 0.25,
+        "feature_hull_coverage": 0.2651513441565269,
+        "feature_parallax_deg": 11.089563522496167,
+        "feature_model_epi_px": 0.010809573103242272,
+        "feature_rotation_agreement_deg": 1.1453939165090037,
+        "marker_parallax_deg": 9.559158569383621,
+        "effective_baseline_mm": 67.36168747942858,
+        "predicted_depth_sigma_mm": 1.4075283412784636,
+        "final_feature_inlier_count": 13,
+        "final_feature_inlier_ratio": 0.3939393939393939,
+        "final_feature_median_px": 0.1510419806227634,
+        "final_feature_p90_px": 0.6708706255367961,
+        "holdout_count": 3,
+        "holdout_median_px": 0.3470060432551827,
+        "holdout_p90_px": 2.2645258479865196,
+        "marker_rms_px": 0.37415139591425917,
+        "marker_max_px": 0.5219826172076331,
+        "marker_left_to_right_rms_px": 0.3949284574553969,
+        "marker_right_to_left_rms_px": 0.3521506036074313
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.29 s",
+        "- 影片索引建立(353 幀)                   8.4 ms (  0.4%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2144.4 ms ( 93.8%)",
+        "- 混合RT精修+次佳打包                    73.1 ms (  3.2%)",
+        "- 去畸變+全域平面擬合                     59.2 ms (  2.6%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170155.mp4",
+      "success": true,
+      "elapsed_s": 2.557021899992833,
+      "idx_A": 122,
+      "idx_B": 150,
+      "R": [
+        [
+          0.9949206492785432,
+          -0.09867072454461787,
+          0.01992460180285222
+        ],
+        [
+          0.09315817023579503,
+          0.9775251527927182,
+          0.18911935642839828
+        ],
+        [
+          -0.0381373433458691,
+          -0.18630261344225169,
+          0.9817519438570551
+        ]
+      ],
+      "t": [
+        -0.3875004182870561,
+        -46.96564482906643,
+        11.221947677133993
+      ],
+      "baseline": 48.28927479733486,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.12795920794909885,
+      "feature_epi_px": 0.6878205378551036,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 60,
+        "feature_inlier_count": 27,
+        "feature_inlier_ratio": 0.45,
+        "feature_grid_coverage": 0.2916666666666667,
+        "feature_hull_coverage": 0.15908287126368836,
+        "feature_parallax_deg": 13.993626552467145,
+        "feature_model_epi_px": 0.25777702702502747,
+        "feature_rotation_agreement_deg": 3.295640806905329,
+        "marker_parallax_deg": 11.709883531072794,
+        "effective_baseline_mm": 82.9079795626576,
+        "predicted_depth_sigma_mm": 1.1435990207912758,
+        "final_feature_inlier_count": 16,
+        "final_feature_inlier_ratio": 0.26666666666666666,
+        "final_feature_median_px": 0.6878205378551036,
+        "final_feature_p90_px": 1.0362012301104997,
+        "holdout_count": 6,
+        "holdout_median_px": 1.225166103462081,
+        "holdout_p90_px": 2.8665080088231076,
+        "marker_rms_px": 0.4441408150456336,
+        "marker_max_px": 0.6842982352030472,
+        "marker_left_to_right_rms_px": 0.3895450775315987,
+        "marker_right_to_left_rms_px": 0.4927238169093312
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.55 s",
+        "- 影片索引建立(247 幀)                   6.3 ms (  0.2%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2344.6 ms ( 91.9%)",
+        "- 混合RT精修+次佳打包                   108.2 ms (  4.2%)",
+        "- 去畸變+全域平面擬合                     93.0 ms (  3.6%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170239.mp4",
+      "success": true,
+      "elapsed_s": 2.1096548000059556,
+      "idx_A": 79,
+      "idx_B": 97,
+      "R": [
+        [
+          0.9976003706361115,
+          -0.06675960499446051,
+          -0.018348178320383653
+        ],
+        [
+          0.06889344357000879,
+          0.9834797120966844,
+          0.16739578646814512
+        ],
+        [
+          0.006869784549679147,
+          -0.16825816781127279,
+          0.9857190243801905
+        ]
+      ],
+      "t": [
+        3.7016546801400563,
+        -54.22881890587459,
+        8.702110180598293
+      ],
+      "baseline": 55.04719583132656,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.21537366068203656,
+      "feature_epi_px": 0.34297258026626554,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 54,
+        "feature_inlier_count": 25,
+        "feature_inlier_ratio": 0.46296296296296297,
+        "feature_grid_coverage": 0.16666666666666666,
+        "feature_hull_coverage": 0.053447580295063586,
+        "feature_parallax_deg": 16.413173658835575,
+        "feature_model_epi_px": 0.4210911883765366,
+        "feature_rotation_agreement_deg": 0.9827899107982511,
+        "marker_parallax_deg": 13.118594959626481,
+        "effective_baseline_mm": 93.21977342600842,
+        "predicted_depth_sigma_mm": 1.0170962743102452,
+        "final_feature_inlier_count": 25,
+        "final_feature_inlier_ratio": 0.46296296296296297,
+        "final_feature_median_px": 0.34297258026626554,
+        "final_feature_p90_px": 1.213856542778197,
+        "holdout_count": 5,
+        "holdout_median_px": 0.29365741730806666,
+        "holdout_p90_px": 0.570160687965187,
+        "marker_rms_px": 0.3134615060732894,
+        "marker_max_px": 0.4547191484834808,
+        "marker_left_to_right_rms_px": 0.2787462410687669,
+        "marker_right_to_left_rms_px": 0.34469807755411486
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.11 s",
+        "- 影片索引建立(160 幀)                  62.5 ms (  3.0%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1801.7 ms ( 85.6%)",
+        "- 混合RT精修+次佳打包                    97.8 ms (  4.6%)",
+        "- 去畸變+全域平面擬合                    142.9 ms (  6.8%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170339.mp4",
+      "success": true,
+      "elapsed_s": 2.1267268999945372,
+      "idx_A": 80,
+      "idx_B": 111,
+      "R": [
+        [
+          0.9980180706104479,
+          -0.03185741324754065,
+          -0.054268185488134266
+        ],
+        [
+          0.042877679593326785,
+          0.9754729509117511,
+          0.21590281756432106
+        ],
+        [
+          0.046059041758281655,
+          -0.21780180729437465,
+          0.9749056043595262
+        ]
+      ],
+      "t": [
+        9.564129551002162,
+        -39.6748873397544,
+        6.067753695169015
+      ],
+      "baseline": 41.25999144929376,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.14622383120181257,
+      "feature_epi_px": 0.48173316257251564,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 71,
+        "feature_inlier_count": 43,
+        "feature_inlier_ratio": 0.6056338028169014,
+        "feature_grid_coverage": 0.3333333333333333,
+        "feature_hull_coverage": 0.16857428490234055,
+        "feature_parallax_deg": 11.864286959194692,
+        "feature_model_epi_px": 0.3955171288258905,
+        "feature_rotation_agreement_deg": 3.2701613104337253,
+        "marker_parallax_deg": 8.763627532646549,
+        "effective_baseline_mm": 61.66328391423929,
+        "predicted_depth_sigma_mm": 1.5376003064563355,
+        "final_feature_inlier_count": 40,
+        "final_feature_inlier_ratio": 0.5633802816901409,
+        "final_feature_median_px": 0.48173316257251564,
+        "final_feature_p90_px": 1.0045533173019798,
+        "holdout_count": 9,
+        "holdout_median_px": 0.5214016725153354,
+        "holdout_p90_px": 1.992029148514952,
+        "marker_rms_px": 0.2165863419031464,
+        "marker_max_px": 0.3117212271540991,
+        "marker_left_to_right_rms_px": 0.2001732962719421,
+        "marker_right_to_left_rms_px": 0.23184032966159826
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.12 s",
+        "- 影片索引建立(203 幀)                 119.3 ms (  5.6%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1654.7 ms ( 78.1%)",
+        "- 混合RT精修+次佳打包                   116.4 ms (  5.5%)",
+        "- 去畸變+全域平面擬合                    228.9 ms ( 10.8%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170413.mp4",
+      "success": true,
+      "elapsed_s": 1.9662003999983426,
+      "idx_A": 157,
+      "idx_B": 217,
+      "R": [
+        [
+          0.9970859282889465,
+          0.0602870246626261,
+          -0.04674533415751393
+        ],
+        [
+          -0.06560330440212707,
+          0.9903490872013864,
+          -0.12208559264263195
+        ],
+        [
+          0.03893402187922,
+          0.12479647485689942,
+          0.991418166972746
+        ]
+      ],
+      "t": [
+        6.252134856730696,
+        34.41523822206457,
+        -9.714435272597367
+      ],
+      "baseline": 36.30245260052942,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.10507026288949792,
+      "feature_epi_px": 0.3819082418749772,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 98,
+        "feature_inlier_count": 57,
+        "feature_inlier_ratio": 0.5816326530612245,
+        "feature_grid_coverage": 0.4583333333333333,
+        "feature_hull_coverage": 0.33285766604041017,
+        "feature_parallax_deg": 7.621962405327418,
+        "feature_model_epi_px": 0.28206800317011893,
+        "feature_rotation_agreement_deg": 0.9164666255478422,
+        "marker_parallax_deg": 8.532190706800865,
+        "effective_baseline_mm": 60.01017294454244,
+        "predicted_depth_sigma_mm": 1.5799568571691822,
+        "final_feature_inlier_count": 55,
+        "final_feature_inlier_ratio": 0.5612244897959183,
+        "final_feature_median_px": 0.3819082418749772,
+        "final_feature_p90_px": 0.9805786093578525,
+        "holdout_count": 12,
+        "holdout_median_px": 0.36906840504237504,
+        "holdout_p90_px": 0.9898782926001196,
+        "marker_rms_px": 0.1174787997482673,
+        "marker_max_px": 0.1861391503329841,
+        "marker_left_to_right_rms_px": 0.08868613874239763,
+        "marker_right_to_left_rms_px": 0.14048952123041483
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 1.96 s",
+        "- 影片索引建立(394 幀)                  33.1 ms (  1.7%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          1665.1 ms ( 85.0%)",
+        "- 混合RT精修+次佳打包                    96.4 ms (  4.9%)",
+        "- 去畸變+全域平面擬合                    163.9 ms (  8.4%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    },
+    {
+      "video": "video_20260717_170458.mp4",
+      "success": true,
+      "elapsed_s": 2.413430199987488,
+      "idx_A": 90,
+      "idx_B": 139,
+      "R": [
+        [
+          0.9744471545666129,
+          0.20686183773187133,
+          -0.08752669905362999
+        ],
+        [
+          -0.2063049049332994,
+          0.9783655933417795,
+          0.01546130542515773
+        ],
+        [
+          0.08883146490683395,
+          0.0029909622499543374,
+          0.9960421803253742
+        ]
+      ],
+      "t": [
+        36.52930474521132,
+        -16.68551257645324,
+        11.446538831428018
+      ],
+      "baseline": 41.759067115141434,
+      "rt_reliable": true,
+      "marker_bidir_rms_px": 0.038324831216038996,
+      "feature_epi_px": 0.565350611750506,
+      "free_quality": {
+        "rt_reliable": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_match_count": 119,
+        "feature_inlier_count": 68,
+        "feature_inlier_ratio": 0.5714285714285714,
+        "feature_grid_coverage": 0.375,
+        "feature_hull_coverage": 0.3212894563353548,
+        "feature_parallax_deg": 8.699807749702416,
+        "feature_model_epi_px": 0.33724198225282115,
+        "feature_rotation_agreement_deg": 3.1874521625770877,
+        "marker_parallax_deg": 6.996256135794303,
+        "effective_baseline_mm": 49.08729342690156,
+        "predicted_depth_sigma_mm": 1.9315280518537867,
+        "final_feature_inlier_count": 61,
+        "final_feature_inlier_ratio": 0.5126050420168067,
+        "final_feature_median_px": 0.565350611750506,
+        "final_feature_p90_px": 1.1838651277849404,
+        "holdout_count": 14,
+        "holdout_median_px": 0.7126384007324456,
+        "holdout_p90_px": 1.3287708768689512,
+        "marker_rms_px": 0.4217499548474305,
+        "marker_max_px": 0.7973602192897842,
+        "marker_left_to_right_rms_px": 0.3807435413207676,
+        "marker_right_to_left_rms_px": 0.4591082710757238
+      },
+      "stage_lines": [
+        "⏱️ [影片分析明細] 總耗時 2.41 s",
+        "- 影片索引建立(228 幀)                  33.6 ms (  1.4%)",
+        "- ArUco偵測+配對搜尋(含極線重排)          2099.8 ms ( 87.2%)",
+        "- 混合RT精修+次佳打包                   195.6 ms (  8.1%)",
+        "- 去畸變+全域平面擬合                     78.0 ms (  3.2%)",
+        "- 深度匹配特徵延後計算                      0.0 ms (  0.0%)"
+      ],
+      "free_acceptance": {
+        "time_ok": true,
+        "baseline_range_ok": true,
+        "marker_ok": true,
+        "feature_geometry_ok": true,
+        "feature_final_ok": true,
+        "feature_holdout_ok": true,
+        "all_ok": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,244 @@
+=== 影片分析與挑選最優對日誌 ===
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260728_143043.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260728_143043.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=59.38mm parallax=19.59deg depth_sigma=1.29mm score=0.519
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.076px feature_inlier_epi=1.484px E_epi=0.223px inliers=24/52 grid=0.17 parallax=20.883° score=0.519 combined=0.237
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.636px feature_inlier_epi=45.546px E_epi=0.223px inliers=24/52 grid=0.17 parallax=20.883° score=0.519 combined=0.770
+🎯 [pair quality] score=0.519 | reproj=0.074px | marker_bidir=0.076px | feature_inlier_epi=1.484px | E_epi=0.223px | baseline=59.38mm | shared=1 | marker_parallax=19.59deg | predicted_depth_sigma=1.29mm | feature_grid=0.17 | parallax=20.883°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.223 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.075px, max=0.092px | feature_seed_p90=2.016px, final_inliers=12, final_p90=1.386px, holdout_median=1.7283711111136955
+   [RT候選-best] joint_from_marker_w12 | marker=0.127px, max=0.186px | feature_seed_p90=1.045px, final_inliers=22, final_p90=0.756px, holdout_median=0.36901485384460797
+   [RT候選-best] joint_from_marker_w4 | marker=0.138px, max=0.207px | feature_seed_p90=1.080px, final_inliers=22, final_p90=0.770px, holdout_median=0.4369540642168046
+   [RT候選-best] joint_from_marker_w1 | marker=0.168px, max=0.275px | feature_seed_p90=1.090px, final_inliers=22, final_p90=0.777px, holdout_median=0.463001468868248
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.137px, R→L=0.117px, max=0.186px | feature inliers=22/52, median=0.315px, p90=0.756px | baseline=58.66mm
+📍 [RT SIFT像素] 19/52 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 58.66 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.137px, R→L=0.117px, max=0.186px | Feature inliers=22/52, median=0.315px, p90=0.756px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260728_143043_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.060 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.12 s
+   - 影片索引建立(2 幀)                    18.3 ms (  1.6%)
+   - ArUco偵測+配對搜尋(含極線重排)           921.9 ms ( 82.2%)
+   - 混合RT精修+次佳打包                   119.1 ms ( 10.6%)
+   - 去畸變+全域平面擬合                     61.8 ms (  5.5%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.7098 deg
+Translation L2 error: 3.2018 mm | direction error: 0.3561 deg
+Baseline: algorithm=58.6584 mm | JSON=61.8383 mm | delta=-3.1799 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.05px / 右 0.05px (量極線幾何) | 三角化邊長 8.26mm vs 已知 8.25mm (尺度偏差 +0.1%)
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260728_143958.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260728_143958.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=59.34mm parallax=14.41deg depth_sigma=1.79mm score=0.546
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.122px feature_inlier_epi=0.402px E_epi=0.259px inliers=41/83 grid=0.38 parallax=15.703° score=0.546 combined=0.165
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.308px feature_inlier_epi=16.781px E_epi=0.259px inliers=41/83 grid=0.38 parallax=15.703° score=0.546 combined=0.724
+🎯 [pair quality] score=0.546 | reproj=0.116px | marker_bidir=0.122px | feature_inlier_epi=0.402px | E_epi=0.259px | baseline=59.35mm | shared=1 | marker_parallax=14.38deg | predicted_depth_sigma=1.79mm | feature_grid=0.38 | parallax=15.703°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.259 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.122px, max=0.157px | feature_seed_p90=1.053px, final_inliers=39, final_p90=0.866px, holdout_median=0.7249878817937061
+   [RT候選-best] joint_from_marker_w12 | marker=0.147px, max=0.242px | feature_seed_p90=0.820px, final_inliers=41, final_p90=0.820px, holdout_median=0.5466752605084726
+   [RT候選-best] joint_from_marker_w4 | marker=0.158px, max=0.274px | feature_seed_p90=0.845px, final_inliers=41, final_p90=0.845px, holdout_median=0.39307396688676777
+   [RT候選-best] joint_from_marker_w1 | marker=0.176px, max=0.331px | feature_seed_p90=0.825px, final_inliers=40, final_p90=0.705px, holdout_median=0.28715553390949256
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.125px, R→L=0.166px, max=0.242px | feature inliers=41/83, median=0.227px, p90=0.820px | baseline=60.83mm
+📍 [RT SIFT像素] 32/83 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 60.83 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.125px, R→L=0.166px, max=0.242px | Feature inliers=41/83, median=0.227px, p90=0.820px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260728_143958_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.196 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.48 s
+   - 影片索引建立(2 幀)                    41.5 ms (  2.8%)
+   - ArUco偵測+配對搜尋(含極線重排)          1129.7 ms ( 76.5%)
+   - 混合RT精修+次佳打包                   193.2 ms ( 13.1%)
+   - 去畸變+全域平面擬合                    112.0 ms (  7.6%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.1318 deg
+Translation L2 error: 1.2878 mm | direction error: 0.7476 deg
+Baseline: algorithm=60.8293 mm | JSON=61.8383 mm | delta=-1.0090 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.02px / 右 0.02px (量極線幾何) | 三角化邊長 8.25mm vs 已知 8.25mm (尺度偏差 -0.0%)
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260728_144526.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260728_144526.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=63.06mm parallax=16.79deg depth_sigma=1.52mm score=0.495
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.069px feature_inlier_epi=4.095px E_epi=0.212px inliers=25/46 grid=0.17 parallax=20.493° score=0.495 combined=0.278
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.323px feature_inlier_epi=17.365px E_epi=0.212px inliers=25/46 grid=0.17 parallax=20.493° score=0.495 combined=0.764
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.179px feature_inlier_epi=47.002px E_epi=0.212px inliers=25/46 grid=0.17 parallax=20.493° score=1.021 combined=0.843
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.277px feature_inlier_epi=83.463px E_epi=0.212px inliers=25/46 grid=0.17 parallax=20.493° score=1.022 combined=0.843
+🎯 [pair quality] score=0.495 | reproj=0.069px | marker_bidir=0.069px | feature_inlier_epi=4.095px | E_epi=0.212px | baseline=63.06mm | shared=1 | marker_parallax=16.79deg | predicted_depth_sigma=1.52mm | feature_grid=0.17 | parallax=20.493°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.212 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.069px, max=0.074px | feature_seed_p90=5.652px, final_inliers=2, final_p90=1.392px, holdout_median=3.0738253986354866
+   [RT候選-best] joint_from_marker_w12 | marker=0.241px, max=0.341px | feature_seed_p90=1.179px, final_inliers=25, final_p90=1.179px, holdout_median=0.7337978208120424
+   [RT候選-best] joint_from_marker_w4 | marker=0.298px, max=0.384px | feature_seed_p90=0.838px, final_inliers=25, final_p90=0.838px, holdout_median=0.5081793015842709
+   [RT候選-best] joint_from_marker_w1 | marker=0.381px, max=0.495px | feature_seed_p90=0.787px, final_inliers=25, final_p90=0.787px, holdout_median=0.3972788201692782
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.229px, R→L=0.253px, max=0.341px | feature inliers=25/46, median=0.587px, p90=1.179px | baseline=61.89mm
+📍 [RT SIFT像素] 20/46 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 61.89 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.229px, R→L=0.253px, max=0.341px | Feature inliers=25/46, median=0.587px, p90=1.179px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260728_144526_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.055 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.90 s
+   - 影片索引建立(2 幀)                    11.2 ms (  1.2%)
+   - ArUco偵測+配對搜尋(含極線重排)           714.8 ms ( 79.2%)
+   - 混合RT精修+次佳打包                    93.5 ms ( 10.3%)
+   - 去畸變+全域平面擬合                     83.5 ms (  9.2%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 0.8499 deg
+Translation L2 error: 2.2575 mm | direction error: 2.0903 deg
+Baseline: algorithm=61.8928 mm | JSON=61.8383 mm | delta=+0.0546 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.08px / 右 0.08px (量極線幾何) | 三角化邊長 8.30mm vs 已知 8.25mm (尺度偏差 +0.6%)
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260728_145142.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260728_145142.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=59.22mm parallax=15.81deg depth_sigma=1.62mm score=0.554
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.083px feature_inlier_epi=1.094px E_epi=0.458px inliers=41/80 grid=0.25 parallax=15.301° score=0.554 combined=0.224
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.328px feature_inlier_epi=17.691px E_epi=0.458px inliers=41/80 grid=0.25 parallax=15.301° score=0.554 combined=0.786
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.228px feature_inlier_epi=40.243px E_epi=0.458px inliers=41/80 grid=0.25 parallax=15.301° score=0.964 combined=0.848
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.249px feature_inlier_epi=24.235px E_epi=0.458px inliers=41/80 grid=0.25 parallax=15.301° score=0.964 combined=0.848
+🎯 [pair quality] score=0.554 | reproj=0.081px | marker_bidir=0.083px | feature_inlier_epi=1.094px | E_epi=0.458px | baseline=59.22mm | shared=1 | marker_parallax=15.81deg | predicted_depth_sigma=1.62mm | feature_grid=0.25 | parallax=15.301°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.458 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.083px, max=0.101px | feature_seed_p90=1.938px, final_inliers=28, final_p90=1.272px, holdout_median=1.0318074197048057
+   [RT候選-best] joint_from_marker_w12 | marker=0.136px, max=0.220px | feature_seed_p90=1.169px, final_inliers=40, final_p90=1.073px, holdout_median=0.21904798186473629
+   [RT候選-best] joint_from_marker_w4 | marker=0.169px, max=0.252px | feature_seed_p90=1.059px, final_inliers=41, final_p90=1.059px, holdout_median=0.15652436222649568
+   [RT候選-best] joint_from_marker_w1 | marker=0.260px, max=0.402px | feature_seed_p90=0.884px, final_inliers=41, final_p90=0.884px, holdout_median=0.23425588823714769
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.154px, R→L=0.183px, max=0.252px | feature inliers=41/80, median=0.324px, p90=1.059px | baseline=58.17mm
+📍 [RT SIFT像素] 32/80 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 58.17 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.154px, R→L=0.183px, max=0.252px | Feature inliers=41/80, median=0.324px, p90=1.059px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260728_145142_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.059 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.49 s
+   - 影片索引建立(2 幀)                    54.0 ms (  3.6%)
+   - ArUco偵測+配對搜尋(含極線重排)          1225.1 ms ( 82.0%)
+   - 混合RT精修+次佳打包                   110.5 ms (  7.4%)
+   - 去畸變+全域平面擬合                     98.9 ms (  6.6%)
+   - 深度匹配特徵延後計算                      4.8 ms (  0.3%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 1.2781 deg
+Translation L2 error: 4.7532 mm | direction error: 2.8927 deg
+Baseline: algorithm=58.1742 mm | JSON=61.8383 mm | delta=-3.6641 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.03px / 右 0.03px (量極線幾何) | 三角化邊長 8.28mm vs 已知 8.25mm (尺度偏差 +0.4%)
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260728_151045.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260728_151045.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=60.35mm parallax=19.50deg depth_sigma=1.30mm score=0.538
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.061px feature_inlier_epi=0.952px E_epi=0.581px inliers=26/62 grid=0.21 parallax=17.613° score=0.538 combined=0.284
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.537px feature_inlier_epi=51.861px E_epi=0.581px inliers=26/62 grid=0.21 parallax=17.613° score=0.538 combined=0.832
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.345px feature_inlier_epi=62.081px E_epi=0.581px inliers=26/62 grid=0.21 parallax=17.613° score=0.879 combined=0.883
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.417px feature_inlier_epi=150.328px E_epi=0.581px inliers=26/62 grid=0.21 parallax=17.613° score=0.879 combined=0.884
+🎯 [pair quality] score=0.538 | reproj=0.061px | marker_bidir=0.061px | feature_inlier_epi=0.952px | E_epi=0.581px | baseline=60.35mm | shared=1 | marker_parallax=19.50deg | predicted_depth_sigma=1.30mm | feature_grid=0.21 | parallax=17.613°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.581 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.061px, max=0.063px | feature_seed_p90=1.804px, final_inliers=22, final_p90=1.151px, holdout_median=0.9935060928822892
+   [RT候選-best] joint_from_marker_w12 | marker=0.072px, max=0.124px | feature_seed_p90=1.067px, final_inliers=25, final_p90=0.928px, holdout_median=0.45545902335208543
+   [RT候選-best] joint_from_marker_w4 | marker=0.101px, max=0.177px | feature_seed_p90=1.026px, final_inliers=25, final_p90=0.905px, holdout_median=0.47100454170870665
+   [RT候選-best] joint_from_marker_w1 | marker=0.206px, max=0.339px | feature_seed_p90=0.918px, final_inliers=26, final_p90=0.918px, holdout_median=0.5515366442529321
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.095px, R→L=0.107px, max=0.177px | feature inliers=25/62, median=0.360px, p90=0.905px | baseline=61.62mm
+📍 [RT SIFT像素] 20/62 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 61.62 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.095px, R→L=0.107px, max=0.177px | Feature inliers=25/62, median=0.360px, p90=0.905px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260728_151045_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.010 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 1.31 s
+   - 影片索引建立(2 幀)                    26.1 ms (  2.0%)
+   - ArUco偵測+配對搜尋(含極線重排)          1093.1 ms ( 83.6%)
+   - 混合RT精修+次佳打包                   127.3 ms (  9.7%)
+   - 去畸變+全域平面擬合                     61.4 ms (  4.7%)
+   - 深度匹配特徵延後計算                      0.1 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 1.0619 deg
+Translation L2 error: 2.8543 mm | direction error: 2.6420 deg
+Baseline: algorithm=61.6230 mm | JSON=61.8383 mm | delta=-0.2153 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.04px / 右 0.04px (量極線幾何) | 三角化邊長 8.24mm vs 已知 8.25mm (尺度偏差 -0.1%)
+
+
+=== RT SIFT recoverPose inlier pixel pairs ===
+role=final_rt, applied=True, inliers=20/62
+#001: left=(1661.333, 234.359), right=(1459.868, 239.102)
+#002: left=(1707.184, 228.768), right=(1513.939, 233.004)
+#003: left=(1744.972, 236.164), right=(1557.417, 241.322)
+#004: left=(1635.924, 189.844), right=(1435.127, 195.005)
+#005: left=(1424.626, 368.552), right=(1160.191, 371.998)
+#006: left=(1620.841, 183.839), right=(1415.507, 188.507)
+#007: left=(1741.660, 225.951), right=(1554.860, 231.136)
+#008: left=(1657.607, 173.170), right=(1465.048, 179.254)
+#009: left=(1621.420, 153.397), right=(1424.599, 160.125)
+#010: left=(1384.465, 385.419), right=(1099.731, 387.953)
+#011: left=(1236.483, 366.827), right=(923.572, 369.414)
+#012: left=(1399.796, 447.626), right=(1108.059, 450.621)
+#013: left=(1343.121, 365.614), right=(1055.497, 368.555)
+#014: left=(1248.223, 353.436), right=(938.287, 355.086)
+#015: left=(1372.719, 289.679), right=(1104.396, 294.309)
+#016: left=(1291.840, 314.346), right=(997.247, 318.553)
+#017: left=(1255.234, 370.414), right=(944.284, 371.931)
+#018: left=(1348.018, 325.611), right=(1064.343, 328.614)
+#019: left=(1310.024, 388.324), right=(1015.770, 390.356)
+#020: left=(1226.342, 557.134), right=(885.778, 559.381)
+
+==================================================
+

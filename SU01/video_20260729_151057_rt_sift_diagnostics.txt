@@ -1,0 +1,194 @@
+=== RT SIFT DIAGNOSTICS ===
+This report describes the selected best frame pair only.
+Coordinates are undistorted display pixels: frame_B/UI-left -> frame_A/UI-right.
+
+[SELECTED_PAIR]
+video=D:\Lightglue\lg_env\SU01\video_20260729_151057.mp4
+frame_left_B=1
+frame_right_A=0
+shared_markers=1
+baseline_mm=22.338551
+rt_sift_role=validation_only
+rt_sift_applied=False
+rt_reliable=False
+
+[PIPELINE_COUNTS]
+left_keypoint_count=155
+right_keypoint_count=168
+left_descriptor_count=155
+right_descriptor_count=168
+knn_pair_count=155
+ratio_pass_count=49
+mutual_pass_count=46
+spatially_balanced_count=36
+essential_ransac_inlier_count=26
+recoverpose_inlier_count=26
+final_rt_sift_point_count=0
+final_rt_feature_inlier_count=21
+final_rt_feature_outlier_count=15
+
+[FEATURE_QUALITY]
+match_count=36
+essential_inlier_count=26
+inlier_count=26
+inlier_ratio=0.7222222222222222
+grid_coverage=0.125
+hull_coverage=0.032395183276437936
+parallax_deg=8.219317857602316
+homography_ratio=0.7222222222222222
+planar_degenerate=False
+model_epi_px=0.2981529266506498
+quality_penalty=0.15351806271335774
+quality_ok=False
+strong=False
+marker_rt_feature_epi_px=0.8491630699158352
+final_feature_epi_px=0.8149881411526477
+final_feature_inlier_p90_px=1.2505063247942454
+final_feature_all_p90_px=30.44960242343344
+final_feature_holdout_median_px=None
+marker_bidir_rms_px=0.03761644301062832
+marker_left_to_right_rms_px=0.02209166949560479
+marker_right_to_left_rms_px=0.0483937155882937
+marker_bidir_max_px=0.04934859857449073
+marker_pnp_self_reproj_px=0.03522428125143051
+joint_solution_role=marker_only
+feature_rot_agreement_deg=0.8887599974505691
+pair_score=0.7715800922457506
+combined_score=0.2955533029399753
+sharpness_min=50.5705895107612
+marker_coverage=0.0005907791550718855
+
+[ACTIVE_THRESHOLDS]
+sift_max_keypoints=800
+sift_contrast_threshold=0.01
+match_ratio=0.75
+ransac_threshold_px=0.75
+min_matches=11
+min_inlier_ratio=0.28
+min_grid_coverage=0.16666666666666666
+min_hull_coverage=0.02
+min_parallax_deg=1.0
+strong_inliers=40
+strong_grid_coverage=0.25
+
+final_feature_inlier_px=1.5
+final_feature_p90_max_px=1.25
+marker_bidir_rms_max_px=1.5
+marker_bidir_point_max_px=2.0
+
+[FINAL_RT_LEFT_TO_RIGHT]
+R0=0.999946168749 -0.00365045373208 0.00971255844815
+R1=0.00354628947742 0.999936246489 0.0107203912514
+R2=-0.0097510735307 -0.0106853706155 0.999895364236
+t_mm=-22.3006941058 -1.09500413844 -0.700628838837
+
+[GRID_COUNTS_6x4]
+raw_keypoints_left
+    21  103   13    0    0    0
+     2   14    2    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+raw_keypoints_right
+    17  117    8    0    0    0
+     7   18    1    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+balanced_candidates_left
+     0    0    0    0    0    0
+     0    2    4   24    1    0
+     0    0    2    2    1    0
+     0    0    0    0    0    0
+balanced_candidates_right
+     0    0    0    0    0    0
+     0    0   17   13    2    0
+     0    0    2    2    0    0
+     0    0    0    0    0    0
+essential_inliers_left
+     0    0    0    0    0    0
+     0    0    3   21    1    0
+     0    0    1    0    0    0
+     0    0    0    0    0    0
+essential_inliers_right
+     0    0    0    0    0    0
+     0    0   13   12    0    0
+     0    0    1    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_left
+     0    0    0    0    0    0
+     0    0    3   21    1    0
+     0    0    1    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_right
+     0    0    0    0    0    0
+     0    0   13   12    0    0
+     0    0    1    0    0    0
+     0    0    0    0    0    0
+joint_optimization_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+joint_optimization_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_left
+     0    0    0    0    0    0
+     0    0    2   18    1    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_right
+     0    0    0    0    0    0
+     0    0   11   10    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+
+[MATCH_TABLE]
+index,left_x,left_y,right_x,right_y,essential_inlier,recoverpose_inlier,optimization_used,holdout,final_rt_inlier,final_epipolar_px
+1,700.907166,363.753632,628.806213,365.235077,0,0,0,0,0,0.269048
+2,643.845703,334.258484,572.538025,336.068542,1,1,0,0,1,0.542674
+3,662.294800,366.253204,588.951050,368.161987,1,1,0,0,1,0.819980
+4,657.483398,298.374329,588.837585,300.243896,1,1,0,0,1,0.294878
+5,590.600647,525.212830,519.604797,533.924377,1,1,0,0,0,7.466736
+6,799.934326,304.385620,732.245972,306.112549,1,1,0,0,1,0.134912
+7,608.483276,264.414978,526.886963,276.018188,0,0,0,0,0,10.753393
+8,810.580811,287.919312,744.204529,289.608948,1,1,0,0,1,0.012378
+9,685.142883,373.688538,613.698364,376.279236,1,1,0,0,1,1.357064
+10,786.161682,361.165131,713.681824,363.798065,1,1,0,0,1,1.367738
+11,753.130615,374.158783,679.688232,376.158020,1,1,0,0,1,0.814988
+12,730.022095,304.199432,661.328247,306.281128,1,1,0,0,1,0.538916
+13,633.405884,332.925598,562.605347,334.256775,1,1,0,0,1,0.032954
+14,657.478210,315.038361,587.802856,315.760620,0,0,0,0,0,0.719093
+15,701.150818,355.883270,629.502930,359.373596,1,1,0,0,0,2.239450
+16,752.278381,359.156769,682.302734,362.802063,1,1,0,0,0,2.242620
+17,804.515930,267.252960,740.130249,268.059113,1,1,0,0,1,1.088351
+18,636.186401,514.933899,564.542297,517.285156,0,0,0,0,0,1.007334
+19,726.057983,377.664673,652.064453,379.076294,0,0,0,0,0,0.292289
+20,914.418335,323.049835,846.176147,325.194214,1,1,0,0,1,0.624710
+21,731.505005,366.714386,657.361389,369.407104,1,1,0,0,0,1.579242
+22,672.089661,276.272888,606.631348,277.274139,1,1,0,0,1,0.889959
+23,830.083618,334.556061,760.376709,336.865784,1,1,0,0,1,0.865847
+24,656.432800,287.848236,588.004761,289.228699,1,1,0,0,1,0.254881
+25,800.974609,317.345428,732.799622,319.336487,1,1,0,0,1,0.444453
+26,793.043030,351.141510,722.123596,353.755005,1,1,0,0,1,1.250506
+27,647.889465,323.261627,576.397888,324.913330,1,1,0,0,1,0.362031
+28,664.092957,287.226593,596.213806,288.070862,1,1,0,0,1,0.829641
+29,641.983276,343.054901,568.894836,345.050079,1,1,0,0,1,0.869345
+30,844.513367,698.107849,754.525452,717.888855,0,0,0,0,0,16.105898
+31,385.197388,321.639923,939.168274,320.347168,0,0,0,0,0,44.793307
+32,843.984924,690.646606,716.266968,760.120850,0,0,0,0,0,67.003140
+33,602.418274,339.749207,531.891663,342.170013,1,1,0,0,1,1.148518
+34,611.151855,330.507324,542.067139,333.526093,1,1,0,0,0,1.611574
+35,397.587219,340.207825,940.988403,311.394196,0,0,0,0,0,71.358837
+36,891.613708,718.145203,540.508301,343.913971,0,0,0,0,0,361.832495

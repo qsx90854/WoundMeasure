@@ -1,0 +1,82 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\Zebra1_只有1Pattern_2.mp4，總影格數: 103 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 5 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F11 B=F51 branch=(0, 0) marker_bidir=0.178px feature_inlier_epi=0.337px E_epi=0.266px inliers=99/153 grid=0.54 parallax=4.868° score=0.604 combined=0.172
+   [topK] A=F11 B=F102 branch=(0, 0) marker_bidir=0.204px feature_inlier_epi=0.591px E_epi=0.257px inliers=43/80 grid=0.42 parallax=9.609° score=0.594 combined=0.176
+   [topK] A=F50 B=F102 branch=(0, 0) marker_bidir=0.157px feature_inlier_epi=0.652px E_epi=0.236px inliers=68/113 grid=0.54 parallax=5.750° score=0.604 combined=0.180
+   [topK] A=F38 B=F62 branch=(0, 0) marker_bidir=0.134px feature_inlier_epi=0.655px E_epi=0.296px inliers=95/150 grid=0.54 parallax=4.527° score=0.582 combined=0.185
+   [topK] A=F0 B=F62 branch=(0, 0) marker_bidir=0.122px feature_inlier_epi=0.418px E_epi=0.386px inliers=54/99 grid=0.42 parallax=6.864° score=0.558 combined=0.187
+   [topK] A=F38 B=F96 branch=(0, 0) marker_bidir=0.161px feature_inlier_epi=1.001px E_epi=0.312px inliers=45/87 grid=0.33 parallax=9.095° score=0.567 combined=0.199
+   [topK] A=F22 B=F62 branch=(0, 0) marker_bidir=0.113px feature_inlier_epi=0.770px E_epi=0.399px inliers=67/110 grid=0.42 parallax=6.497° score=0.549 combined=0.202
+   [topK] A=F0 B=F96 branch=(0, 0) marker_bidir=0.151px feature_inlier_epi=0.495px E_epi=0.417px inliers=34/76 grid=0.33 parallax=9.189° score=0.536 combined=0.206
+   [topK] A=F5 B=F102 branch=(0, 0) marker_bidir=0.206px feature_inlier_epi=0.818px E_epi=0.309px inliers=45/84 grid=0.38 parallax=8.857° score=0.601 combined=0.207
+   [topK] A=F16 B=F62 branch=(0, 0) marker_bidir=0.114px feature_inlier_epi=0.540px E_epi=0.378px inliers=68/111 grid=0.46 parallax=5.541° score=0.545 combined=0.215
+   [topK] A=F22 B=F96 branch=(0, 0) marker_bidir=0.144px feature_inlier_epi=0.608px E_epi=0.527px inliers=33/83 grid=0.33 parallax=9.558° score=0.538 combined=0.239
+   [topK] A=F16 B=F96 branch=(0, 0) marker_bidir=0.145px feature_inlier_epi=0.401px E_epi=0.554px inliers=34/90 grid=0.33 parallax=9.587° score=0.541 combined=0.254
+   [topK] A=F38 B=F62 branch=(1, 1) marker_bidir=1.235px feature_inlier_epi=3.475px E_epi=0.296px inliers=95/150 grid=0.54 parallax=4.527° score=0.582 combined=0.379
+   [topK] A=F11 B=F51 branch=(1, 1) marker_bidir=1.180px feature_inlier_epi=3.661px E_epi=0.266px inliers=99/153 grid=0.54 parallax=4.868° score=0.604 combined=0.389
+   [topK] A=F50 B=F102 branch=(1, 1) marker_bidir=1.272px feature_inlier_epi=4.142px E_epi=0.236px inliers=68/113 grid=0.54 parallax=5.750° score=0.604 combined=0.397
+   [topK] A=F22 B=F62 branch=(1, 1) marker_bidir=1.162px feature_inlier_epi=4.125px E_epi=0.399px inliers=67/110 grid=0.42 parallax=6.497° score=0.549 combined=0.454
+   [topK] A=F16 B=F62 branch=(1, 1) marker_bidir=1.183px feature_inlier_epi=5.043px E_epi=0.378px inliers=68/111 grid=0.46 parallax=5.541° score=0.545 combined=0.454
+   [topK] A=F0 B=F62 branch=(1, 1) marker_bidir=1.202px feature_inlier_epi=4.365px E_epi=0.386px inliers=54/99 grid=0.42 parallax=6.864° score=0.558 combined=0.461
+   [topK] A=F11 B=F102 branch=(1, 1) marker_bidir=1.214px feature_inlier_epi=3.934px E_epi=0.257px inliers=43/80 grid=0.42 parallax=9.609° score=0.594 combined=0.523
+   [topK] A=F38 B=F96 branch=(1, 1) marker_bidir=1.315px feature_inlier_epi=6.208px E_epi=0.312px inliers=45/87 grid=0.33 parallax=9.095° score=0.567 combined=0.526
+   [topK] A=F0 B=F96 branch=(1, 1) marker_bidir=1.285px feature_inlier_epi=3.938px E_epi=0.417px inliers=34/76 grid=0.33 parallax=9.189° score=0.536 combined=0.536
+   [topK] A=F5 B=F102 branch=(1, 1) marker_bidir=1.221px feature_inlier_epi=7.073px E_epi=0.309px inliers=45/84 grid=0.38 parallax=8.857° score=0.601 combined=0.560
+   [topK] A=F22 B=F96 branch=(1, 1) marker_bidir=1.248px feature_inlier_epi=6.882px E_epi=0.527px inliers=33/83 grid=0.33 parallax=9.558° score=0.538 combined=0.602
+   [topK] A=F16 B=F96 branch=(1, 1) marker_bidir=1.267px feature_inlier_epi=7.681px E_epi=0.554px inliers=34/90 grid=0.33 parallax=9.587° score=0.541 combined=0.629
+   [topK] A=F50 B=F102 branch=(1, 0) marker_bidir=0.915px feature_inlier_epi=38.891px E_epi=0.236px inliers=68/113 grid=0.54 parallax=5.750° score=0.798 combined=0.773
+   [topK] A=F50 B=F102 branch=(0, 1) marker_bidir=0.898px feature_inlier_epi=34.003px E_epi=0.236px inliers=68/113 grid=0.54 parallax=5.750° score=0.798 combined=0.773
+   [topK] A=F38 B=F62 branch=(0, 1) marker_bidir=0.855px feature_inlier_epi=38.774px E_epi=0.296px inliers=95/150 grid=0.54 parallax=4.527° score=0.805 combined=0.787
+   [topK] A=F38 B=F62 branch=(1, 0) marker_bidir=0.901px feature_inlier_epi=45.155px E_epi=0.296px inliers=95/150 grid=0.54 parallax=4.527° score=0.805 combined=0.787
+   [topK] A=F11 B=F102 branch=(1, 0) marker_bidir=0.832px feature_inlier_epi=21.036px E_epi=0.257px inliers=43/80 grid=0.42 parallax=9.609° score=0.864 combined=0.787
+   [topK] A=F11 B=F102 branch=(0, 1) marker_bidir=0.907px feature_inlier_epi=24.547px E_epi=0.257px inliers=43/80 grid=0.42 parallax=9.609° score=0.864 combined=0.787
+   [topK] A=F11 B=F51 branch=(1, 0) marker_bidir=0.826px feature_inlier_epi=43.433px E_epi=0.266px inliers=99/153 grid=0.54 parallax=4.868° score=0.860 combined=0.789
+   [topK] A=F11 B=F51 branch=(0, 1) marker_bidir=0.862px feature_inlier_epi=42.426px E_epi=0.266px inliers=99/153 grid=0.54 parallax=4.868° score=0.860 combined=0.789
+   [topK] A=F38 B=F96 branch=(1, 0) marker_bidir=0.905px feature_inlier_epi=49.604px E_epi=0.312px inliers=45/87 grid=0.33 parallax=9.095° score=0.807 combined=0.791
+   [topK] A=F38 B=F96 branch=(0, 1) marker_bidir=0.968px feature_inlier_epi=47.452px E_epi=0.312px inliers=45/87 grid=0.33 parallax=9.095° score=0.807 combined=0.791
+   [topK] A=F5 B=F102 branch=(1, 0) marker_bidir=0.842px feature_inlier_epi=36.055px E_epi=0.309px inliers=45/84 grid=0.38 parallax=8.857° score=0.861 combined=0.799
+   [topK] A=F5 B=F102 branch=(0, 1) marker_bidir=0.908px feature_inlier_epi=27.554px E_epi=0.309px inliers=45/84 grid=0.38 parallax=8.857° score=0.861 combined=0.799
+   [topK] A=F16 B=F62 branch=(1, 0) marker_bidir=0.829px feature_inlier_epi=43.297px E_epi=0.378px inliers=68/111 grid=0.46 parallax=5.541° score=0.802 combined=0.805
+   [topK] A=F16 B=F62 branch=(0, 1) marker_bidir=0.852px feature_inlier_epi=34.880px E_epi=0.378px inliers=68/111 grid=0.46 parallax=5.541° score=0.802 combined=0.805
+   [topK] A=F0 B=F62 branch=(1, 0) marker_bidir=0.855px feature_inlier_epi=32.120px E_epi=0.386px inliers=54/99 grid=0.42 parallax=6.864° score=0.808 combined=0.808
+   [topK] A=F0 B=F62 branch=(0, 1) marker_bidir=0.853px feature_inlier_epi=25.895px E_epi=0.386px inliers=54/99 grid=0.42 parallax=6.864° score=0.808 combined=0.808
+   [topK] A=F22 B=F62 branch=(1, 0) marker_bidir=0.799px feature_inlier_epi=40.864px E_epi=0.399px inliers=67/110 grid=0.42 parallax=6.497° score=0.802 combined=0.810
+   [topK] A=F22 B=F62 branch=(0, 1) marker_bidir=0.852px feature_inlier_epi=29.440px E_epi=0.399px inliers=67/110 grid=0.42 parallax=6.497° score=0.802 combined=0.810
+   [topK] A=F0 B=F96 branch=(1, 0) marker_bidir=0.860px feature_inlier_epi=30.813px E_epi=0.417px inliers=34/76 grid=0.33 parallax=9.189° score=0.803 combined=0.814
+   [topK] A=F0 B=F96 branch=(0, 1) marker_bidir=0.967px feature_inlier_epi=24.409px E_epi=0.417px inliers=34/76 grid=0.33 parallax=9.189° score=0.803 combined=0.814
+   [topK] A=F22 B=F96 branch=(1, 0) marker_bidir=0.804px feature_inlier_epi=44.744px E_epi=0.527px inliers=33/83 grid=0.33 parallax=9.558° score=0.807 combined=0.840
+   [topK] A=F22 B=F96 branch=(0, 1) marker_bidir=0.965px feature_inlier_epi=35.982px E_epi=0.527px inliers=33/83 grid=0.33 parallax=9.558° score=0.807 combined=0.840
+   [topK] A=F16 B=F96 branch=(1, 0) marker_bidir=0.834px feature_inlier_epi=50.846px E_epi=0.554px inliers=34/90 grid=0.33 parallax=9.587° score=0.813 combined=0.847
+   [topK] A=F16 B=F96 branch=(0, 1) marker_bidir=0.966px feature_inlier_epi=40.063px E_epi=0.554px inliers=34/90 grid=0.33 parallax=9.587° score=0.813 combined=0.847
+🎯 [pair quality] score=0.604 | reproj=0.162px | marker_bidir=0.178px | feature_inlier_epi=0.337px | E_epi=0.266px | baseline=13.46mm | shared=1 | feature_grid=0.54 | parallax=4.868°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.266 px < 0.8 px (IPPE 分支 (0, 0))
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+✅ 儲存偵錯對圖片至: test_video_Zebra\debug_pairs/frame_A_best.png 與 frame_B_best.png
+   [RT候選-best] marker_only | marker=0.178px, max=0.242px | feature_seed_p90=1.033px, final_inliers=96
+   [RT候選-best] joint_from_marker_w12 | marker=0.194px, max=0.319px | feature_seed_p90=0.713px, final_inliers=98
+   [RT候選-best] joint_from_marker_w4 | marker=0.221px, max=0.381px | feature_seed_p90=0.727px, final_inliers=99
+   [RT候選-best] joint_from_marker_w1 | marker=0.280px, max=0.485px | feature_seed_p90=0.688px, final_inliers=99
+   [RT候選-best] joint_from_marker_w0.25 | marker=0.337px, max=0.555px | feature_seed_p90=0.666px, final_inliers=99
+   [RT候選-best] joint_from_feature_w12 | marker=0.194px, max=0.319px | feature_seed_p90=0.713px, final_inliers=98
+   [RT候選-best] joint_from_feature_w4 | marker=0.221px, max=0.381px | feature_seed_p90=0.727px, final_inliers=99
+   [RT候選-best] joint_from_feature_w1 | marker=0.280px, max=0.485px | feature_seed_p90=0.688px, final_inliers=99
+   [RT候選-best] joint_from_feature_w0.25 | marker=0.337px, max=0.555px | feature_seed_p90=0.666px, final_inliers=99
+✅ [RT聯合精修-best] role=joint_from_marker_w12 | marker L→R=0.247px, R→L=0.120px, max=0.319px | feature inliers=98/153, median=0.326px, p90=0.701px | baseline=12.93mm
+📍 [RT SIFT像素] 79/153 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 11
+  - 左圖 (Frame B) 索引: 51
+  - 計算 Baseline: 12.93 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.247px, R→L=0.120px, max=0.319px | Feature inliers=98/153, median=0.326px, p90=0.701px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\Zebra1_只有1Pattern_2_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.013 mm
+✅ [參考平面] 由 ref 標籤 ID:5 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 9.72 s
+   - 影格載入(103 幀)                   639.7 ms (  6.6%)
+   - ArUco偵測+配對搜尋(含極線重排)          8005.2 ms ( 82.4%)
+   - 混合RT精修+次佳打包                   336.2 ms (  3.5%)
+   - 去畸變+全域平面擬合                     36.6 ms (  0.4%)
+   - SIFT特徵提取(最佳+次佳)               699.6 ms (  7.2%)

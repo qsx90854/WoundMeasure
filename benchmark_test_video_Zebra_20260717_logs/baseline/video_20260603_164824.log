@@ -1,0 +1,92 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260603_164824.mp4，總影格數: 120 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F59 B=F112 branch=(0, 0) marker_bidir=8.532px feature_inlier_epi=13.358px E_epi=0.242px inliers=41/96 grid=0.33 parallax=11.755° score=1.124 combined=4.404
+   [topK] A=F59 B=F99 branch=(0, 0) marker_bidir=9.098px feature_inlier_epi=12.765px E_epi=0.401px inliers=34/79 grid=0.29 parallax=12.327° score=1.108 combined=4.441
+   [topK] A=F45 B=F60 branch=(0, 0) marker_bidir=6.347px feature_inlier_epi=17.285px E_epi=0.379px inliers=42/78 grid=0.29 parallax=13.208° score=1.355 combined=4.481
+   [topK] A=F39 B=F60 branch=(0, 0) marker_bidir=7.927px feature_inlier_epi=18.588px E_epi=0.302px inliers=30/74 grid=0.33 parallax=16.027° score=1.500 combined=4.500
+   [topK] A=F32 B=F60 branch=(0, 0) marker_bidir=6.810px feature_inlier_epi=8.666px E_epi=0.425px inliers=32/79 grid=0.33 parallax=20.852° score=1.451 combined=4.523
+   [topK] A=F6 B=F60 branch=(0, 0) marker_bidir=5.704px feature_inlier_epi=10.836px E_epi=0.342px inliers=19/65 grid=0.29 parallax=23.752° score=1.510 combined=4.556
+   [topK] A=F32 B=F112 branch=(0, 0) marker_bidir=31.478px feature_inlier_epi=1.614px E_epi=0.027px inliers=13/52 grid=0.25 parallax=34.964° score=3.213 combined=4.652
+   [topK] A=F45 B=F112 branch=(0, 0) marker_bidir=25.451px feature_inlier_epi=2.565px E_epi=0.292px inliers=15/50 grid=0.21 parallax=20.174° score=2.922 combined=4.737
+   [topK] A=F39 B=F112 branch=(0, 0) marker_bidir=32.998px feature_inlier_epi=1.544px E_epi=0.107px inliers=15/66 grid=0.17 parallax=25.985° score=3.206 combined=4.751
+   [topK] A=F19 B=F99 branch=(0, 0) marker_bidir=36.200px feature_inlier_epi=4.437px E_epi=0.234px inliers=16/62 grid=0.25 parallax=44.800° score=3.295 combined=4.879
+   [topK] A=F6 B=F99 branch=(0, 0) marker_bidir=41.510px feature_inlier_epi=2.189px E_epi=0.212px inliers=9/50 grid=0.17 parallax=11.709° score=3.280 combined=5.136
+   [topK] A=F19 B=F92 branch=(0, 0) marker_bidir=37.795px feature_inlier_epi=21.129px E_epi=0.227px inliers=10/72 grid=0.08 parallax=6.113° score=3.306 combined=5.393
+🎯 [pair quality] score=1.124 | reproj=0.740px | marker_bidir=8.532px | feature_inlier_epi=13.358px | E_epi=0.242px | baseline=39.96mm | shared=1 | feature_grid=0.33 | parallax=11.755°
+ℹ️ 第 1 階段：最佳特徵極線殘差 0.242 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 2 階段抽樣評估 (抽樣張數: 各段最多 20 張)...
+📌 [第 2 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+   [topK] A=F59 B=F69 branch=(0, 0) marker_bidir=0.078px feature_inlier_epi=0.723px E_epi=0.297px inliers=98/141 grid=0.50 parallax=4.244° score=0.558 combined=0.177
+   [topK] A=F59 B=F75 branch=(0, 0) marker_bidir=0.115px feature_inlier_epi=0.386px E_epi=0.350px inliers=83/125 grid=0.38 parallax=5.318° score=0.584 combined=0.183
+   [topK] A=F49 B=F75 branch=(0, 0) marker_bidir=1.407px feature_inlier_epi=1.955px E_epi=0.389px inliers=31/75 grid=0.33 parallax=15.854° score=0.669 combined=0.247
+   [topK] A=F43 B=F69 branch=(0, 0) marker_bidir=1.394px feature_inlier_epi=2.265px E_epi=0.323px inliers=27/69 grid=0.25 parallax=20.022° score=0.578 combined=0.263
+   [topK] A=F46 B=F69 branch=(0, 0) marker_bidir=1.367px feature_inlier_epi=3.503px E_epi=0.267px inliers=35/85 grid=0.42 parallax=15.970° score=0.580 combined=0.266
+   [topK] A=F43 B=F60 branch=(0, 0) marker_bidir=1.158px feature_inlier_epi=3.137px E_epi=0.418px inliers=38/90 grid=0.38 parallax=15.253° score=0.587 combined=0.270
+   [topK] A=F46 B=F60 branch=(0, 0) marker_bidir=1.222px feature_inlier_epi=3.289px E_epi=0.372px inliers=40/78 grid=0.38 parallax=11.824° score=0.625 combined=0.291
+   [topK] A=F37 B=F60 branch=(0, 0) marker_bidir=1.424px feature_inlier_epi=1.146px E_epi=0.337px inliers=27/81 grid=0.29 parallax=20.281° score=0.744 combined=0.296
+   [topK] A=F49 B=F69 branch=(0, 0) marker_bidir=1.263px feature_inlier_epi=3.127px E_epi=0.420px inliers=33/83 grid=0.33 parallax=12.426° score=0.606 combined=0.304
+   [topK] A=F40 B=F60 branch=(0, 0) marker_bidir=1.213px feature_inlier_epi=1.255px E_epi=0.449px inliers=36/76 grid=0.33 parallax=17.065° score=0.761 combined=0.308
+   [topK] A=F52 B=F75 branch=(0, 0) marker_bidir=0.723px feature_inlier_epi=3.446px E_epi=0.253px inliers=34/79 grid=0.21 parallax=9.716° score=0.762 combined=0.321
+   [topK] A=F55 B=F75 branch=(0, 0) marker_bidir=0.985px feature_inlier_epi=3.301px E_epi=0.398px inliers=26/79 grid=0.17 parallax=5.574° score=0.800 combined=0.395
+🎯 [pair quality] score=0.558 | reproj=0.059px | marker_bidir=0.078px | feature_inlier_epi=0.723px | E_epi=0.297px | baseline=11.22mm | shared=1 | feature_grid=0.50 | parallax=4.244°
+🎉 第 2 階段搜尋成功！特徵極線殘差 0.297 px < 0.8 px | reproj 0.059 px
+✅ 儲存偵錯對圖片至: test_video_Zebra\debug_pairs/frame_A_best.png 與 frame_B_best.png
+   [RT候選-best] marker_only | marker=0.076px, max=0.111px | feature_seed_p90=0.953px, final_inliers=96
+   [RT候選-best] joint_from_marker_w12 | marker=0.084px, max=0.126px | feature_seed_p90=0.758px, final_inliers=98
+   [RT候選-best] joint_from_marker_w4 | marker=0.098px, max=0.163px | feature_seed_p90=0.756px, final_inliers=98
+   [RT候選-best] joint_from_marker_w1 | marker=0.152px, max=0.265px | feature_seed_p90=0.717px, final_inliers=98
+   [RT候選-best] joint_from_marker_w0.25 | marker=0.212px, max=0.353px | feature_seed_p90=0.703px, final_inliers=98
+   [RT候選-best] joint_from_feature_w12 | marker=0.084px, max=0.126px | feature_seed_p90=0.758px, final_inliers=98
+   [RT候選-best] joint_from_feature_w4 | marker=0.098px, max=0.163px | feature_seed_p90=0.756px, final_inliers=98
+   [RT候選-best] joint_from_feature_w1 | marker=0.152px, max=0.265px | feature_seed_p90=0.717px, final_inliers=98
+   [RT候選-best] joint_from_feature_w0.25 | marker=0.212px, max=0.353px | feature_seed_p90=0.703px, final_inliers=98
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.125px, R→L=0.061px, max=0.163px | feature inliers=98/141, median=0.216px, p90=0.756px | baseline=11.55mm
+   [RT候選-F43] marker_only | marker=0.201px, max=0.286px | feature_seed_p90=8.142px, final_inliers=11
+   [RT候選-F43] joint_from_marker_w12 | marker=0.624px, max=0.920px | feature_seed_p90=2.801px, final_inliers=20
+   [RT候選-F43] joint_from_marker_w4 | marker=0.855px, max=1.366px | feature_seed_p90=1.403px, final_inliers=25
+   [RT候選-F43] joint_from_marker_w1 | marker=1.020px, max=1.854px | feature_seed_p90=1.019px, final_inliers=26
+   [RT候選-F43] joint_from_marker_w0.25 | marker=1.205px, max=2.389px | feature_seed_p90=0.899px, final_inliers=27
+   [RT候選-F43] joint_from_feature_w12 | marker=0.624px, max=0.920px | feature_seed_p90=2.801px, final_inliers=20
+   [RT候選-F43] joint_from_feature_w4 | marker=0.855px, max=1.366px | feature_seed_p90=1.403px, final_inliers=25
+   [RT候選-F43] joint_from_feature_w1 | marker=1.020px, max=1.854px | feature_seed_p90=1.019px, final_inliers=26
+   [RT候選-F43] joint_from_feature_w0.25 | marker=1.205px, max=2.389px | feature_seed_p90=0.899px, final_inliers=27
+✅ [RT聯合精修-F43] role=joint_from_marker_w4 | marker L→R=0.652px, R→L=1.019px, max=1.366px | feature inliers=25/69, median=0.300px, p90=1.200px | baseline=66.34mm
+➕ [次佳配對] 額外右圖 (Frame A) 索引: 43 | 重投影誤差: 0.201 px | Baseline: 66.34 mm
+   [RT候選-F46] marker_only | marker=0.095px, max=0.136px | feature_seed_p90=38.928px, final_inliers=9
+   [RT候選-F46] joint_from_marker_w12 | marker=0.765px, max=1.471px | feature_seed_p90=4.071px, final_inliers=22
+   [RT候選-F46] joint_from_marker_w4 | marker=1.057px, max=1.829px | feature_seed_p90=1.623px, final_inliers=31
+   [RT候選-F46] joint_from_marker_w1 | marker=1.319px, max=2.237px | feature_seed_p90=0.904px, final_inliers=35
+   [RT候選-F46] joint_from_marker_w0.25 | marker=1.523px, max=3.028px | feature_seed_p90=0.731px, final_inliers=35
+   [RT候選-F46] joint_from_feature_w12 | marker=0.765px, max=1.471px | feature_seed_p90=4.071px, final_inliers=22
+   [RT候選-F46] joint_from_feature_w4 | marker=1.057px, max=1.829px | feature_seed_p90=1.623px, final_inliers=31
+   [RT候選-F46] joint_from_feature_w1 | marker=1.319px, max=2.237px | feature_seed_p90=0.904px, final_inliers=35
+   [RT候選-F46] joint_from_feature_w0.25 | marker=1.523px, max=3.028px | feature_seed_p90=0.731px, final_inliers=35
+✅ [RT聯合精修-F46] role=marker_only | marker L→R=0.133px, R→L=0.016px, max=0.136px | feature inliers=9/85, median=0.171px, p90=1.386px | baseline=30.71mm
+⚠️ [次佳配對] F46 未同時通過 marker 雙向投影與 Feature 內點驗證 (feature=0.171px)，已排除，不參與深度融合。
+   [RT候選-F49] marker_only | marker=0.182px, max=0.258px | feature_seed_p90=35.019px, final_inliers=6
+   [RT候選-F49] joint_from_marker_w12 | marker=0.825px, max=1.414px | feature_seed_p90=2.099px, final_inliers=25
+   [RT候選-F49] joint_from_marker_w4 | marker=0.904px, max=1.745px | feature_seed_p90=1.986px, final_inliers=28
+   [RT候選-F49] joint_from_marker_w1 | marker=1.162px, max=2.503px | feature_seed_p90=1.322px, final_inliers=30
+   [RT候選-F49] joint_from_marker_w0.25 | marker=1.597px, max=3.349px | feature_seed_p90=0.786px, final_inliers=32
+   [RT候選-F49] joint_from_feature_w12 | marker=0.825px, max=1.414px | feature_seed_p90=2.099px, final_inliers=25
+   [RT候選-F49] joint_from_feature_w4 | marker=0.904px, max=1.745px | feature_seed_p90=1.986px, final_inliers=28
+   [RT候選-F49] joint_from_feature_w1 | marker=1.162px, max=2.503px | feature_seed_p90=1.322px, final_inliers=30
+   [RT候選-F49] joint_from_feature_w0.25 | marker=1.597px, max=3.349px | feature_seed_p90=0.786px, final_inliers=32
+✅ [RT聯合精修-F49] role=marker_only | marker L→R=0.257px, R→L=0.021px, max=0.258px | feature inliers=6/83, median=0.339px, p90=0.519px | baseline=28.20mm
+⚠️ [次佳配對] F49 未同時通過 marker 雙向投影與 Feature 內點驗證 (feature=0.339px)，已排除，不參與深度融合。
+📍 [RT SIFT像素] 78/141 | role=final_rt
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 59
+  - 左圖 (Frame B) 索引: 69
+  - 計算 Baseline: 11.55 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.125px, R→L=0.061px, max=0.163px | Feature inliers=98/141, median=0.216px, p90=0.756px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260603_164824_rt_sift_diagnostics.txt
+⚠️ [參考平面] 三角化平面失敗，退回 PnP 平面
+✅[平面擬合成功] 使用 1 個標籤估計平面法線: [-0.27444178  0.1625568  -0.9477642 ]，中心: [ 38.031097  26.994518 162.26108 ]
+⏱️ [影片分析明細] 總耗時 20.67 s
+   - 影格載入(120 幀)                   797.8 ms (  3.9%)
+   - ArUco偵測+配對搜尋(含極線重排)         17852.0 ms ( 86.4%)
+   - 混合RT精修+次佳打包                   614.8 ms (  3.0%)
+   - 去畸變+全域平面擬合                     68.8 ms (  0.3%)
+   - SIFT特徵提取(最佳+次佳)              1334.5 ms (  6.5%)

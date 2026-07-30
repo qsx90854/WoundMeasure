@@ -1,0 +1,71 @@
+=== 影片分析與挑選最優對日誌 ===
+🎬 錄影就緒，準備載入: HBVCAM_4M2214HD-2-v11\video_20260729_111443.mp4
+✅ 已載入 HBVCAM 左右內參: D:\Lightglue\lg_env\calibration_result_HBVCAM_4M2214HD-2-v11.json
+ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。
+🎯 固定使用 F50：SBS=3840x1080，Left=1920x1080，Right=1920x1080
+🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修...
+🎬 載入固定影像對: HBVCAM_4M2214HD-2-v11\video_20260729_111443.mp4，影像數: 2 (選幀範圍模式: half_half)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [ArUco候選] A=F0 B=F1 baseline=58.24mm parallax=17.51deg depth_sigma=1.45mm score=0.783
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.263px feature_inlier_epi=3.055px E_epi=0.304px inliers=20/38 grid=0.12 parallax=21.364° score=0.784 combined=0.419
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.674px feature_inlier_epi=32.856px E_epi=0.304px inliers=20/38 grid=0.12 parallax=21.364° score=0.783 combined=0.888
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.581px feature_inlier_epi=36.715px E_epi=0.304px inliers=20/38 grid=0.12 parallax=21.364° score=1.344 combined=0.973
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.432px feature_inlier_epi=38.357px E_epi=0.304px inliers=20/38 grid=0.12 parallax=21.364° score=1.344 combined=0.973
+🎯 [pair quality] score=0.784 | reproj=0.255px | marker_bidir=0.263px | feature_inlier_epi=3.055px | E_epi=0.304px | baseline=58.42mm | shared=1 | marker_parallax=17.56deg | predicted_depth_sigma=1.45mm | feature_grid=0.12 | parallax=21.364°
+ℹ️ 快速橋接幀的特徵極線殘差為 0.304 px (前置門檻 0.8 px)，交由聯合精修與最終品質檢查。
+⚠️ 快速橋接幀未達前置門檻，仍保留當前最佳候選 (feat_epi 0.304 px, reproj 0.255 px)，後續由品質旗標決定是否可信。
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+⚠️ [RT精修-best] 特徵幾何不可靠 (內點或空間覆蓋不足)，僅執行 marker 雙向精修。
+   [RT候選-best] marker_only | marker=0.263px, max=0.329px | feature_seed_p90=4.127px, final_inliers=4, final_p90=1.052px, holdout_median=None
+✅ [RT聯合精修-best] role=marker_only | marker L→R=0.319px, R→L=0.192px, max=0.329px | feature inliers=4/38, median=0.680px, p90=1.052px | baseline=58.52mm
+📍 [RT SIFT像素] 20/38 | role=validation_only
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 58.52 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.319px, R→L=0.192px, max=0.329px | Feature inliers=4/38, median=0.680px, p90=1.052px
+🧾 [RT SIFT診斷] 已輸出: HBVCAM_4M2214HD-2-v11\video_20260729_111443_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.002 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 0.91 s
+   - 影片索引建立(2 幀)                    46.5 ms (  5.1%)
+   - ArUco偵測+配對搜尋(含極線重排)           738.3 ms ( 81.4%)
+   - 混合RT精修+次佳打包                    30.4 ms (  3.4%)
+   - 去畸變+全域平面擬合                     91.3 ms ( 10.1%)
+   - 深度匹配特徵延後計算                      0.1 ms (  0.0%)
+========== JSON 外參對答案（不參與解算）==========
+Rotation error: 1.1197 deg
+Translation L2 error: 4.3040 mm | direction error: 2.6115 deg
+Baseline: algorithm=58.5204 mm | JSON=61.8383 mm | delta=-3.3179 mm
+====================================================
+📊 [RT一致性] 標籤 2 | 三角化重投影 左 0.23px / 右 0.23px (量極線幾何) | 三角化邊長 8.25mm vs 已知 8.25mm (尺度偏差 +0.0%)
+
+
+=== RT SIFT recoverPose inlier pixel pairs ===
+role=validation_only, applied=False, inliers=20/38
+#001: left=(1333.648, 348.196), right=(1043.135, 351.475)
+#002: left=(1344.071, 389.106), right=(1041.123, 392.260)
+#003: left=(1362.836, 535.789), right=(1021.522, 539.097)
+#004: left=(1280.481, 330.388), right=(995.596, 333.947)
+#005: left=(1452.615, 489.845), right=(1123.619, 493.738)
+#006: left=(1301.995, 519.710), right=(963.971, 522.711)
+#007: left=(1319.933, 344.067), right=(1029.778, 347.649)
+#008: left=(1370.324, 535.378), right=(1029.623, 537.910)
+#009: left=(1379.631, 536.701), right=(1038.394, 539.954)
+#010: left=(1247.198, 484.636), right=(919.960, 487.635)
+#011: left=(1353.412, 355.317), right=(1061.064, 358.568)
+#012: left=(1236.272, 332.001), right=(950.384, 335.764)
+#013: left=(1438.086, 514.726), right=(1103.606, 517.249)
+#014: left=(1453.471, 474.207), right=(1127.098, 477.155)
+#015: left=(1293.443, 338.498), right=(1004.990, 342.218)
+#016: left=(1316.998, 520.501), right=(980.199, 523.244)
+#017: left=(1411.182, 399.056), right=(1109.397, 401.650)
+#018: left=(1330.067, 514.424), right=(990.804, 516.591)
+#019: left=(1412.484, 408.945), right=(1108.754, 412.937)
+#020: left=(1300.343, 248.605), right=(1066.714, 259.197)
+
+==================================================
+

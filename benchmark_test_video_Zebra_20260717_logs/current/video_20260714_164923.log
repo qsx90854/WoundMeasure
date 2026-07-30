@@ -1,0 +1,135 @@
+🎬 載入影片: D:\Lightglue\lg_env\test_video_Zebra\video_20260714_164923.mp4，總影格數: 235 (選幀範圍模式: half_half)
+🔄 開始第 1 階段抽樣評估 (抽樣張數: 各段最多 10 張)...
+📌 [第 1 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F90 B=F130 branch=(0, 0) marker_bidir=0.076px feature_inlier_epi=1.635px E_epi=0.271px inliers=35/56 grid=0.21 parallax=4.667° score=0.418 combined=0.287
+   [topK] A=F77 B=F130 branch=(0, 0) marker_bidir=0.212px feature_inlier_epi=3.927px E_epi=0.245px inliers=35/58 grid=0.29 parallax=17.157° score=0.515 combined=0.319
+   [topK] A=F90 B=F130 branch=(1, 1) marker_bidir=0.287px feature_inlier_epi=57.516px E_epi=0.271px inliers=35/56 grid=0.21 parallax=4.667° score=0.418 combined=0.538
+   [topK] A=F90 B=F130 branch=(1, 0) marker_bidir=0.188px feature_inlier_epi=33.151px E_epi=0.271px inliers=35/56 grid=0.21 parallax=4.667° score=0.485 combined=0.574
+   [topK] A=F90 B=F130 branch=(0, 1) marker_bidir=0.229px feature_inlier_epi=13.974px E_epi=0.271px inliers=35/56 grid=0.21 parallax=4.667° score=0.485 combined=0.597
+   [topK] A=F77 B=F130 branch=(1, 0) marker_bidir=0.352px feature_inlier_epi=42.602px E_epi=0.245px inliers=35/58 grid=0.29 parallax=17.157° score=0.565 combined=0.608
+   [topK] A=F77 B=F130 branch=(0, 1) marker_bidir=0.303px feature_inlier_epi=19.272px E_epi=0.245px inliers=35/58 grid=0.29 parallax=17.157° score=0.565 combined=0.666
+   [topK] A=F77 B=F130 branch=(1, 1) marker_bidir=0.413px feature_inlier_epi=82.102px E_epi=0.245px inliers=35/58 grid=0.29 parallax=17.157° score=0.515 combined=0.718
+   [topK] A=F90 B=F117 branch=(0, 0) marker_bidir=0.084px feature_inlier_epi=2.690px E_epi=0.307px inliers=49/74 grid=0.17 parallax=4.431° score=0.481 combined=0.309
+   [topK] A=F90 B=F117 branch=(1, 1) marker_bidir=0.318px feature_inlier_epi=41.557px E_epi=0.307px inliers=49/74 grid=0.17 parallax=4.431° score=0.481 combined=0.496
+   [topK] A=F90 B=F117 branch=(0, 1) marker_bidir=0.268px feature_inlier_epi=57.458px E_epi=0.307px inliers=49/74 grid=0.17 parallax=4.431° score=0.496 combined=0.612
+   [topK] A=F90 B=F117 branch=(1, 0) marker_bidir=0.192px feature_inlier_epi=58.368px E_epi=0.307px inliers=49/74 grid=0.17 parallax=4.431° score=0.496 combined=0.624
+   [topK] A=F51 B=F143 branch=(0, 1) marker_bidir=0.347px feature_inlier_epi=N/A E_epi=N/A inliers=0/0 grid=0.00 parallax=0.000° score=0.667 combined=1.633
+   [topK] A=F51 B=F143 branch=(1, 0) marker_bidir=0.405px feature_inlier_epi=N/A E_epi=N/A inliers=0/0 grid=0.00 parallax=0.000° score=0.667 combined=1.633
+   [topK] A=F51 B=F143 branch=(0, 0) marker_bidir=0.120px feature_inlier_epi=N/A E_epi=N/A inliers=0/0 grid=0.00 parallax=0.000° score=0.782 combined=1.656
+   [topK] A=F51 B=F143 branch=(1, 1) marker_bidir=0.520px feature_inlier_epi=N/A E_epi=N/A inliers=0/0 grid=0.00 parallax=0.000° score=0.783 combined=1.657
+🎯 [pair quality] score=0.418 | reproj=0.067px | marker_bidir=0.076px | feature_inlier_epi=1.635px | E_epi=0.271px | baseline=40.59mm | shared=1 | feature_grid=0.21 | parallax=4.667°
+ℹ️ 第 1 階段：最佳特徵極線殘差 0.271 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 2 階段抽樣評估 (抽樣張數: 各段最多 20 張)...
+📌 [第 2 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F109 B=F147 branch=(0, 0) marker_bidir=0.069px feature_inlier_epi=17.926px E_epi=0.162px inliers=29/55 grid=0.21 parallax=13.691° score=0.403 combined=0.330
+   [topK] A=F103 B=F147 branch=(0, 0) marker_bidir=0.102px feature_inlier_epi=14.574px E_epi=0.376px inliers=25/45 grid=0.25 parallax=11.659° score=0.438 combined=0.338
+   [topK] A=F109 B=F147 branch=(1, 0) marker_bidir=0.170px feature_inlier_epi=14.961px E_epi=0.162px inliers=29/55 grid=0.21 parallax=13.691° score=0.609 combined=0.589
+   [topK] A=F109 B=F147 branch=(1, 1) marker_bidir=0.349px feature_inlier_epi=53.324px E_epi=0.162px inliers=29/55 grid=0.21 parallax=13.691° score=0.403 combined=0.639
+   [topK] A=F103 B=F147 branch=(1, 1) marker_bidir=0.408px feature_inlier_epi=63.138px E_epi=0.376px inliers=25/45 grid=0.25 parallax=11.659° score=0.438 combined=0.641
+   [topK] A=F103 B=F147 branch=(1, 0) marker_bidir=0.271px feature_inlier_epi=15.179px E_epi=0.376px inliers=25/45 grid=0.25 parallax=11.659° score=0.625 combined=0.643
+   [topK] A=F109 B=F147 branch=(0, 1) marker_bidir=0.312px feature_inlier_epi=65.799px E_epi=0.162px inliers=29/55 grid=0.21 parallax=13.691° score=0.609 combined=0.749
+   [topK] A=F103 B=F147 branch=(0, 1) marker_bidir=0.321px feature_inlier_epi=86.027px E_epi=0.376px inliers=25/45 grid=0.25 parallax=11.659° score=0.625 combined=0.778
+   [topK] A=F116 B=F160 branch=(0, 0) marker_bidir=0.092px feature_inlier_epi=14.039px E_epi=0.457px inliers=23/59 grid=0.25 parallax=15.716° score=0.437 combined=0.362
+   [topK] A=F109 B=F153 branch=(1, 1) marker_bidir=0.317px feature_inlier_epi=58.610px E_epi=0.269px inliers=19/44 grid=0.25 parallax=2.446° score=0.427 combined=0.487
+   [topK] A=F109 B=F153 branch=(0, 0) marker_bidir=0.050px feature_inlier_epi=21.042px E_epi=0.269px inliers=19/44 grid=0.25 parallax=2.446° score=0.426 combined=0.517
+   [topK] A=F116 B=F160 branch=(1, 0) marker_bidir=0.273px feature_inlier_epi=41.484px E_epi=0.457px inliers=23/59 grid=0.25 parallax=15.716° score=0.678 combined=0.656
+   [topK] A=F109 B=F153 branch=(0, 1) marker_bidir=0.276px feature_inlier_epi=91.544px E_epi=0.269px inliers=19/44 grid=0.25 parallax=2.446° score=0.620 combined=0.671
+   [topK] A=F116 B=F160 branch=(1, 1) marker_bidir=0.427px feature_inlier_epi=78.745px E_epi=0.457px inliers=23/59 grid=0.25 parallax=15.716° score=0.437 combined=0.731
+   [topK] A=F109 B=F153 branch=(1, 0) marker_bidir=0.164px feature_inlier_epi=23.304px E_epi=0.269px inliers=19/44 grid=0.25 parallax=2.446° score=0.620 combined=0.736
+   [topK] A=F116 B=F160 branch=(0, 1) marker_bidir=0.341px feature_inlier_epi=126.254px E_epi=0.457px inliers=23/59 grid=0.25 parallax=15.716° score=0.677 combined=0.804
+🎯 [pair quality] score=0.403 | reproj=0.069px | marker_bidir=0.069px | feature_inlier_epi=17.926px | E_epi=0.162px | baseline=45.47mm | shared=1 | feature_grid=0.21 | parallax=13.691°
+ℹ️ 第 2 階段：最佳特徵極線殘差 0.162 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 3 階段抽樣評估 (抽樣張數: 各段最多 30 張)...
+📌 [第 3 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F76 B=F121 branch=(0, 0) marker_bidir=0.046px feature_inlier_epi=2.445px E_epi=0.255px inliers=32/57 grid=0.21 parallax=10.190° score=0.422 combined=0.216
+   [topK] A=F76 B=F121 branch=(1, 1) marker_bidir=0.333px feature_inlier_epi=62.365px E_epi=0.255px inliers=32/57 grid=0.21 parallax=10.190° score=0.422 combined=0.621
+   [topK] A=F76 B=F121 branch=(0, 1) marker_bidir=0.248px feature_inlier_epi=69.890px E_epi=0.255px inliers=32/57 grid=0.21 parallax=10.190° score=0.520 combined=0.632
+   [topK] A=F76 B=F121 branch=(1, 0) marker_bidir=0.226px feature_inlier_epi=57.055px E_epi=0.255px inliers=32/57 grid=0.21 parallax=10.190° score=0.520 combined=0.642
+   [topK] A=F72 B=F121 branch=(0, 0) marker_bidir=0.053px feature_inlier_epi=1.750px E_epi=0.268px inliers=31/54 grid=0.17 parallax=15.654° score=0.443 combined=0.261
+   [topK] A=F112 B=F149 branch=(0, 0) marker_bidir=0.088px feature_inlier_epi=4.234px E_epi=0.228px inliers=26/50 grid=0.17 parallax=9.992° score=0.430 combined=0.275
+   [topK] A=F112 B=F153 branch=(1, 1) marker_bidir=0.310px feature_inlier_epi=60.653px E_epi=0.205px inliers=20/41 grid=0.12 parallax=6.927° score=0.428 combined=0.511
+   [topK] A=F112 B=F153 branch=(0, 0) marker_bidir=0.068px feature_inlier_epi=10.469px E_epi=0.205px inliers=20/41 grid=0.12 parallax=6.927° score=0.428 combined=0.567
+   [topK] A=F112 B=F149 branch=(1, 1) marker_bidir=0.267px feature_inlier_epi=73.656px E_epi=0.228px inliers=26/50 grid=0.17 parallax=9.992° score=0.430 combined=0.623
+   [topK] A=F112 B=F153 branch=(0, 1) marker_bidir=0.279px feature_inlier_epi=73.705px E_epi=0.205px inliers=20/41 grid=0.12 parallax=6.927° score=0.622 combined=0.636
+   [topK] A=F112 B=F149 branch=(1, 0) marker_bidir=0.160px feature_inlier_epi=22.081px E_epi=0.228px inliers=26/50 grid=0.17 parallax=9.992° score=0.633 combined=0.660
+   [topK] A=F72 B=F121 branch=(0, 1) marker_bidir=0.250px feature_inlier_epi=78.881px E_epi=0.268px inliers=31/54 grid=0.17 parallax=15.654° score=0.506 combined=0.662
+   [topK] A=F72 B=F121 branch=(1, 0) marker_bidir=0.185px feature_inlier_epi=57.158px E_epi=0.268px inliers=31/54 grid=0.17 parallax=15.654° score=0.506 combined=0.714
+   [topK] A=F72 B=F121 branch=(1, 1) marker_bidir=0.306px feature_inlier_epi=84.628px E_epi=0.268px inliers=31/54 grid=0.17 parallax=15.654° score=0.444 combined=0.759
+   [topK] A=F112 B=F149 branch=(0, 1) marker_bidir=0.232px feature_inlier_epi=62.359px E_epi=0.228px inliers=26/50 grid=0.17 parallax=9.992° score=0.634 combined=0.788
+   [topK] A=F112 B=F153 branch=(1, 0) marker_bidir=0.150px feature_inlier_epi=16.693px E_epi=0.205px inliers=20/41 grid=0.12 parallax=6.927° score=0.622 combined=0.802
+🎯 [pair quality] score=0.422 | reproj=0.042px | marker_bidir=0.046px | feature_inlier_epi=2.445px | E_epi=0.255px | baseline=43.25mm | shared=1 | feature_grid=0.21 | parallax=10.190°
+ℹ️ 第 3 階段：最佳特徵極線殘差 0.255 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 4 階段抽樣評估 (抽樣張數: 各段最多 40 張)...
+📌 [第 4 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F110 B=F147 branch=(0, 0) marker_bidir=0.062px feature_inlier_epi=17.622px E_epi=0.239px inliers=31/53 grid=0.25 parallax=12.239° score=0.397 combined=0.289
+   [topK] A=F98 B=F132 branch=(0, 0) marker_bidir=0.038px feature_inlier_epi=9.474px E_epi=0.228px inliers=38/62 grid=0.21 parallax=13.704° score=0.412 combined=0.354
+   [topK] A=F110 B=F147 branch=(1, 1) marker_bidir=0.359px feature_inlier_epi=53.548px E_epi=0.239px inliers=31/53 grid=0.25 parallax=12.239° score=0.397 combined=0.610
+   [topK] A=F98 B=F132 branch=(1, 1) marker_bidir=0.269px feature_inlier_epi=25.640px E_epi=0.228px inliers=38/62 grid=0.21 parallax=13.704° score=0.412 combined=0.614
+   [topK] A=F110 B=F147 branch=(1, 0) marker_bidir=0.190px feature_inlier_epi=17.754px E_epi=0.239px inliers=31/53 grid=0.25 parallax=12.239° score=0.602 combined=0.617
+   [topK] A=F98 B=F132 branch=(1, 0) marker_bidir=0.165px feature_inlier_epi=28.582px E_epi=0.228px inliers=38/62 grid=0.21 parallax=13.704° score=0.493 combined=0.624
+   [topK] A=F98 B=F132 branch=(0, 1) marker_bidir=0.216px feature_inlier_epi=19.318px E_epi=0.228px inliers=38/62 grid=0.21 parallax=13.704° score=0.493 combined=0.699
+   [topK] A=F110 B=F147 branch=(0, 1) marker_bidir=0.311px feature_inlier_epi=70.820px E_epi=0.239px inliers=31/53 grid=0.25 parallax=12.239° score=0.602 combined=0.744
+   [topK] A=F89 B=F132 branch=(0, 0) marker_bidir=0.026px feature_inlier_epi=3.056px E_epi=0.225px inliers=31/49 grid=0.17 parallax=25.743° score=0.376 combined=0.439
+   [topK] A=F110 B=F156 branch=(1, 1) marker_bidir=0.378px feature_inlier_epi=72.984px E_epi=0.306px inliers=20/43 grid=0.25 parallax=4.185° score=0.396 combined=0.462
+   [topK] A=F110 B=F156 branch=(0, 0) marker_bidir=0.075px feature_inlier_epi=29.314px E_epi=0.306px inliers=20/43 grid=0.25 parallax=4.185° score=0.396 combined=0.523
+   [topK] A=F110 B=F156 branch=(0, 1) marker_bidir=0.332px feature_inlier_epi=78.799px E_epi=0.306px inliers=20/43 grid=0.25 parallax=4.185° score=0.617 combined=0.676
+   [topK] A=F89 B=F132 branch=(1, 0) marker_bidir=0.179px feature_inlier_epi=31.645px E_epi=0.225px inliers=31/49 grid=0.17 parallax=25.743° score=0.440 combined=0.677
+   [topK] A=F89 B=F132 branch=(1, 1) marker_bidir=0.278px feature_inlier_epi=48.531px E_epi=0.225px inliers=31/49 grid=0.17 parallax=25.743° score=0.376 combined=0.754
+   [topK] A=F110 B=F156 branch=(1, 0) marker_bidir=0.194px feature_inlier_epi=9.426px E_epi=0.306px inliers=20/43 grid=0.25 parallax=4.185° score=0.616 combined=0.755
+   [topK] A=F89 B=F132 branch=(0, 1) marker_bidir=0.214px feature_inlier_epi=19.906px E_epi=0.225px inliers=31/49 grid=0.17 parallax=25.743° score=0.440 combined=0.764
+🎯 [pair quality] score=0.397 | reproj=0.061px | marker_bidir=0.062px | feature_inlier_epi=17.622px | E_epi=0.239px | baseline=44.02mm | shared=1 | feature_grid=0.25 | parallax=12.239°
+ℹ️ 第 4 階段：最佳特徵極線殘差 0.239 px (門檻 0.8 px)，擴大抽樣
+🔄 開始第 5 階段抽樣評估 (抽樣張數: 各段最多 50 張)...
+📌 [第 5 階段] 選定共享參考標籤 ID: 2 作為世界坐標系原點
+ℹ️ [單標籤模式] RT 以 ref 標籤 IPPE 雙分支 + 特徵極線消歧解算
+   [topK] A=F89 B=F131 branch=(0, 0) marker_bidir=0.040px feature_inlier_epi=2.295px E_epi=0.279px inliers=28/47 grid=0.21 parallax=20.392° score=0.387 combined=0.331
+   [topK] A=F75 B=F126 branch=(0, 0) marker_bidir=0.076px feature_inlier_epi=9.390px E_epi=0.282px inliers=30/53 grid=0.21 parallax=15.663° score=0.445 combined=0.355
+   [topK] A=F78 B=F131 branch=(0, 0) marker_bidir=0.106px feature_inlier_epi=3.643px E_epi=0.327px inliers=30/53 grid=0.25 parallax=25.222° score=0.431 combined=0.448
+   [topK] A=F89 B=F131 branch=(1, 0) marker_bidir=0.182px feature_inlier_epi=35.214px E_epi=0.279px inliers=28/47 grid=0.21 parallax=20.392° score=0.460 combined=0.647
+   [topK] A=F78 B=F131 branch=(1, 0) marker_bidir=0.219px feature_inlier_epi=34.205px E_epi=0.327px inliers=30/53 grid=0.25 parallax=25.222° score=0.474 combined=0.670
+   [topK] A=F75 B=F126 branch=(1, 0) marker_bidir=0.239px feature_inlier_epi=55.738px E_epi=0.282px inliers=30/53 grid=0.21 parallax=15.663° score=0.538 combined=0.671
+   [topK] A=F75 B=F126 branch=(0, 1) marker_bidir=0.141px feature_inlier_epi=59.576px E_epi=0.282px inliers=30/53 grid=0.21 parallax=15.663° score=0.538 combined=0.693
+   [topK] A=F75 B=F126 branch=(1, 1) marker_bidir=0.267px feature_inlier_epi=60.558px E_epi=0.282px inliers=30/53 grid=0.21 parallax=15.663° score=0.445 combined=0.718
+   [topK] A=F78 B=F131 branch=(1, 1) marker_bidir=0.327px feature_inlier_epi=82.446px E_epi=0.327px inliers=30/53 grid=0.25 parallax=25.222° score=0.431 combined=0.738
+   [topK] A=F89 B=F131 branch=(1, 1) marker_bidir=0.303px feature_inlier_epi=57.741px E_epi=0.279px inliers=28/47 grid=0.21 parallax=20.392° score=0.387 combined=0.742
+   [topK] A=F78 B=F131 branch=(0, 1) marker_bidir=0.265px feature_inlier_epi=19.819px E_epi=0.327px inliers=30/53 grid=0.25 parallax=25.222° score=0.474 combined=0.745
+   [topK] A=F89 B=F131 branch=(0, 1) marker_bidir=0.246px feature_inlier_epi=18.620px E_epi=0.279px inliers=28/47 grid=0.21 parallax=20.392° score=0.460 combined=0.753
+   [topK] A=F89 B=F121 branch=(0, 0) marker_bidir=0.050px feature_inlier_epi=6.202px E_epi=0.276px inliers=24/70 grid=0.12 parallax=0.511° score=0.425 combined=0.472
+   [topK] A=F89 B=F121 branch=(1, 1) marker_bidir=0.306px feature_inlier_epi=34.576px E_epi=0.276px inliers=24/70 grid=0.12 parallax=0.511° score=0.425 combined=0.478
+   [topK] A=F89 B=F121 branch=(0, 1) marker_bidir=0.249px feature_inlier_epi=15.273px E_epi=0.276px inliers=24/70 grid=0.12 parallax=0.511° score=0.470 combined=0.623
+   [topK] A=F89 B=F121 branch=(1, 0) marker_bidir=0.184px feature_inlier_epi=30.505px E_epi=0.276px inliers=24/70 grid=0.12 parallax=0.511° score=0.470 combined=0.638
+🎯 [pair quality] score=0.387 | reproj=0.040px | marker_bidir=0.040px | feature_inlier_epi=2.295px | E_epi=0.279px | baseline=41.55mm | shared=1 | feature_grid=0.21 | parallax=20.392°
+ℹ️ 第 5 階段：最佳特徵極線殘差 0.279 px (門檻 0.8 px)，擴大抽樣
+⚠️ 達到最大抽樣張數 (50 張) 仍未達特徵極線門檻 0.8 px。降級使用殘差最小候選 (feat_epi 0.279 px, reproj 0.040 px)——量測品質可能不佳
+ℹ️ [單標籤模式] 依特徵消歧採用 IPPE 分支組合 (s=0, e=0)
+   [RT候選-best] marker_only | marker=0.040px, max=0.045px | feature_seed_p90=3.807px, final_inliers=10
+   [RT候選-best] joint_from_marker_w12 | marker=0.254px, max=0.342px | feature_seed_p90=1.519px, final_inliers=25
+   [RT候選-best] joint_from_marker_w4 | marker=0.308px, max=0.440px | feature_seed_p90=1.418px, final_inliers=25
+   [RT候選-best] joint_from_marker_w1 | marker=0.413px, max=0.612px | feature_seed_p90=1.208px, final_inliers=27
+✅ [RT聯合精修-best] role=joint_from_marker_w4 | marker L→R=0.350px, R→L=0.258px, max=0.440px | feature inliers=25/47, median=0.386px, p90=1.098px | baseline=47.74mm
+   [RT候選-F78] marker_only | marker=0.106px, max=0.149px | feature_seed_p90=9.601px, final_inliers=3
+   [RT候選-F78] joint_from_marker_w12 | marker=0.377px, max=0.517px | feature_seed_p90=2.721px, final_inliers=21
+   [RT候選-F78] joint_from_marker_w4 | marker=0.450px, max=0.748px | feature_seed_p90=2.559px, final_inliers=22
+   [RT候選-F78] joint_from_marker_w1 | marker=0.791px, max=1.384px | feature_seed_p90=2.166px, final_inliers=24
+✅ [RT聯合精修-F78] role=marker_only | marker L→R=0.143px, R→L=0.046px, max=0.149px | feature inliers=3/53, median=0.737px, p90=0.860px | baseline=44.16mm
+⚠️ [次佳配對] F78 未同時通過 marker 雙向投影與 Feature 內點驗證 (feature=0.737px)，已排除，不參與深度融合。
+📍 [RT SIFT像素] 28/47 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 8.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 89
+  - 左圖 (Frame B) 索引: 131
+  - 計算 Baseline: 47.74 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.350px, R→L=0.258px, max=0.440px | Feature inliers=25/47, median=0.386px, p90=1.098px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\test_video_Zebra\video_20260714_164923_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.017 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [影片分析明細] 總耗時 14.92 s
+   - 影片索引建立(235 幀)                   5.3 ms (  0.0%)
+   - ArUco偵測+配對搜尋(含極線重排)         14806.3 ms ( 99.2%)
+   - 混合RT精修+次佳打包                    77.5 ms (  0.5%)
+   - 去畸變+全域平面擬合                     29.7 ms (  0.2%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)

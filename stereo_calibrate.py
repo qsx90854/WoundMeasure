@@ -11,9 +11,9 @@ BOARD_SIZE = (10, 16)
 # 棋盤格每個方格的真實邊長 (mm)
 SQUARE_SIZE_MM = 15.0
 # 存放棋盤格圖片的資料夾路徑
-IMAGE_DIR = "cali_image_20260519"
+IMAGE_DIR = "HBVCAM_4M2214HD-2-v11"
 # 輸出 JSON 檔名
-OUTPUT_JSON = "calibration_result_c2.json"
+OUTPUT_JSON = "calibration_result_HBVCAM_4M2214HD-2-v11.json"
 # =====================================================
 
 def calibrate():

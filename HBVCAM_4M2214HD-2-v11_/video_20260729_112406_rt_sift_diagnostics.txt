@@ -1,0 +1,192 @@
+=== RT SIFT DIAGNOSTICS ===
+This report describes the selected best frame pair only.
+Coordinates are undistorted display pixels: frame_B/UI-left -> frame_A/UI-right.
+
+[SELECTED_PAIR]
+video=D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\video_20260729_112406.mp4
+frame_left_B=1
+frame_right_A=0
+shared_markers=1
+baseline_mm=60.035364
+rt_sift_role=validation_only
+rt_sift_applied=False
+rt_reliable=False
+
+[PIPELINE_COUNTS]
+left_keypoint_count=423
+right_keypoint_count=364
+left_descriptor_count=423
+right_descriptor_count=364
+knn_pair_count=423
+ratio_pass_count=44
+mutual_pass_count=34
+spatially_balanced_count=34
+essential_ransac_inlier_count=16
+recoverpose_inlier_count=16
+final_rt_sift_point_count=0
+final_rt_feature_inlier_count=10
+final_rt_feature_outlier_count=24
+
+[FEATURE_QUALITY]
+match_count=34
+essential_inlier_count=16
+inlier_count=16
+inlier_ratio=0.47058823529411764
+grid_coverage=0.125
+hull_coverage=0.04023591515536585
+parallax_deg=11.241542931812585
+homography_ratio=0.3235294117647059
+planar_degenerate=False
+model_epi_px=0.11495990902026947
+quality_penalty=0.125
+quality_ok=False
+strong=False
+marker_rt_feature_epi_px=1.193002503700826
+final_feature_epi_px=0.720487765618513
+final_feature_inlier_p90_px=1.235859266070302
+final_feature_all_p90_px=148.1246911576342
+final_feature_holdout_median_px=None
+marker_bidir_rms_px=0.06913741633234032
+marker_left_to_right_rms_px=0.0940935559985034
+marker_right_to_left_rms_px=0.026577573135619807
+marker_bidir_max_px=0.09569224520565593
+marker_pnp_self_reproj_px=0.060361575335264206
+joint_solution_role=marker_only
+feature_rot_agreement_deg=8.141026007507591
+pair_score=0.5081118763912486
+combined_score=0.31825751228102167
+sharpness_min=114.4512702488238
+marker_coverage=0.0006682579940595278
+
+[ACTIVE_THRESHOLDS]
+sift_max_keypoints=800
+sift_contrast_threshold=0.01
+match_ratio=0.75
+ransac_threshold_px=0.75
+min_matches=11
+min_inlier_ratio=0.28
+min_grid_coverage=0.16666666666666666
+min_hull_coverage=0.02
+min_parallax_deg=1.0
+strong_inliers=40
+strong_grid_coverage=0.25
+
+final_feature_inlier_px=1.5
+final_feature_p90_max_px=1.25
+marker_bidir_rms_max_px=1.5
+marker_bidir_point_max_px=2.0
+
+[FINAL_RT_LEFT_TO_RIGHT]
+R0=0.999904315352 0.00201006793995 -0.0136864811525
+R1=-0.00192217497135 0.999977466985 0.00643201107504
+R2=0.013699101534 -0.00640508781881 0.999885648195
+t_mm=-60.0285065575 -0.521933973136 -0.742212294855
+
+[GRID_COUNTS_6x4]
+raw_keypoints_left
+    18  148  205    0    0    0
+     9   19   24    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+raw_keypoints_right
+    16  226   75    0    0    0
+    18   27    2    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+balanced_candidates_left
+     1    1    1    0    1    1
+     0    0    0    7   16    1
+     1    1    0    0    2    1
+     0    0    0    0    0    0
+balanced_candidates_right
+     0    3    0    1    2    1
+     0    0    7   17    0    0
+     0    1    0    2    0    0
+     0    0    0    0    0    0
+essential_inliers_left
+     0    0    1    0    0    0
+     0    0    0    7    8    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+essential_inliers_right
+     0    1    0    0    0    0
+     0    0    5   10    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_left
+     0    0    1    0    0    0
+     0    0    0    7    8    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+recoverpose_inliers_right
+     0    1    0    0    0    0
+     0    0    5   10    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+joint_optimization_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+joint_optimization_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_left
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+holdout_right
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_left
+     0    0    0    0    0    0
+     0    0    0    6    4    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+final_rt_inliers_right
+     0    0    0    0    0    0
+     0    0    5    5    0    0
+     0    0    0    0    0    0
+     0    0    0    0    0    0
+
+[MATCH_TABLE]
+index,left_x,left_y,right_x,right_y,essential_inlier,recoverpose_inlier,optimization_used,holdout,final_rt_inlier,final_epipolar_px
+1,90.416428,77.531715,1034.523926,273.148834,0,0,0,0,0,179.991743
+2,701.774292,101.743294,498.726044,41.413490,1,1,0,0,0,62.770478
+3,1648.212402,393.503174,1121.329956,267.769562,0,0,0,0,0,126.043819
+4,1498.248047,606.687866,991.804688,628.152527,0,0,0,0,0,20.293133
+5,1463.653198,610.031677,1213.348633,604.202698,0,0,0,0,0,8.639128
+6,1313.835327,309.552521,1026.953979,313.146912,1,1,0,0,1,0.759376
+7,1237.704834,344.632812,932.634705,348.539551,1,1,0,0,1,1.191248
+8,1271.230225,343.236694,973.298584,347.545319,1,1,0,0,0,1.554248
+9,1458.044678,459.983612,1130.418091,462.503845,1,1,0,0,1,0.298663
+10,1371.236206,479.240173,1031.362305,475.026123,0,0,0,0,0,6.590135
+11,1476.268799,451.211334,1153.493042,453.626953,1,1,0,0,1,0.198827
+12,1485.581299,367.916107,1187.386230,372.231537,1,1,0,0,0,1.791526
+13,1291.836548,488.313812,922.441162,472.202240,0,0,0,0,0,18.499171
+14,154.196396,700.044678,1562.209961,115.709457,0,0,0,0,0,604.663956
+15,1461.172974,347.146423,1164.746582,350.400818,0,0,0,0,0,0.643653
+16,1705.987183,576.315247,1120.013794,484.492889,0,0,0,0,0,91.373375
+17,1460.232666,328.828003,1169.008057,334.942871,1,1,0,0,0,3.413928
+18,1230.088867,375.729675,924.165161,378.186890,1,1,0,0,1,0.311165
+19,1789.667603,181.361649,500.246582,45.919243,0,0,0,0,0,127.138005
+20,1500.333618,356.738220,907.263794,427.628784,0,0,0,0,0,71.059675
+21,1485.581299,367.916107,1187.386230,372.231537,1,1,0,0,0,1.791526
+22,1483.099243,440.483063,1161.811523,443.384033,1,1,0,0,1,0.681599
+23,1477.422974,221.436646,1857.267090,76.176971,0,0,0,0,0,157.118985
+24,535.755432,704.023682,582.391785,673.141418,0,0,0,0,0,41.005435
+25,1392.208374,289.721710,1355.510986,102.348236,0,0,0,0,0,193.490486
+26,1420.946777,332.188690,1126.035522,335.850067,0,0,0,0,0,0.978653
+27,1359.604126,516.059387,971.130310,508.466400,0,0,0,0,0,9.728850
+28,1488.068359,411.081848,1073.223633,443.374451,0,0,0,0,0,30.858893
+29,431.928772,121.175011,512.498413,114.416527,0,0,0,0,0,12.312137
+30,1400.594116,412.536224,1088.122559,416.972260,1,1,0,0,0,1.960612
+31,1238.666504,405.310913,925.555054,408.884644,1,1,0,0,1,0.815609
+32,1208.920410,374.223358,902.513184,378.234711,1,1,0,0,1,1.220767
+33,1269.894287,352.868805,967.430054,356.097717,1,1,0,0,1,0.508280
+34,1269.240234,451.971436,941.838806,456.039490,1,1,0,0,1,1.371691
