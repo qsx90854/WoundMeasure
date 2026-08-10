@@ -7,11 +7,16 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aruco_pose import average_rotations_svd, compute_global_plane as _compute_global_plane
-from .camera_preprocess import centered_roi_bounds, preprocess_gray
+from .camera_preprocess import (
+    centered_roi_bounds,
+    normalized_roi_bounds,
+    preprocess_gray,
+)
 from .perf_timer import StageTimer
 
 RECORD_SAVE_DIR = "test_video_Zebra"
 SAVE_DEBUG_PAIR_IMAGES = False
+SAVE_RT_SIFT_DIAGNOSTICS = True
 MIN_BASELINE_MM = 20.0
 PAIR_CANDIDATE_MIN_BASELINE_MM = MIN_BASELINE_MM + 2.0
 MAX_BASELINE_MM = 220.0
@@ -214,6 +219,7 @@ def analyze_video_frames(
     progress_callback=None,
     frames_override=None,
     detection_roi_ratio=None,
+    marker_corners_override=None,
 ):
     timer = StageTimer("影片分析明細")
     if progress_callback:
@@ -256,22 +262,6 @@ def analyze_video_frames(
         return None
     timer.stage(f"影片索引建立({len(frames)} 幀)")
 
-    detection_roi_bounds = None
-    if detection_roi_ratio is not None:
-        if len(detection_roi_ratio) != 2:
-            raise ValueError("detection_roi_ratio must contain width and height ratios")
-        detection_roi_bounds = centered_roi_bounds(
-            frame_width,
-            frame_height,
-            detection_roi_ratio[0],
-            detection_roi_ratio[1],
-        )
-        roi_x0, roi_y0, roi_x1, roi_y1 = detection_roi_bounds
-        log_and_print(
-            "🎯 [RT ROI] ArUco pattern 與 SIFT 僅使用中央區域: "
-            f"x={roi_x0}:{roi_x1}, y={roi_y0}:{roi_y1} "
-            f"({roi_x1 - roi_x0}x{roi_y1 - roi_y0})")
-        
     mid_idx = len(frames) // 2
     if range_mode == "half_half":
         start_range = range(0, mid_idx)
@@ -281,6 +271,62 @@ def analyze_video_frames(
         M = min(end_n, len(frames))
         start_range = range(N)
         end_range = range(len(frames) - M, len(frames))
+
+    def roi_bounds_from_ratio(roi_ratio):
+        if roi_ratio is None:
+            return None
+        if len(roi_ratio) == 2:
+            return centered_roi_bounds(
+                frame_width,
+                frame_height,
+                roi_ratio[0],
+                roi_ratio[1],
+            )
+        if len(roi_ratio) == 4:
+            return normalized_roi_bounds(
+                frame_width,
+                frame_height,
+                roi_ratio[0],
+                roi_ratio[1],
+                roi_ratio[2],
+                roi_ratio[3],
+            )
+        raise ValueError(
+            "Each detection ROI must contain either width/height or "
+            "x/y/width/height ratios")
+
+    if isinstance(detection_roi_ratio, dict):
+        start_roi_ratio = detection_roi_ratio.get("frame_A")
+        end_roi_ratio = detection_roi_ratio.get("frame_B")
+        if start_roi_ratio is None or end_roi_ratio is None:
+            raise ValueError(
+                "Independent detection ROIs require frame_A and frame_B")
+    else:
+        start_roi_ratio = detection_roi_ratio
+        end_roi_ratio = detection_roi_ratio
+
+    detection_roi_bounds_start = roi_bounds_from_ratio(start_roi_ratio)
+    detection_roi_bounds_end = roi_bounds_from_ratio(end_roi_ratio)
+
+    def roi_bounds_for_frame(frame_index):
+        if frame_index in end_range:
+            return detection_roi_bounds_end
+        return detection_roi_bounds_start
+
+    def log_roi_bounds(label, bounds):
+        if bounds is None:
+            return
+        roi_x0, roi_y0, roi_x1, roi_y1 = bounds
+        log_and_print(
+            f"🎯 [RT ROI-{label}] ArUco pattern 與 SIFT 僅使用: "
+            f"x={roi_x0}:{roi_x1}, y={roi_y0}:{roi_y1} "
+            f"({roi_x1 - roi_x0}x{roi_y1 - roi_y0})")
+
+    if detection_roi_bounds_start == detection_roi_bounds_end:
+        log_roi_bounds("共用", detection_roi_bounds_start)
+    else:
+        log_roi_bounds("Frame A/右圖", detection_roi_bounds_start)
+        log_roi_bounds("Frame B/左圖", detection_roi_bounds_end)
     
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
     if hasattr(cv2.aruco, 'ArucoDetector'):
@@ -300,7 +346,7 @@ def analyze_video_frames(
             gray = clahe.apply(gray)
         return gray
 
-    def detect_markers_in_gray(gray):
+    def detect_markers_in_gray(gray, detection_roi_bounds=None):
         detect_gray = gray
         offset_x = 0
         offset_y = 0
@@ -324,8 +370,19 @@ def analyze_video_frames(
             return dict(zip(ids_list, raw_corners))
         return {}
 
-    def detect_frame_markers(frame):
-        return detect_markers_in_gray(prepare_marker_gray(frame))
+    def detect_frame_markers(frame_index):
+        if marker_corners_override is not None:
+            if frame_index < 0 or frame_index >= len(marker_corners_override):
+                return {}
+            override = marker_corners_override[frame_index] or {}
+            return {
+                int(marker_id): np.asarray(points, dtype=np.float32).reshape(4, 2).copy()
+                for marker_id, points in override.items()
+            }
+        return detect_markers_in_gray(
+            prepare_marker_gray(frames[frame_index]),
+            roi_bounds_for_frame(frame_index),
+        )
 
     # 定義輔助工具
     def undistort_corners_dict(corners_dict):
@@ -344,7 +401,7 @@ def analyze_video_frames(
         missing = [idx for idx in idxs if idx not in detected_cache]
         if missing:
             def detect_index(index):
-                return detect_markers_in_gray(prepare_marker_gray(frames[index]))
+                return detect_frame_markers(index)
 
             with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
                 detected_cache.update(zip(
@@ -499,12 +556,13 @@ def analyze_video_frames(
             if scale != 1.0:
                 gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             if idx not in detected_cache:
-                detected_cache[idx] = detect_frame_markers(frames[idx])
-            if detection_roi_bounds is None:
+                detected_cache[idx] = detect_frame_markers(idx)
+            frame_roi_bounds = roi_bounds_for_frame(idx)
+            if frame_roi_bounds is None:
                 feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
             else:
                 feature_mask = np.zeros(gray.shape, dtype=np.uint8)
-                roi_x0, roi_y0, roi_x1, roi_y1 = detection_roi_bounds
+                roi_x0, roi_y0, roi_x1, roi_y1 = frame_roi_bounds
                 scaled_x0 = max(0, min(gray.shape[1], int(round(roi_x0 * scale))))
                 scaled_y0 = max(0, min(gray.shape[0], int(round(roi_y0 * scale))))
                 scaled_x1 = max(0, min(gray.shape[1], int(round(roi_x1 * scale))))
@@ -2095,8 +2153,13 @@ def analyze_video_frames(
 
     # This file is intentionally separate from the general analysis log so it can be
     # attached as a compact, self-contained report when feature RT behaves unexpectedly.
-    rt_sift_diagnostics_path = os.path.splitext(video_path)[0] + "_rt_sift_diagnostics.txt"
+    rt_sift_diagnostics_path = (
+        os.path.splitext(video_path)[0] + "_rt_sift_diagnostics.txt"
+        if SAVE_RT_SIFT_DIAGNOSTICS else None
+    )
     try:
+        if rt_sift_diagnostics_path is None:
+            raise RuntimeError("RT SIFT diagnostics disabled")
         kp_diag_left, _des_diag_left = get_frame_features(best_end['idx'])
         kp_diag_right, _des_diag_right = get_frame_features(best_start['idx'])
         raw_keypoints_left = np.asarray([kp.pt for kp in kp_diag_left], dtype=np.float64).reshape(-1, 2)
@@ -2257,7 +2320,8 @@ def analyze_video_frames(
                     f"{final_feature_residuals[match_idx]:.6f}\n")
         log_and_print(f"🧾 [RT SIFT診斷] 已輸出: {rt_sift_diagnostics_path}")
     except Exception as diag_error:
-        log_and_print(f"⚠️ [RT SIFT診斷] 輸出失敗: {diag_error}")
+        if rt_sift_diagnostics_path is not None:
+            log_and_print(f"⚠️ [RT SIFT診斷] 輸出失敗: {diag_error}")
         rt_sift_diagnostics_path = None
         
     if progress_callback:
@@ -2337,7 +2401,11 @@ def analyze_video_frames(
         'rt_sift_applied': bool(best_feature_rt_applied),
         'rt_sift_role': rt_sift_role,
         'rt_sift_diagnostics_path': rt_sift_diagnostics_path,
-        'detection_roi_bounds': detection_roi_bounds,
+        'detection_roi_bounds': detection_roi_bounds_start,
+        'detection_roi_bounds_by_role': {
+            'frame_A': detection_roi_bounds_start,
+            'frame_B': detection_roi_bounds_end,
+        },
         'global_plane_n': global_plane_n,
         'global_plane_c': global_plane_c,
         'best_kpB': kb,

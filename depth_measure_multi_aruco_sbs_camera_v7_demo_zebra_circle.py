@@ -82,7 +82,7 @@ FUSE_DEPTH_TOL_ABS_MM = 5.0                        # 融合一致性閘門: 絕�
 CAMERA_WIDTH          = 1920                       # 相機解析度寬
 CAMERA_HEIGHT         = 1080                       # 相機解析度高
 
-PARAMS_JSON_PATH      = "calibration_result_Zebra_1_no_dis.json"  # 標定參數 JSON 檔路徑
+PARAMS_JSON_PATH      = "calibration_result_Zebra_1_monocular.json"  # 標定參數 JSON 檔路徑
 ACTUAL_MARKER_SIZE_MM =  8.25#16.5#8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)

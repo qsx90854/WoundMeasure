@@ -1,14 +1,14 @@
 """
 depth_measure_multi_aruco_sbs_camera_v7_demo_HBVCAM_v11_ROI.py
 ================
-HBVCAM 雙目相機互動式深度量測工具（中央 ROI 版）。
+HBVCAM 雙目相機互動式深度量測工具（可調 ROI 版）。
 
 特點：
 - 支援即時錄製 HBVCAM 雙目影片或載入既有雙目影片
-- 固定取第 50 幀，左半邊為左相機、右半邊為右相機
+- 逐一解算所有可解碼幀，選擇 baseline 與 JSON 最接近的影像對
 - 左右相機各自使用 JSON 內參與畸變參數，再映射至共同虛擬內參
 - R、T 與 baseline 由既有 ArUco + 特徵極線 + 聯合精修流程計算
-- JSON 外參只用於結果比對，不參與 RT 解算
+- JSON 外參不參與單幀 RT 解算，但會參與最佳影格選擇
 - 雙內參精確幾何：三角測距、單應性映射與基本矩陣均使用獨立的 KL/KR
 - 採用 Grad-SIFT 匹配演算法
 """
@@ -27,6 +27,7 @@ from matplotlib.widgets import RadioButtons, Button, CheckButtons, TextBox
 import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
 from Algorithm import camera_preprocess as camera_algo
+from Algorithm import stereo_json_frame_selection as frame_selector
 from Algorithm import video_pose_analysis as video_pose_algo
 from Algorithm.perf_timer import StageTimer
 from Algorithm.specular_detection import (
@@ -57,7 +58,10 @@ _WOUND_DETECTOR_ERROR_LOGGED = False
 # ==================== 全局設定區 ====================
 VIDEO_PATH            = r"HBVCAM_4M2214HD-2-v11"  # 預設影片位置（UI 可另選）
 RECORD_SAVE_DIR       = "HBVCAM_4M2214HD-2-v11"   # 錄影儲存資料夾路徑
-STEREO_REFERENCE_FRAME_INDEX = 50                 # OpenCV 0-based：固定使用 F50
+CAMERA_INDEX          = 2                          # Windows 相機裝置索引
+CAMERA_BACKEND        = cv2.CAP_DSHOW              # 避開 MSMF；實際 backend/FOURCC 會印出
+CAMERA_FPS            = 30
+STEREO_REFERENCE_FRAME_INDEX = 50                 # 相容舊介面；ROI 版目前會搜尋全部幀
 START_FRAME_COUNT     = 1                          # 固定影像對右圖
 
 # ----------------- 全局日誌收集區 -----------------
@@ -83,9 +87,16 @@ FUSE_DEPTH_TOL_ABS_MM = 5.0                        # 融合一致性閘門: 絕�
 
 CAMERA_WIDTH          = 3840                       # HBVCAM SBS 完整影像寬
 CAMERA_HEIGHT         = 1080                       # HBVCAM SBS 完整影像高
-CAMERA_PREVIEW_MAX_WIDTH = 960                     # 僅縮小預覽；不影響錄影解析度
-RT_ROI_WIDTH_RATIO    = 0.5                        # 每個單眼中央 RT ROI 寬度比例
-RT_ROI_HEIGHT_RATIO   = 0.5                        # 每個單眼中央 RT ROI 高度比例
+CAMERA_PREVIEW_MAX_WIDTH = 1300                     # 僅縮小預覽；不影響錄影解析度
+# 左右單眼各自的正規化 ROI；需滿足 X+WIDTH<=1、Y+HEIGHT<=1。
+RT_ROI_LEFT_X_RATIO      = 0.4
+RT_ROI_LEFT_Y_RATIO      = 0.2
+RT_ROI_LEFT_WIDTH_RATIO  = 0.6
+RT_ROI_LEFT_HEIGHT_RATIO = 0.6
+RT_ROI_RIGHT_X_RATIO      = 0.0
+RT_ROI_RIGHT_Y_RATIO      = 0.2
+RT_ROI_RIGHT_WIDTH_RATIO  = 0.6
+RT_ROI_RIGHT_HEIGHT_RATIO = 0.6
 
 PARAMS_JSON_PATH      = "calibration_result_HBVCAM_4M2214HD-2-v11.json"
 ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
@@ -643,8 +654,11 @@ def analyze_video_frames(
     range_mode="fixed",
     progress_callback=None,
     frames_override=None,
+    analysis_log_fn=None,
+    marker_corners_override=None,
 ):
-    video_pose_algo.log_and_print = log_and_print
+    video_pose_algo.log_and_print = (
+        log_and_print if analysis_log_fn is None else analysis_log_fn)
     video_pose_algo.RECORD_SAVE_DIR = RECORD_SAVE_DIR
     video_pose_algo.MIN_BASELINE_MM = MIN_BASELINE_MM
     video_pose_algo.MAX_BASELINE_MM = MAX_BASELINE_MM
@@ -660,7 +674,22 @@ def analyze_video_frames(
         video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm,
         select_mode, range_mode, progress_callback=progress_callback,
         frames_override=frames_override,
-        detection_roi_ratio=(RT_ROI_WIDTH_RATIO, RT_ROI_HEIGHT_RATIO),
+        marker_corners_override=marker_corners_override,
+        # 固定雙目影像對順序為 Frame A=右圖、Frame B=左圖。
+        detection_roi_ratio={
+            "frame_A": (
+                RT_ROI_RIGHT_X_RATIO,
+                RT_ROI_RIGHT_Y_RATIO,
+                RT_ROI_RIGHT_WIDTH_RATIO,
+                RT_ROI_RIGHT_HEIGHT_RATIO,
+            ),
+            "frame_B": (
+                RT_ROI_LEFT_X_RATIO,
+                RT_ROI_LEFT_Y_RATIO,
+                RT_ROI_LEFT_WIDTH_RATIO,
+                RT_ROI_LEFT_HEIGHT_RATIO,
+            ),
+        },
     )
 
 _clahe_cache = {}
@@ -673,7 +702,7 @@ def preprocess_gray(gray_img, enable_clahe=True):
 
 
 def load_hbvcam_calibration(json_path):
-    """Load both intrinsics; keep JSON extrinsics only as ground truth."""
+    """Load intrinsics and JSON extrinsics used by the all-frame selector."""
     path = Path(json_path)
     if not path.is_absolute():
         path = BASE_DIR / path
@@ -695,7 +724,9 @@ def load_hbvcam_calibration(json_path):
 
     answer_extrinsic = data.get("extrinsic", {})
     log_and_print(f"✅ 已載入 HBVCAM 左右內參: {path}")
-    log_and_print("ℹ️ JSON extrinsic.R/T 不參與解算，只在演算法完成後用來對答案。")
+    log_and_print(
+        "ℹ️ JSON extrinsic.R/T 不參與單幀 RT 解算；"
+        "ROI 全幀版會用 baseline 誤差選擇最佳影格。")
     return mtx_left, dist_left, mtx_right, dist_right, answer_extrinsic
 
 
@@ -775,7 +806,7 @@ def map_stereo_pair_to_common_intrinsic(
 
 
 def compare_rt_with_json_answer(R_est, t_est, answer_extrinsic):
-    """Report differences without feeding the JSON extrinsics into the algorithm."""
+    """Report differences; JSON is not fed into the per-frame RT solver."""
     if not isinstance(answer_extrinsic, dict):
         log_and_print("⚠️ JSON 沒有可用的 extrinsic，略過對答案。")
         return None
@@ -820,7 +851,7 @@ def compare_rt_with_json_answer(R_est, t_est, answer_extrinsic):
         "json_baseline_mm": baseline_answer,
         "baseline_error_mm": baseline_error,
     }
-    log_and_print("========== JSON 外參對答案（不參與解算）==========")
+    log_and_print("========== JSON 外參對答案（單幀 RT 不使用）==========")
     log_and_print(f"Rotation error: {rotation_error_deg:.4f} deg")
     log_and_print(
         f"Translation L2 error: {translation_l2_error:.4f} mm | "
@@ -832,6 +863,72 @@ def compare_rt_with_json_answer(R_est, t_est, answer_extrinsic):
     )
     log_and_print("====================================================")
     return result
+
+
+def find_best_sbs_frame_by_json(
+    video_path,
+    mtx_left,
+    dist_left,
+    mtx_right,
+    dist_right,
+    answer_extrinsic,
+):
+    """Solve every SBS frame and rerun the minimum-baseline-error frame verbosely."""
+    zero_distortion = np.zeros(5, dtype=np.float64)
+    quiet_log = lambda _message: None
+
+    def analyze_pair_quiet(
+        right_common,
+        left_common,
+        _frame_index,
+        common_k,
+    ):
+        return analyze_video_frames(
+            video_path,
+            1,
+            1,
+            common_k,
+            zero_distortion,
+            common_k,
+            ACTUAL_MARKER_SIZE_MM,
+            POSE_SELECT_MODE,
+            FRAME_RANGE_MODE,
+            frames_override=[right_common, left_common],
+            analysis_log_fn=quiet_log,
+        )
+
+    best = frame_selector.find_best_sbs_frame_by_json(
+        video_path,
+        (CAMERA_WIDTH, CAMERA_HEIGHT),
+        mtx_left,
+        dist_left,
+        mtx_right,
+        dist_right,
+        answer_extrinsic,
+        analyze_pair_quiet,
+        log_fn=log_and_print,
+    )
+    common_k = best["common_k"]
+    final_video_data = analyze_video_frames(
+        video_path,
+        1,
+        1,
+        common_k,
+        zero_distortion,
+        common_k,
+        ACTUAL_MARKER_SIZE_MM,
+        POSE_SELECT_MODE,
+        FRAME_RANGE_MODE,
+        frames_override=[best["right_common"], best["left_common"]],
+    )
+    if final_video_data is not None:
+        best["video_data"] = final_video_data
+        best["json_errors"] = frame_selector.calculate_json_errors(
+            final_video_data["R_rel"],
+            final_video_data["t_rel"],
+            answer_extrinsic,
+        )
+    return best
 
 
 def compute_global_plane(imgA_gray, K_L, marker_size_mm):
@@ -1159,30 +1256,34 @@ def record_video_from_camera():
     if not os.path.exists(save_path):
         os.makedirs(save_path)
 
-    # 開啟相機
-    cap = cv2.VideoCapture(2, cv2.CAP_MSMF)
+    # 建立 capture graph 時一次協商 MJPG、解析度與 FPS，避免逐項 set 重建。
+    cap = camera_algo.open_camera_with_mjpg(
+        CAMERA_INDEX,
+        CAMERA_BACKEND,
+        CAMERA_WIDTH,
+        CAMERA_HEIGHT,
+        CAMERA_FPS,
+        buffer_size=1,
+        log_fn=log_and_print,
+    )
     if not cap.isOpened():
         print("❌ 錯誤：無法開啟相機")
         return None
 
-    # HBVCAM 輸出為左右併排的 3840x1080；MJPG 可避免 USB 原始影像頻寬不足。
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"📷 目前接收到的串流解析度: {width} x {height}")
     print("操作說明：")
     print("  按下 's' 鍵 - 開始/停止錄影")
     print("  按下 'q' 鍵 - 當錄影完成後，結束預覽並載入影片")
+    print("  按下 'i' 鍵 - 印出目前 FPS、曝光與增益")
+    print("  按下 'p' 鍵 - 開啟 DSHOW 設定頁調整 50/60 Hz 防閃爍")
 
     is_recording = False
     video_writer = None
     video_name = None
     has_recorded = False
+    recorded_frame_count = 0
 
     while True:
         ret, frame = cap.read()
@@ -1193,13 +1294,25 @@ def record_video_from_camera():
         # 錄影寫入
         if is_recording and video_writer is not None:
             video_writer.write(frame)
+            # Count frames actually submitted to VideoWriter, not preview-loop frames.
+            recorded_frame_count += 1
 
         display_frame = frame.copy()
         h, w = display_frame.shape[:2]
-        camera_algo.draw_sbs_center_rois(
+        camera_algo.draw_sbs_independent_rois(
             display_frame,
-            RT_ROI_WIDTH_RATIO,
-            RT_ROI_HEIGHT_RATIO,
+            (
+                RT_ROI_LEFT_X_RATIO,
+                RT_ROI_LEFT_Y_RATIO,
+                RT_ROI_LEFT_WIDTH_RATIO,
+                RT_ROI_LEFT_HEIGHT_RATIO,
+            ),
+            (
+                RT_ROI_RIGHT_X_RATIO,
+                RT_ROI_RIGHT_Y_RATIO,
+                RT_ROI_RIGHT_WIDTH_RATIO,
+                RT_ROI_RIGHT_HEIGHT_RATIO,
+            ),
         )
 
         # 顯示錄影狀態指示
@@ -1207,16 +1320,46 @@ def record_video_from_camera():
             cv2.circle(display_frame, (30, h - 30), 15, (0, 0, 255), -1)
             cv2.putText(display_frame, "REC", (55, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.putText(display_frame, "Press 'S' to STOP recording", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+            cv2.putText(
+                display_frame,
+                f"Recorded frames: {recorded_frame_count}",
+                (30, 120),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                2.0,
+                (0, 0, 255),
+                4,
+                cv2.LINE_AA,
+            )
         else:
             if has_recorded:
                 cv2.putText(display_frame, "Recorded! Press 'Q' to start depth measure or 'S' to re-record", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                cv2.putText(
+                    display_frame,
+                    f"Last recording frames: {recorded_frame_count}",
+                    (30, 120),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    2.0,
+                    (0, 255, 0),
+                    4,
+                    cv2.LINE_AA,
+                )
             else:
                 cv2.putText(display_frame, "Press 'S' to START recording", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 0), 2)
 
         # 4. 偵測按鍵事件
         key = cv2.waitKey(1) & 0xFF
 
-        if key == ord('q'):
+        if key == ord('i'):
+            camera_algo.log_camera_stream_settings(cap, log_fn=log_and_print)
+
+        elif key == ord('p'):
+            if is_recording:
+                print("⚠️ 請先按 's' 停止錄影，再開啟相機設定頁。")
+            else:
+                camera_algo.show_dshow_camera_settings(
+                    cap, log_fn=log_and_print)
+
+        elif key == ord('q'):
             if has_recorded and not is_recording:
                 log_and_print(f"🎬 錄影就緒，準備載入: {video_name}")
                 break
@@ -1241,6 +1384,7 @@ def record_video_from_camera():
                     video_writer = None
                     video_name = None
                     continue
+                recorded_frame_count = 0
                 is_recording = True
                 has_recorded = True
                 print(f"🎬 開始錄影：{video_name}")
@@ -1722,24 +1866,32 @@ def main():
     
     startup_timer = StageTimer("啟動流程 (選定影片 → UI 就緒)")
 
-    # 1. 只讀取 JSON 左右內參；JSON 外參保留到演算法完成後才用來對答案。
+    # 1. 每幀 RT 都只使用影像；JSON 外參只用來選擇 baseline 最接近的幀。
     try:
         mtxL_raw, distL_raw, mtxR_raw, distR_raw, answer_extrinsic = (
             load_hbvcam_calibration(PARAMS_JSON_PATH)
         )
-        left_raw, right_raw, total_frames = read_sbs_reference_frame(
-            VIDEO_PATH, STEREO_REFERENCE_FRAME_INDEX
-        )
-        left_common, right_common, KL = map_stereo_pair_to_common_intrinsic(
-            left_raw,
-            right_raw,
+        best_frame_search = find_best_sbs_frame_by_json(
+            VIDEO_PATH,
             mtxL_raw,
             distL_raw,
             mtxR_raw,
             distR_raw,
+            answer_extrinsic,
         )
+        left_common = best_frame_search["left_common"]
+        right_common = best_frame_search["right_common"]
+        KL = best_frame_search["common_k"]
+        video_data = best_frame_search["video_data"]
+        selected_frame_index = int(best_frame_search["frame_index"])
+        total_frames = int(
+            best_frame_search["reported_total_frames"]
+            or best_frame_search["decoded_frame_count"])
     except (FileNotFoundError, ValueError, OSError, IndexError) as exc:
         print(f"❌ HBVCAM 雙目初始化失敗: {exc}")
+        sys.exit(1)
+    except RuntimeError as exc:
+        print(f"❌ HBVCAM 全幀 RT 搜尋失敗: {exc}")
         sys.exit(1)
 
     # 後續原演算法在共同的去畸變座標工作，因此有效畸變為零。
@@ -1753,36 +1905,25 @@ def main():
         # 固定左右影像在送入 RT 演算法前已各自完成去畸變及共同內參映射。
         return image.copy(), 1.0
 
-    startup_timer.stage("左右內參+F50切半+共同內參映射")
+    startup_timer.stage("全幀解算+最佳baseline影格選擇+共同內參映射")
 
-    # 原演算法定義 frame_A/start 為 UI 右圖、frame_B/end 為 UI 左圖。
-    fixed_stereo_frames = [right_common, left_common]
-    log_and_print(
-        "🔄 正在以 F50 左右半畫面執行既有 ArUco + 特徵極線 + 聯合 RT 精修..."
-    )
-    video_data = analyze_video_with_progress_bar(
-        VIDEO_PATH,
-        START_FRAME_COUNT,
-        END_FRAME_COUNT,
-        KL,
-        distL,
-        mtxL_o,
-        ACTUAL_MARKER_SIZE_MM,
-        POSE_SELECT_MODE,
-        FRAME_RANGE_MODE,
-        frames_override=fixed_stereo_frames,
-    )
     if video_data is None:
-        print("❌ F50 左右影像 RT 分析失敗，無法啟動測量工具")
+        print("❌ 最佳影格 RT 分析失敗，無法啟動測量工具")
         sys.exit(1)
-    video_data["source_frame_index"] = STEREO_REFERENCE_FRAME_INDEX
+    video_data["source_frame_index"] = selected_frame_index
     video_data["source_total_frames"] = total_frames
+    video_data["all_frame_search"] = {
+        "decoded_frame_count": best_frame_search["decoded_frame_count"],
+        "solved_frame_count": best_frame_search["solved_frame_count"],
+        "failed_frame_count": best_frame_search["failed_frame_count"],
+        "selection_metric": "minimum absolute baseline delta versus JSON",
+    }
     video_data["json_extrinsic_comparison"] = compare_rt_with_json_answer(
         video_data["R_rel"],
         video_data["t_rel"],
         answer_extrinsic,
     )
-    startup_timer.stage("F50雙目分析(ArUco+特徵+RT解算+JSON對答案)")
+    startup_timer.stage("最佳影格RT確認+JSON對答案")
 
     use_wound_adaptive_spatial_specular = True
 
@@ -1884,7 +2025,7 @@ def main():
         'pose_valid': True,
         'baseline': video_data['baseline'],
         'pose_info': (
-            f"HBVCAM F{STEREO_REFERENCE_FRAME_INDEX} SBS algorithm RT "
+            f"HBVCAM F{video_data.get('source_frame_index', '?')} SBS algorithm RT "
             f"(Bsl: {video_data['baseline']:.1f}mm)"
         ),
         'marker_map': video_data['marker_map'],

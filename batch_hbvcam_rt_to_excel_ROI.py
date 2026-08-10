@@ -1,7 +1,8 @@
-"""Batch HBVCAM stereo RT estimation with a central ROI and export to Excel.
+"""Batch HBVCAM stereo RT estimation with a configurable ROI and export to Excel.
 
-Only the fixed-frame stereo RT stage is executed. The measurement UI, wound
-model, interactive matching, and depth measurement stages are not started.
+Every decodable SBS frame is evaluated by the stereo RT stage, and the frame
+whose baseline is closest to the JSON answer is exported. The measurement UI,
+wound model, interactive matching, and depth measurement stages are not started.
 """
 
 from __future__ import annotations
@@ -30,8 +31,9 @@ DEFAULT_EXPORTER = Path(__file__).resolve().parent / "hbvcam_rt_excel_export.mjs
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run HBVCAM F50 stereo RT estimation with the central ROI for every video in a "
-            "folder and export the errors to Excel."
+            "Run HBVCAM configurable-ROI stereo RT estimation on every decodable frame "
+            "of every video, select the baseline closest to JSON, and export the "
+            "errors to Excel."
         )
     )
     parser.add_argument(
@@ -47,15 +49,6 @@ def parse_args() -> argparse.Namespace:
         "--calibration",
         default=hbvcam.PARAMS_JSON_PATH,
         help=f"Calibration JSON (default: {hbvcam.PARAMS_JSON_PATH})",
-    )
-    parser.add_argument(
-        "--frame-index",
-        type=int,
-        default=hbvcam.STEREO_REFERENCE_FRAME_INDEX,
-        help=(
-            "Zero-based SBS reference frame index "
-            f"(default: {hbvcam.STEREO_REFERENCE_FRAME_INDEX})"
-        ),
     )
     parser.add_argument(
         "--recursive",
@@ -143,7 +136,11 @@ def calculate_answer_errors(
     }
 
 
-def empty_result(index: int, video_path: Path, frame_index: int) -> dict:
+def empty_result(
+    index: int,
+    video_path: Path,
+    frame_index: int | None = None,
+) -> dict:
     return {
         "run_number": index,
         "video_file": video_path.name,
@@ -169,7 +166,6 @@ def empty_result(index: int, video_path: Path, frame_index: int) -> dict:
 def process_video(
     index: int,
     video_path: Path,
-    frame_index: int,
     mtx_left: np.ndarray,
     dist_left: np.ndarray,
     mtx_right: np.ndarray,
@@ -177,44 +173,27 @@ def process_video(
     answer_extrinsic: dict,
 ) -> dict:
     started = time.perf_counter()
-    result = empty_result(index, video_path, frame_index)
+    result = empty_result(index, video_path)
     video_data = None
     try:
-        left_raw, right_raw, total_frames = hbvcam.read_sbs_reference_frame(
-            str(video_path), frame_index
-        )
-        result["total_frames"] = total_frames
-        left_common, right_common, common_k = (
-            hbvcam.map_stereo_pair_to_common_intrinsic(
-                left_raw,
-                right_raw,
-                mtx_left,
-                dist_left,
-                mtx_right,
-                dist_right,
-            )
-        )
-
-        zero_distortion = np.zeros(5, dtype=np.float64)
-        # The existing analyzer defines start/frame_A as the UI right image and
-        # end/frame_B as the UI left image.
-        fixed_stereo_frames = [right_common, left_common]
-        video_data = hbvcam.analyze_video_frames(
+        best = hbvcam.find_best_sbs_frame_by_json(
             str(video_path),
-            1,
-            1,
-            common_k,
-            zero_distortion,
-            common_k,
-            hbvcam.ACTUAL_MARKER_SIZE_MM,
-            hbvcam.POSE_SELECT_MODE,
-            "half_half",
-            frames_override=fixed_stereo_frames,
+            mtx_left,
+            dist_left,
+            mtx_right,
+            dist_right,
+            answer_extrinsic,
         )
+        video_data = best["video_data"]
         if video_data is None:
             raise RuntimeError(
-                "RT analysis returned no result; check F50 ArUco visibility and image quality."
+                "RT analysis returned no result for every decodable frame; "
+                "check ArUco visibility and image quality."
             )
+        result["frame_index"] = int(best["frame_index"])
+        result["total_frames"] = int(
+            best["reported_total_frames"] or best["decoded_frame_count"]
+        )
 
         comparison = calculate_answer_errors(
             video_data["R_rel"],
@@ -400,7 +379,8 @@ def main() -> int:
 
     rows = []
     print(
-        f"Found {len(videos)} videos. RT frame index={args.frame_index}. "
+        f"Found {len(videos)} videos. Every decodable frame will be evaluated; "
+        "the frame with the minimum absolute JSON baseline error will be selected. "
         "The measurement UI and wound model will not be started."
     )
     for index, video_path in enumerate(videos, start=1):
@@ -408,7 +388,6 @@ def main() -> int:
         row = process_video(
             index,
             video_path,
-            args.frame_index,
             mtx_left,
             dist_left,
             mtx_right,
@@ -423,7 +402,8 @@ def main() -> int:
                 abs(row["baseline_delta_mm"]) / row["json_baseline_mm"] * 100.0
             )
             print(
-                f"  {row['status']}: rotation={row['rotation_error_deg']:.4f} deg, "
+                f"  {row['status']} F{row['frame_index']}: "
+                f"rotation={row['rotation_error_deg']:.4f} deg, "
                 f"baseline delta={row['baseline_delta_mm']:+.4f} mm "
                 f"({baseline_percent:.2f}%)"
             )
@@ -432,7 +412,11 @@ def main() -> int:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "source_folder": str(folder),
         "calibration_file": str(calibration_path),
-        "reference_frame_index": args.frame_index,
+        "reference_frame_index": "ALL (best frame selected per video)",
+        "frame_selection": (
+            "All decodable frames; minimum absolute algorithm-vs-JSON "
+            "baseline delta, then minimum rotation error"
+        ),
         "recursive": bool(args.recursive),
         "rows": rows,
     }

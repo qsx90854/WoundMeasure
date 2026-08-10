@@ -54,6 +54,39 @@ image/
 out/
 
 # =========================
+# Python generated files
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Local AI/Codex scratch directories
+# =========================
+.codex_*/
+codex_tmp*/
+.claude/settings.local.json
+
+# =========================
+# Generated spreadsheet/report artifacts
+# =========================
+*.xlsx
+*.xls
+*.xlsm
+*.xlsx.inspect.ndjson
+*_comparison.csv
+*_frames.csv
+*_results.csv
+*_stability.csv
+*_summary.csv
+*_diagnostics.txt
+*_corner_videos/
+*_diagnostic_videos/
+monocular_calibration_images*/
+image_[0-9]*.png
+mono_[0-9]*.png
+
+# =========================
 # Local Python environment / heavy dependencies
 # =========================
 Lib/

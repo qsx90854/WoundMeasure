@@ -11,6 +11,12 @@ if (!inputPath || !outputPath) {
 
 const payload = JSON.parse(await fs.readFile(inputPath, "utf8"));
 const rows = Array.isArray(payload.rows) ? payload.rows : [];
+const frameSelection =
+  payload.frame_selection ??
+  `Fixed zero-based frame index: ${payload.reference_frame_index ?? ""}`;
+const extrinsicUsage = payload.frame_selection
+  ? "JSON R/T are not fed into any per-frame RT estimation. The JSON baseline is used only to select the winning frame after all frames are solved."
+  : "JSON R/T are ground truth only and are not used by RT estimation.";
 const workbook = Workbook.create();
 const results = workbook.worksheets.add("RT Results");
 const summary = workbook.worksheets.add("Summary");
@@ -199,7 +205,7 @@ protocol.getRange("A2:B8").values = [
   ["Generated At", payload.generated_at ?? ""],
   ["Source Folder", payload.source_folder ?? ""],
   ["Calibration File", payload.calibration_file ?? ""],
-  ["Reference Frame Index (zero-based)", payload.reference_frame_index ?? ""],
+  ["Frame Selection", frameSelection],
   ["Recursive Search", Boolean(payload.recursive)],
   [
     "Baseline Error Formula",
@@ -207,7 +213,7 @@ protocol.getRange("A2:B8").values = [
   ],
   [
     "Extrinsic Usage",
-    "JSON R/T are ground truth only and are not used by RT estimation.",
+    extrinsicUsage,
   ],
 ];
 protocol.getRange("A1:B1").format = {
