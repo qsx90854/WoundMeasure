@@ -1,0 +1,6 @@
+python analyze_hbvcam_stage1_sift_comparison.py "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle0" --frames 50 --mode both --output-prefix "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle0_0805v2\stage1_new_corner" --aruco-corner-video-dir "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle0_0805v2\stage1_new_corner_videos"
+
+python analyze_hbvcam_stage1_sift_comparison.py "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle15" --frames 50 --mode both --output-prefix "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle15_0805v2\stage1_new_corner" --aruco-corner-video-dir "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_distance_test_angle15_0805v2\stage1_new_corner_videos"
+
+
+python analyze_hbvcam_4pattern_subset_rt.py "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11" --frames 50 --marker-ids 2,5,9,12  --subpixel-stability-max-raw-px 4  --output "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_4pattern_subset_rt.xlsx" --corner-video-dir "D:\Lightglue\lg_env\HBVCAM_4M2214HD-2-v11\HBVCAM_4pattern_subset_rt_corner_videos"

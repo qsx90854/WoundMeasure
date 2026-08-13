@@ -40,6 +40,15 @@ from xml.sax.saxutils import escape
 import cv2
 import numpy as np
 
+from aligned_roi_diagnostic import (
+    ALIGNED_ROI_OUTPUT_SIZE_PX,
+    BILATERAL_DIAMETER_PX,
+    BILATERAL_SIGMA_COLOR,
+    BILATERAL_SIGMA_SPACE,
+    build_aligned_roi_spec,
+    make_aligned_roi_frame,
+    open_aligned_roi_writer,
+)
 from analyze_hbvcam_4pattern_subset_rt import (
     AdaptiveArucoDetector,
     MultiMarkerRTEstimator,
@@ -64,13 +73,28 @@ DEFAULT_CALIBRATION = ROOT / "calibration_result_HBVCAM_4M2214HD-2-v11.json"
 # The same choice can be overridden once with --gt-mode on the command line.
 GT_DETECTION_MODE = "cross_intersection"
 
-# Cross-intersection detector controls.  The new screen videos use dark lines
-# on a bright background; change polarity to "bright" for bright cross lines.
+# Cross-intersection detector controls.  The screen videos use dark lines on a
+# bright background.  Each centerline is measured from subpixel half-height
+# edge midpoints on profiles sampled away from the crossing core.
 CROSS_LINE_POLARITY = "dark"
-CROSS_THRESHOLD_RATIO = 0.35
-CROSS_MIN_CONTRAST_GRAY = 12.0
-CROSS_LINE_FIT_BAND_PX = 4.0
-CROSS_MIN_ARM_SUPPORT_PIXELS = 8
+CROSS_PROFILE_CORE_EXCLUSION_PX = 6.0
+CROSS_PROFILE_MAX_ARM_PX = 16.0
+CROSS_PROFILE_ALONG_STEP_PX = 1.0
+CROSS_PROFILE_HALF_WIDTH_PX = 8.0
+CROSS_PROFILE_SAMPLE_STEP_PX = 0.125
+CROSS_PROFILE_OUTER_BAND_START_PX = 7.0
+CROSS_PROFILE_CENTER_SEARCH_PX = 3.5
+CROSS_PROFILE_EDGE_LEVEL_RATIO = 0.5
+CROSS_PROFILE_MIN_CONTRAST_GRAY = 3.0
+CROSS_PROFILE_NOISE_SIGMA_MULTIPLIER = 3.0
+CROSS_PROFILE_MIN_WIDTH_PX = 0.75
+CROSS_PROFILE_MAX_WIDTH_PX = 6.0
+CROSS_MIN_PROFILE_COUNT = 8
+CROSS_MIN_SIDE_PROFILE_COUNT = 3
+CROSS_MAX_DIRECTION_CHANGE_DEG = 6.0
+CROSS_MAX_LINE_FIT_RMS_PX = 0.45
+CROSS_MAX_WIDTH_MAD_PX = 1.75
+CROSS_MAX_INTERSECTION_SHIFT_PX = 6.0
 CROSS_PREVIEW_ARM_PX = 5
 CROSS_PREVIEW_LINE_WIDTH_PX = 1
 CROSS_PREVIEW_JPEG_QUALITY = 95
@@ -81,6 +105,7 @@ MIN_BASELINE_MM = 8.0
 MAX_BASELINE_MM = 220.0
 SUBPIX_STABILITY_MAX_RAW_PX = 2.0
 DIAGNOSTIC_TILE_SIZE = 240
+DIAGNOSTIC_ROI_RADIUS_PX = 10
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".m4v"}
 
 
@@ -166,6 +191,15 @@ WHITE_FRAME_FIELDS = [
     "marker_transfer_max_px",
     "selected_ippe_branches",
     "diagnostic_video",
+    "pattern_diagnostic_video",
+    "gt_diagnostic_video",
+    "left_diagnostic_roi_x_px",
+    "left_diagnostic_roi_y_px",
+    "left_diagnostic_roi_size_source_px",
+    "right_diagnostic_roi_x_px",
+    "right_diagnostic_roi_y_px",
+    "right_diagnostic_roi_size_source_px",
+    "diagnostic_roi_tile_size_output_px",
     "cross_preview_jpg",
     "processing_time_ms",
 ]
@@ -234,6 +268,20 @@ CORNER_COMPARISON_FIELDS = [
     "white_distance_from_pattern_search_center_px",
     "cross_line1_support_pixels",
     "cross_line2_support_pixels",
+    "cross_line1_support_profiles",
+    "cross_line2_support_profiles",
+    "cross_line1_negative_arm_profiles",
+    "cross_line1_positive_arm_profiles",
+    "cross_line2_negative_arm_profiles",
+    "cross_line2_positive_arm_profiles",
+    "cross_line1_fit_rms_px",
+    "cross_line2_fit_rms_px",
+    "cross_line1_width_median_px",
+    "cross_line2_width_median_px",
+    "cross_line1_contrast_median_gray",
+    "cross_line2_contrast_median_gray",
+    "cross_line1_direction_delta_deg",
+    "cross_line2_direction_delta_deg",
     "cross_line_fit_rms_px",
 ]
 
@@ -366,7 +414,22 @@ def parse_args() -> argparse.Namespace:
             "this file."
         ),
     )
-    parser.add_argument("--cross-arm-px", type=int, default=5)
+    parser.add_argument(
+        "--diagnostic-roi-radius-px",
+        type=int,
+        default=DIAGNOSTIC_ROI_RADIUS_PX,
+        help=(
+            "Source-pixel margin added on each side of the stable Pattern "
+            "marker bounding box. A 50 px marker and 10 px margin produce an "
+            "approximately 70 px square crop."
+        ),
+    )
+    parser.add_argument(
+        "--cross-arm-px",
+        type=int,
+        default=5,
+        help="Half-length of the one-pixel red crosses in the enlarged ROI AVI",
+    )
     parser.add_argument("--progress-every", type=int, default=25)
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument(
@@ -377,7 +440,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="Output .xlsx path")
     parser.add_argument(
         "--diagnostic-video-dir",
-        help="Output folder for one stacked diagnostic MP4 per video pair",
+        help="Output folder for separate aligned Pattern/GT ROI AVI files",
     )
     args = parser.parse_args()
     if args.frames <= 0:
@@ -390,12 +453,18 @@ def parse_args() -> argparse.Namespace:
         parser.error("--subpixel-stability-max-raw-px must be positive")
     if args.white_search_radius_px < 3:
         parser.error("--white-search-radius-px must be at least 3")
+    if args.gt_mode == "cross_intersection" and args.white_search_radius_px < 11:
+        parser.error(
+            "--white-search-radius-px must be at least 11 for cross_intersection"
+        )
     if not 0.05 <= args.white_threshold_ratio <= 0.95:
         parser.error("--white-threshold-ratio must be between 0.05 and 0.95")
     if args.white_min_contrast_gray <= 0:
         parser.error("--white-min-contrast-gray must be positive")
     if args.white_min_area_px <= 0 or args.white_max_area_px < args.white_min_area_px:
         parser.error("white blob area limits are invalid")
+    if args.diagnostic_roi_radius_px < 3:
+        parser.error("--diagnostic-roi-radius-px must be at least 3")
     if args.cross_arm_px < 1:
         parser.error("--cross-arm-px must be positive")
     if args.max_pairs is not None and args.max_pairs <= 0:
@@ -619,25 +688,31 @@ class WhiteBlobDetector:
 
 
 class CrossIntersectionDetector:
-    """Fit two locally known screen-line directions and return their intersection."""
+    """Fit two cross centerlines from off-core edge-midpoint profiles."""
 
     def __init__(
         self,
         search_radius_px,
-        threshold_ratio=CROSS_THRESHOLD_RATIO,
-        min_contrast_gray=CROSS_MIN_CONTRAST_GRAY,
-        line_fit_band_px=CROSS_LINE_FIT_BAND_PX,
-        min_arm_support_pixels=CROSS_MIN_ARM_SUPPORT_PIXELS,
         polarity=CROSS_LINE_POLARITY,
+        core_exclusion_px=CROSS_PROFILE_CORE_EXCLUSION_PX,
+        edge_level_ratio=CROSS_PROFILE_EDGE_LEVEL_RATIO,
     ):
         self.radius = int(search_radius_px)
-        self.threshold_ratio = float(threshold_ratio)
-        self.min_contrast = float(min_contrast_gray)
-        self.line_fit_band = float(line_fit_band_px)
-        self.min_arm_support = int(min_arm_support_pixels)
         self.polarity = str(polarity).strip().lower()
+        self.core_exclusion_px = float(core_exclusion_px)
+        self.edge_level_ratio = float(edge_level_ratio)
         if self.polarity not in {"dark", "bright"}:
             raise ValueError("CROSS_LINE_POLARITY must be 'dark' or 'bright'")
+        if self.radius < 11:
+            raise ValueError(
+                "cross-intersection search radius must be at least 11 px"
+            )
+        if not 0.0 < self.edge_level_ratio < 1.0:
+            raise ValueError("edge_level_ratio must be between 0 and 1")
+        if not 0.0 < self.core_exclusion_px < CROSS_PROFILE_MAX_ARM_PX:
+            raise ValueError(
+                "core_exclusion_px must be positive and below the maximum arm"
+            )
 
     @staticmethod
     def _unit(vector) -> np.ndarray:
@@ -658,23 +733,437 @@ class CrossIntersectionDetector:
             raise ValueError("screen-line directions are nearly parallel")
         return previous, following
 
-    def _line_signal(self, roi: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float, float]:
-        roi = roi.astype(np.float32)
-        if self.polarity == "dark":
-            background = float(np.percentile(roi, 65))
-            extreme = float(np.min(roi))
-            contrast = background - extreme
-            signal = np.maximum(background - roi, 0.0)
-            threshold = background - self.threshold_ratio * contrast
-            mask = roi <= threshold
+    @staticmethod
+    def _subpixel_crossing(
+        coordinates: np.ndarray,
+        values: np.ndarray,
+        first_index: int,
+        second_index: int,
+        level: float,
+    ) -> float:
+        first_value = float(values[first_index])
+        second_value = float(values[second_index])
+        denominator = second_value - first_value
+        if abs(denominator) <= 1e-12:
+            return float(
+                (coordinates[first_index] + coordinates[second_index]) / 2.0
+            )
+        fraction = (level - first_value) / denominator
+        return float(
+            coordinates[first_index]
+            + fraction
+            * (coordinates[second_index] - coordinates[first_index])
+        )
+
+    def _sample_profile_centers(
+        self,
+        gray: np.ndarray,
+        anchor: np.ndarray,
+        expected_direction: np.ndarray,
+    ) -> tuple[list[dict], np.ndarray, np.ndarray]:
+        """Measure line centers on profiles that do not cross the core."""
+        direction = self._unit(expected_direction)
+        normal = np.array([-direction[1], direction[0]], dtype=np.float64)
+        maximum_arm = min(CROSS_PROFILE_MAX_ARM_PX, self.radius - 2.0)
+        positive_positions = np.arange(
+            self.core_exclusion_px,
+            maximum_arm + 0.5 * CROSS_PROFILE_ALONG_STEP_PX,
+            CROSS_PROFILE_ALONG_STEP_PX,
+            dtype=np.float64,
+        )
+        along_positions = np.concatenate(
+            (-positive_positions[::-1], positive_positions)
+        )
+        normal_sample_count = (
+            int(
+                round(
+                    2.0
+                    * CROSS_PROFILE_HALF_WIDTH_PX
+                    / CROSS_PROFILE_SAMPLE_STEP_PX
+                )
+            )
+            + 1
+        )
+        normal_positions = np.linspace(
+            -CROSS_PROFILE_HALF_WIDTH_PX,
+            CROSS_PROFILE_HALF_WIDTH_PX,
+            normal_sample_count,
+            dtype=np.float64,
+        )
+        coordinates = (
+            anchor.reshape(1, 1, 2)
+            + along_positions[:, None, None] * direction.reshape(1, 1, 2)
+            + normal_positions[None, :, None] * normal.reshape(1, 1, 2)
+        )
+        height, width = gray.shape[:2]
+        inside = (
+            (coordinates[:, :, 0] >= 0.0)
+            & (coordinates[:, :, 0] <= width - 1.0)
+            & (coordinates[:, :, 1] >= 0.0)
+            & (coordinates[:, :, 1] <= height - 1.0)
+        ).all(axis=1)
+        coordinates = coordinates[inside]
+        along_positions = along_positions[inside]
+        if not len(along_positions):
+            return [], direction, normal
+
+        # Remap a floating-point source so bilinear gray-level interpolation is
+        # not quantized back to uint8 before the subpixel edge calculation.
+        profile_values = cv2.remap(
+            gray.astype(np.float32, copy=False),
+            coordinates[:, :, 0].astype(np.float32),
+            coordinates[:, :, 1].astype(np.float32),
+            cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        ).astype(np.float64)
+        profile_values = cv2.GaussianBlur(
+            profile_values,
+            (5, 1),
+            0.5,
+            borderType=cv2.BORDER_REPLICATE,
+        )
+
+        outer = np.abs(normal_positions) >= CROSS_PROFILE_OUTER_BAND_START_PX
+        baseline_design = np.column_stack(
+            (normal_positions[outer], np.ones(np.count_nonzero(outer)))
+        )
+        baseline_coefficients = np.linalg.lstsq(
+            baseline_design,
+            profile_values[:, outer].T,
+            rcond=None,
+        )[0].T
+        baselines = (
+            baseline_coefficients[:, 0, None] * normal_positions[None, :]
+            + baseline_coefficients[:, 1, None]
+        )
+        signal = (
+            baselines - profile_values
+            if self.polarity == "dark"
+            else profile_values - baselines
+        )
+        center_search_indices = np.where(
+            np.abs(normal_positions) <= CROSS_PROFILE_CENTER_SEARCH_PX
+        )[0]
+        peak_indices = center_search_indices[
+            np.argmax(signal[:, center_search_indices], axis=1)
+        ]
+
+        profiles = []
+        for profile_index, peak_index in enumerate(peak_indices):
+            contrast = float(signal[profile_index, peak_index])
+            outer_residual = signal[profile_index, outer]
+            noise_sigma = float(
+                1.4826
+                * np.median(
+                    np.abs(outer_residual - np.median(outer_residual))
+                )
+            )
+            required_contrast = max(
+                CROSS_PROFILE_MIN_CONTRAST_GRAY,
+                CROSS_PROFILE_NOISE_SIGMA_MULTIPLIER * noise_sigma,
+            )
+            if contrast < required_contrast:
+                continue
+
+            edge_level = self.edge_level_ratio * contrast
+            left_index = int(peak_index)
+            while left_index > 0 and signal[profile_index, left_index] >= edge_level:
+                left_index -= 1
+            right_index = int(peak_index)
+            while (
+                right_index + 1 < len(normal_positions)
+                and signal[profile_index, right_index] >= edge_level
+            ):
+                right_index += 1
+            if (
+                left_index == 0
+                and signal[profile_index, left_index] >= edge_level
+            ) or (
+                right_index == len(normal_positions) - 1
+                and signal[profile_index, right_index] >= edge_level
+            ):
+                continue
+
+            left_edge = self._subpixel_crossing(
+                normal_positions,
+                signal[profile_index],
+                left_index,
+                left_index + 1,
+                edge_level,
+            )
+            right_edge = self._subpixel_crossing(
+                normal_positions,
+                signal[profile_index],
+                right_index - 1,
+                right_index,
+                edge_level,
+            )
+            line_width = right_edge - left_edge
+            center_offset = (left_edge + right_edge) / 2.0
+            if not (
+                CROSS_PROFILE_MIN_WIDTH_PX
+                <= line_width
+                <= CROSS_PROFILE_MAX_WIDTH_PX
+            ):
+                continue
+            if abs(center_offset) > CROSS_PROFILE_CENTER_SEARCH_PX:
+                continue
+
+            profiles.append(
+                {
+                    "along_px": float(along_positions[profile_index]),
+                    "center_offset_px": float(center_offset),
+                    "width_px": float(line_width),
+                    "contrast_gray": contrast,
+                    "noise_sigma_gray": noise_sigma,
+                    "background_gray": float(
+                        baselines[profile_index, peak_index]
+                    ),
+                    "line_gray": float(profile_values[profile_index, peak_index]),
+                }
+            )
+        return profiles, direction, normal
+
+    @staticmethod
+    def _line_failure(
+        reason: str,
+        profiles: list[dict],
+        inliers: np.ndarray | None = None,
+    ) -> tuple[None, dict]:
+        along = np.asarray(
+            [profile["along_px"] for profile in profiles], dtype=np.float64
+        )
+        if inliers is None:
+            selected = np.ones(len(along), dtype=bool)
         else:
-            background = float(np.percentile(roi, 35))
-            extreme = float(np.max(roi))
-            contrast = extreme - background
-            signal = np.maximum(roi - background, 0.0)
-            threshold = background + self.threshold_ratio * contrast
-            mask = roi >= threshold
-        return signal, mask, background, extreme, contrast
+            selected = np.asarray(inliers, dtype=bool)
+        return None, {
+            "failure_reason": reason,
+            "raw_profile_count": len(profiles),
+            "support_profiles": int(np.count_nonzero(selected)),
+            "negative_profiles": int(
+                np.count_nonzero(selected & (along < 0.0))
+            ),
+            "positive_profiles": int(
+                np.count_nonzero(selected & (along > 0.0))
+            ),
+        }
+
+    def _fit_centerline(
+        self,
+        gray: np.ndarray,
+        anchor: np.ndarray,
+        expected_direction: np.ndarray,
+    ) -> tuple[tuple[np.ndarray, np.ndarray] | None, dict]:
+        profiles, direction, normal = self._sample_profile_centers(
+            gray,
+            anchor,
+            expected_direction,
+        )
+        if len(profiles) < CROSS_MIN_PROFILE_COUNT:
+            return self._line_failure(
+                f"only {len(profiles)} valid off-core profiles",
+                profiles,
+            )
+
+        along = np.asarray(
+            [profile["along_px"] for profile in profiles], dtype=np.float64
+        )
+        offsets = np.asarray(
+            [profile["center_offset_px"] for profile in profiles],
+            dtype=np.float64,
+        )
+        design = np.column_stack((np.ones(len(along)), along))
+
+        negative_indices = np.where(along < 0.0)[0]
+        positive_indices = np.where(along > 0.0)[0]
+        if (
+            len(negative_indices) < CROSS_MIN_SIDE_PROFILE_COUNT
+            or len(positive_indices) < CROSS_MIN_SIDE_PROFILE_COUNT
+        ):
+            return self._line_failure(
+                "too few raw profiles on one side of the crossing",
+                profiles,
+            )
+
+        def side_balanced_weights(modifiers: np.ndarray) -> np.ndarray:
+            """Give the two physical arms equal total geometric influence."""
+            modifiers = np.asarray(modifiers, dtype=np.float64)
+            balanced = np.zeros(len(along), dtype=np.float64)
+            target_sum = 0.5 * len(along)
+            for indices in (negative_indices, positive_indices):
+                modifier_sum = float(np.sum(modifiers[indices]))
+                if modifier_sum > 1e-12:
+                    balanced[indices] = (
+                        modifiers[indices] * target_sum / modifier_sum
+                    )
+            return balanced
+
+        # Contrast is an acceptance/SNR gate, not a position weight: weighting
+        # by darkness can pull the fitted centerline toward the darker arm.
+        # Balance the negative/positive arms as well, so profile dropout on one
+        # side cannot give the other side more geometric influence.
+        cross_side_slopes = (
+            offsets[positive_indices, None]
+            - offsets[None, negative_indices]
+        ) / (
+            along[positive_indices, None]
+            - along[None, negative_indices]
+        )
+        initial_slope = float(np.median(cross_side_slopes))
+        coefficients = np.asarray(
+            [
+                float(np.median(offsets - initial_slope * along)),
+                initial_slope,
+            ],
+            dtype=np.float64,
+        )
+
+        residuals = offsets - design @ coefficients
+        robust_scale = float(
+            1.4826
+            * np.median(np.abs(residuals - np.median(residuals)))
+        ) + 1e-6
+        huber_delta = max(0.12, 1.5 * robust_scale)
+        weights = side_balanced_weights(np.minimum(
+            1.0,
+            huber_delta / np.maximum(np.abs(residuals), 1e-9),
+        ))
+        for _iteration in range(8):
+            square_root_weights = np.sqrt(weights)
+            coefficients = np.linalg.lstsq(
+                design * square_root_weights[:, None],
+                offsets * square_root_weights,
+                rcond=None,
+            )[0]
+            residuals = offsets - design @ coefficients
+            robust_scale = float(
+                1.4826
+                * np.median(
+                    np.abs(residuals - np.median(residuals))
+                )
+            ) + 1e-6
+            huber_delta = max(0.12, 1.5 * robust_scale)
+            huber_weights = np.minimum(
+                1.0,
+                huber_delta / np.maximum(np.abs(residuals), 1e-9),
+            )
+            weights = side_balanced_weights(huber_weights)
+
+        residuals = offsets - design @ coefficients
+        robust_scale = float(
+            1.4826
+            * np.median(np.abs(residuals - np.median(residuals)))
+        ) + 1e-6
+        residual_gate = max(0.35, 3.0 * robust_scale)
+        inliers = np.abs(residuals) <= residual_gate
+        negative_support = int(np.count_nonzero(inliers & (along < 0.0)))
+        positive_support = int(np.count_nonzero(inliers & (along > 0.0)))
+        if (
+            negative_support < CROSS_MIN_SIDE_PROFILE_COUNT
+            or positive_support < CROSS_MIN_SIDE_PROFILE_COUNT
+        ):
+            return self._line_failure(
+                "too few fitted profiles on one side of the crossing",
+                profiles,
+                inliers,
+            )
+
+        inlier_design = design[inliers]
+        inlier_offsets = offsets[inliers]
+        inlier_along = along[inliers]
+        inlier_weights = np.zeros(len(inlier_along), dtype=np.float64)
+        inlier_target_sum = 0.5 * len(inlier_along)
+        for side_mask in (inlier_along < 0.0, inlier_along > 0.0):
+            inlier_weights[side_mask] = inlier_target_sum / np.count_nonzero(
+                side_mask
+            )
+        square_root_weights = np.sqrt(inlier_weights)
+        coefficients = np.linalg.lstsq(
+            inlier_design * square_root_weights[:, None],
+            inlier_offsets * square_root_weights,
+            rcond=None,
+        )[0]
+        inlier_residuals = inlier_offsets - inlier_design @ coefficients
+        fit_rms = float(
+            np.sqrt(
+                np.average(
+                    np.square(inlier_residuals), weights=inlier_weights
+                )
+            )
+        )
+        direction_delta = float(np.degrees(np.arctan(coefficients[1])))
+        inlier_widths = np.asarray(
+            [profile["width_px"] for profile in profiles], dtype=np.float64
+        )[inliers]
+        width_median = float(np.median(inlier_widths))
+        width_mad = float(
+            1.4826 * np.median(np.abs(inlier_widths - width_median))
+        )
+        line_diagnostics = {
+            "raw_profile_count": len(profiles),
+            "support_profiles": int(np.count_nonzero(inliers)),
+            "negative_profiles": negative_support,
+            "positive_profiles": positive_support,
+            "fit_rms_px": fit_rms,
+            "width_median_px": width_median,
+            "width_mad_px": width_mad,
+            "contrast_median_gray": float(
+                np.median(
+                    [profile["contrast_gray"] for profile in profiles]
+                )
+            ),
+            "background_median_gray": float(
+                np.median(
+                    [profile["background_gray"] for profile in profiles]
+                )
+            ),
+            "direction_delta_deg": direction_delta,
+        }
+        if abs(direction_delta) > CROSS_MAX_DIRECTION_CHANGE_DEG:
+            return None, {
+                **line_diagnostics,
+                "failure_reason": (
+                    f"direction correction {direction_delta:.2f} deg exceeds gate"
+                ),
+            }
+        if fit_rms > CROSS_MAX_LINE_FIT_RMS_PX:
+            return None, {
+                **line_diagnostics,
+                "failure_reason": (
+                    f"profile-center fit RMS {fit_rms:.2f} px exceeds gate"
+                ),
+            }
+        if width_mad > CROSS_MAX_WIDTH_MAD_PX:
+            return None, {
+                **line_diagnostics,
+                "failure_reason": (
+                    f"profile width MAD {width_mad:.2f} px exceeds gate"
+                ),
+            }
+
+        line_point = anchor + coefficients[0] * normal
+        line_direction = self._unit(direction + coefficients[1] * normal)
+        return (line_point, line_direction), line_diagnostics
+
+    @staticmethod
+    def _flatten_line_diagnostics(line_diagnostics: list[dict]) -> dict:
+        output = {}
+        for line_index, diagnostics in enumerate(line_diagnostics, start=1):
+            for key in (
+                "raw_profile_count",
+                "support_profiles",
+                "negative_profiles",
+                "positive_profiles",
+                "fit_rms_px",
+                "width_median_px",
+                "width_mad_px",
+                "contrast_median_gray",
+                "background_median_gray",
+                "direction_delta_deg",
+            ):
+                output[f"line{line_index}_{key}"] = diagnostics.get(key)
+        return output
 
     def detect_one(self, gray: np.ndarray, search_center, directions) -> dict:
         center = np.asarray(search_center, dtype=np.float64).reshape(2)
@@ -686,31 +1175,23 @@ class CrossIntersectionDetector:
         roi = gray[y0:y1, x0:x1]
         if roi.size == 0:
             return {"accepted": False, "failure_reason": "empty search ROI"}
-        signal, mask, background, extreme, contrast = self._line_signal(roi)
+        roi_float = roi.astype(np.float32)
+        if self.polarity == "dark":
+            background = float(np.percentile(roi_float, 65))
+            extreme = float(np.min(roi_float))
+            contrast = background - extreme
+        else:
+            background = float(np.percentile(roi_float, 35))
+            extreme = float(np.max(roi_float))
+            contrast = extreme - background
         common = {
             "detector_mode": "cross_intersection",
             "background_gray": background,
             "peak_gray": extreme,
             "contrast_gray": contrast,
             "search_bounds": (x0, y0, x1, y1),
-            "blob_area_px": int(np.count_nonzero(mask)),
+            "blob_area_px": None,
         }
-        if contrast < self.min_contrast:
-            return {
-                **common,
-                "accepted": False,
-                "failure_reason": f"line contrast {contrast:.1f} < {self.min_contrast:.1f}",
-            }
-
-        ys, xs = np.where(mask)
-        if len(xs) < 2 * self.min_arm_support:
-            return {
-                **common,
-                "accepted": False,
-                "failure_reason": "too few thresholded line pixels",
-            }
-        pixels = np.column_stack((xs + x0, ys + y0)).astype(np.float64)
-        weights = signal[ys, xs].astype(np.float64)
         direction1, direction2 = (
             self._unit(directions[0]),
             self._unit(directions[1]),
@@ -724,68 +1205,82 @@ class CrossIntersectionDetector:
                 "accepted": False,
                 "failure_reason": "screen-line normals are nearly parallel",
             }
-
-        intersection = center.copy()
-        arm_masks = None
-        for _iteration in range(5):
-            relative = pixels - intersection
-            distance1 = np.abs(relative @ normal1)
-            distance2 = np.abs(relative @ normal2)
-            arm1 = (distance1 <= self.line_fit_band) & (distance1 <= distance2)
-            arm2 = (distance2 <= self.line_fit_band) & (distance2 < distance1)
-            if np.count_nonzero(arm1) < self.min_arm_support or np.count_nonzero(arm2) < self.min_arm_support:
+        fitted_lines = []
+        line_diagnostics = []
+        for line_index, direction in enumerate((direction1, direction2), start=1):
+            fitted_line, diagnostics = self._fit_centerline(
+                gray,
+                center,
+                direction,
+            )
+            line_diagnostics.append(diagnostics)
+            if fitted_line is None:
                 return {
                     **common,
+                    **self._flatten_line_diagnostics(line_diagnostics),
                     "accepted": False,
                     "failure_reason": (
-                        "insufficient pixels on one fitted cross arm: "
-                        f"{np.count_nonzero(arm1)}/{np.count_nonzero(arm2)}"
+                        f"line {line_index}: "
+                        f"{diagnostics.get('failure_reason', 'fit failed')}"
                     ),
                 }
-            offsets = []
-            for arm, normal in ((arm1, normal1), (arm2, normal2)):
-                arm_weights = weights[arm]
-                signed = (pixels[arm] - intersection) @ normal
-                offsets.append(float(np.average(signed, weights=arm_weights)))
-            delta = np.linalg.solve(normal_matrix, np.asarray(offsets))
-            intersection += delta
-            arm_masks = (arm1, arm2)
-            if float(np.linalg.norm(delta)) < 1e-4:
-                break
+            fitted_lines.append(fitted_line)
 
-        distance_from_center = float(np.linalg.norm(intersection - center))
-        if distance_from_center > self.radius * 0.75:
+        line1_point, line1_direction = fitted_lines[0]
+        line2_point, line2_direction = fitted_lines[1]
+        intersection_matrix = np.column_stack(
+            (line1_direction, -line2_direction)
+        )
+        if abs(float(np.linalg.det(intersection_matrix))) < 0.15:
             return {
                 **common,
+                **self._flatten_line_diagnostics(line_diagnostics),
+                "accepted": False,
+                "failure_reason": "fitted screen lines are nearly parallel",
+            }
+        line_parameters = np.linalg.solve(
+            intersection_matrix,
+            line2_point - line1_point,
+        )
+        intersection = line1_point + line_parameters[0] * line1_direction
+        distance_from_center = float(np.linalg.norm(intersection - center))
+        intersection_shift_gate = min(
+            CROSS_MAX_INTERSECTION_SHIFT_PX,
+            self.radius * 0.75,
+        )
+        if distance_from_center > intersection_shift_gate:
+            return {
+                **common,
+                **self._flatten_line_diagnostics(line_diagnostics),
                 "accepted": False,
                 "failure_reason": (
                     f"intersection shift {distance_from_center:.2f} px exceeds search gate"
                 ),
             }
-        arm1, arm2 = arm_masks
-        residuals = np.concatenate(
-            (
-                (pixels[arm1] - intersection) @ normal1,
-                (pixels[arm2] - intersection) @ normal2,
-            )
-        )
-        residual_weights = np.concatenate((weights[arm1], weights[arm2]))
         line_fit_rms = float(
-            np.sqrt(np.average(np.square(residuals), weights=residual_weights))
+            np.sqrt(
+                np.mean(
+                    [
+                        diagnostics["fit_rms_px"] ** 2
+                        for diagnostics in line_diagnostics
+                    ]
+                )
+            )
         )
         return {
             **common,
+            **self._flatten_line_diagnostics(line_diagnostics),
             "accepted": True,
             "x": float(intersection[0]),
             "y": float(intersection[1]),
             "distance_from_search_center_px": distance_from_center,
-            "line1_support_pixels": int(np.count_nonzero(arm1)),
-            "line2_support_pixels": int(np.count_nonzero(arm2)),
             "line_fit_rms_px": line_fit_rms,
         }
 
     def detect_four(self, frame: np.ndarray, search_centers) -> tuple[np.ndarray | None, list[dict]]:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Convert once per eye; all 8 profile remaps then preserve fractional
+        # bilinear gray levels without repeatedly copying the whole image.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
         centers = np.asarray(search_centers, dtype=np.float64).reshape(4, 2)
         diagnostics = []
         for corner_index, center in enumerate(centers):
@@ -917,8 +1412,21 @@ def process_pattern_video(
     return rows, corners_by_frame, poses, search_centers
 
 
-def crop_diagnostic_tile(frame, search_center, result, label, tile_size=DIAGNOSTIC_TILE_SIZE):
-    radius = max(3, int(result.get("search_radius_px", 20)))
+def subpixel_neighbor_pixels(x, y) -> tuple[tuple[int, int], ...]:
+    """Return the source pixels whose centers bound a floating-point position."""
+    x_values = sorted({int(math.floor(float(x))), int(math.ceil(float(x)))})
+    y_values = sorted({int(math.floor(float(y))), int(math.ceil(float(y)))})
+    return tuple((pixel_x, pixel_y) for pixel_y in y_values for pixel_x in x_values)
+
+
+def crop_diagnostic_tile(
+    frame,
+    search_center,
+    result,
+    label,
+    tile_size=DIAGNOSTIC_TILE_SIZE,
+):
+    radius = max(3, int(result.get("display_radius_px", DIAGNOSTIC_ROI_RADIUS_PX)))
     x, y = np.asarray(search_center, dtype=np.float64)
     center_x, center_y = int(round(x)), int(round(y))
     x0, y0 = center_x - radius, center_y - radius
@@ -927,16 +1435,43 @@ def crop_diagnostic_tile(frame, search_center, result, label, tile_size=DIAGNOST
     sx0, sy0 = max(0, x0), max(0, y0)
     sx1, sy1 = min(frame.shape[1], x1), min(frame.shape[0], y1)
     crop[sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = frame[sy0:sy1, sx0:sx1]
+
+    marker_style = result.get("marker_style", "cross")
+    expected_neighbor_count = 0
+    painted_neighbor_count = 0
+    if result.get("accepted") and marker_style == "subpixel_neighbors":
+        neighbors = subpixel_neighbor_pixels(result["x"], result["y"])
+        expected_neighbor_count = len(neighbors)
+        for source_x, source_y in neighbors:
+            crop_x, crop_y = source_x - x0, source_y - y0
+            if (
+                0 <= source_x < frame.shape[1]
+                and 0 <= source_y < frame.shape[0]
+                and 0 <= crop_x < crop.shape[1]
+                and 0 <= crop_y < crop.shape[0]
+            ):
+                crop[crop_y, crop_x] = (0, 0, 255)
+                painted_neighbor_count += 1
+
     tile = cv2.resize(crop, (tile_size, tile_size), interpolation=cv2.INTER_NEAREST)
     if result.get("accepted"):
-        scale = tile_size / float(2 * radius + 1)
-        px = int(round((result["x"] - x0) * scale))
-        py = int(round((result["y"] - y0) * scale))
-        arm = int(result.get("cross_arm_px", 5))
-        color = (0, 0, 255)
-        cv2.line(tile, (px - arm, py), (px + arm, py), color, 1, cv2.LINE_8)
-        cv2.line(tile, (px, py - arm), (px, py + arm), color, 1, cv2.LINE_8)
-        status = f"OK ({result['x']:.2f},{result['y']:.2f})"
+        if marker_style == "cross":
+            scale = tile_size / float(2 * radius + 1)
+            # Invert OpenCV's pixel-center resize mapping so the overlay is
+            # centered on the same enlarged source-pixel block as the image.
+            px = int(round((result["x"] - x0 + 0.5) * scale - 0.5))
+            py = int(round((result["y"] - y0 + 0.5) * scale - 0.5))
+            arm = int(result.get("cross_arm_px", 5))
+            color = (0, 0, 255)
+            cv2.line(tile, (px - arm, py), (px + arm, py), color, 1, cv2.LINE_8)
+            cv2.line(tile, (px, py - arm), (px, py + arm), color, 1, cv2.LINE_8)
+        status_word = (
+            "CLIPPED"
+            if marker_style == "subpixel_neighbors"
+            and painted_neighbor_count < expected_neighbor_count
+            else "OK"
+        )
+        status = f"{status_word} ({result['x']:.2f},{result['y']:.2f})"
     else:
         status = "MISSING"
     cv2.rectangle(tile, (0, 0), (tile_size - 1, 22), (0, 0, 0), -1)
@@ -960,15 +1495,16 @@ def white_diagnostic_image(
     left_results,
     right_results,
     frame_index,
-    search_radius,
+    display_radius,
     cross_arm,
 ):
     def panel(frame, side, results):
         tiles = []
         for corner_index, (center, result) in enumerate(zip(search_centers[side], results)):
             result = dict(result)
-            result["search_radius_px"] = search_radius
+            result["display_radius_px"] = display_radius
             result["cross_arm_px"] = cross_arm
+            result["marker_style"] = "subpixel_neighbors"
             tiles.append(
                 crop_diagnostic_tile(
                     frame,
@@ -998,7 +1534,7 @@ def pattern_diagnostic_image(
     search_centers,
     corners,
     frame_index,
-    search_radius,
+    display_radius,
     cross_arm,
 ):
     """Build the same 2x2-per-eye view as the white diagnostic panel."""
@@ -1009,7 +1545,7 @@ def pattern_diagnostic_image(
         for corner_index, center in enumerate(search_centers[side]):
             result = {
                 "accepted": points is not None,
-                "search_radius_px": search_radius,
+                "display_radius_px": display_radius,
                 "cross_arm_px": cross_arm,
             }
             if points is not None:
@@ -1105,7 +1641,9 @@ def process_white_video(
     answer,
     search_centers,
     pattern_corners,
-    diagnostic_video,
+    pattern_diagnostic_video,
+    gt_diagnostic_video,
+    diagnostic_roi_radius,
     cross_arm,
     progress_every,
 ):
@@ -1123,7 +1661,24 @@ def process_white_video(
         raise RuntimeError(f"Could not reopen pattern video: {pattern_video}")
     distance = parse_distance(white_video)
     fps = float(white_capture.get(cv2.CAP_PROP_FPS))
-    writer = open_diagnostic_writer(diagnostic_video, fps, (960, 960))
+    roi_specs = {
+        side: build_aligned_roi_spec(
+            search_centers[side],
+            diagnostic_roi_radius,
+        )
+        for side in ("left", "right")
+    }
+    aligned_frame_size = (ALIGNED_ROI_OUTPUT_SIZE_PX * 2, ALIGNED_ROI_OUTPUT_SIZE_PX)
+    pattern_writer = open_aligned_roi_writer(
+        pattern_diagnostic_video,
+        fps,
+        aligned_frame_size,
+    )
+    gt_writer = open_aligned_roi_writer(
+        gt_diagnostic_video,
+        fps,
+        aligned_frame_size,
+    )
     try:
         for frame_index in range(requested_frames):
             white_ok, frame = white_capture.read()
@@ -1145,6 +1700,15 @@ def process_white_video(
                     "status": "FAILED",
                     "failure_reason": "",
                     "detected_corner_count": 0,
+                    "pattern_diagnostic_video": str(pattern_diagnostic_video),
+                    "gt_diagnostic_video": str(gt_diagnostic_video),
+                    "left_diagnostic_roi_x_px": roi_specs["left"].x0,
+                    "left_diagnostic_roi_y_px": roi_specs["left"].y0,
+                    "left_diagnostic_roi_size_source_px": roi_specs["left"].size_px,
+                    "right_diagnostic_roi_x_px": roi_specs["right"].x0,
+                    "right_diagnostic_roi_y_px": roi_specs["right"].y0,
+                    "right_diagnostic_roi_size_source_px": roi_specs["right"].size_px,
+                    "diagnostic_roi_tile_size_output_px": ALIGNED_ROI_OUTPUT_SIZE_PX,
                 }
             )
             left, right = split_sbs(frame)
@@ -1174,7 +1738,7 @@ def process_white_video(
                     cross_preview_path is None
                     and isinstance(gt_detector, CrossIntersectionDetector)
                 ):
-                    cross_preview_path = diagnostic_video.parent / (
+                    cross_preview_path = gt_diagnostic_video.parent / (
                         f"{white_video.stem}_cross_intersection_F{frame_index:03d}.jpg"
                     )
                     save_cross_intersection_preview(
@@ -1210,33 +1774,38 @@ def process_white_video(
                 ]
                 row["failure_reason"] = "; ".join(failures)
 
-            diagnostic = white_diagnostic_image(
-                left,
-                right,
-                search_centers,
-                left_results,
-                right_results,
-                frame_index,
-                gt_detector.radius,
-                cross_arm,
-            )
             if pattern_ok:
                 pattern_left, pattern_right = split_sbs(pattern_frame)
             else:
                 pattern_left = np.zeros_like(left)
                 pattern_right = np.zeros_like(right)
-            pattern_diagnostic = pattern_diagnostic_image(
-                pattern_left,
-                pattern_right,
-                search_centers,
-                pattern_corners.get(frame_index),
-                frame_index,
-                gt_detector.radius,
-                cross_arm,
-            )
-            stacked = np.vstack((pattern_diagnostic, diagnostic))
-            writer.write(stacked)
-            row["diagnostic_video"] = str(diagnostic_video)
+            pattern_points = pattern_corners.get(frame_index) or {}
+            pattern_tiles = []
+            gt_tiles = []
+            for side, pattern_image, gt_image, gt_points in (
+                ("left", pattern_left, left, left_points),
+                ("right", pattern_right, right, right_points),
+            ):
+                pattern_tiles.append(
+                    make_aligned_roi_frame(
+                        pattern_image,
+                        roi_specs[side],
+                        pattern_points.get(side),
+                        ALIGNED_ROI_OUTPUT_SIZE_PX,
+                        cross_arm,
+                    )
+                )
+                gt_tiles.append(
+                    make_aligned_roi_frame(
+                        gt_image,
+                        roi_specs[side],
+                        gt_points,
+                        ALIGNED_ROI_OUTPUT_SIZE_PX,
+                        cross_arm,
+                    )
+                )
+            pattern_writer.write(np.hstack(pattern_tiles))
+            gt_writer.write(np.hstack(gt_tiles))
             if cross_preview_path is not None:
                 row["cross_preview_jpg"] = str(cross_preview_path)
             row["processing_time_ms"] = (time.perf_counter() - started) * 1000.0
@@ -1244,7 +1813,8 @@ def process_white_video(
             if progress_every > 0 and (frame_index + 1) % progress_every == 0:
                 print(f"  White GT F{frame_index:03d} complete")
     finally:
-        writer.release()
+        pattern_writer.release()
+        gt_writer.release()
         pattern_capture.release()
         white_capture.release()
     if not corners_by_frame:
@@ -1493,6 +2063,50 @@ def build_comparison_rows(
                     ),
                     ("line1_support_pixels", "cross_line1_support_pixels"),
                     ("line2_support_pixels", "cross_line2_support_pixels"),
+                    ("line1_support_profiles", "cross_line1_support_profiles"),
+                    ("line2_support_profiles", "cross_line2_support_profiles"),
+                    (
+                        "line1_negative_profiles",
+                        "cross_line1_negative_arm_profiles",
+                    ),
+                    (
+                        "line1_positive_profiles",
+                        "cross_line1_positive_arm_profiles",
+                    ),
+                    (
+                        "line2_negative_profiles",
+                        "cross_line2_negative_arm_profiles",
+                    ),
+                    (
+                        "line2_positive_profiles",
+                        "cross_line2_positive_arm_profiles",
+                    ),
+                    ("line1_fit_rms_px", "cross_line1_fit_rms_px"),
+                    ("line2_fit_rms_px", "cross_line2_fit_rms_px"),
+                    (
+                        "line1_width_median_px",
+                        "cross_line1_width_median_px",
+                    ),
+                    (
+                        "line2_width_median_px",
+                        "cross_line2_width_median_px",
+                    ),
+                    (
+                        "line1_contrast_median_gray",
+                        "cross_line1_contrast_median_gray",
+                    ),
+                    (
+                        "line2_contrast_median_gray",
+                        "cross_line2_contrast_median_gray",
+                    ),
+                    (
+                        "line1_direction_delta_deg",
+                        "cross_line1_direction_delta_deg",
+                    ),
+                    (
+                        "line2_direction_delta_deg",
+                        "cross_line2_direction_delta_deg",
+                    ),
                     ("line_fit_rms_px", "cross_line_fit_rms_px"),
                 ):
                     corner_row[target] = diagnostic.get(source)
@@ -2133,10 +2747,13 @@ def main() -> int:
                 answer,
                 args.progress_every,
             )
-            diagnostic_video = diagnostic_video_dir / (
-                pattern_video.stem + "_vs_white_pixel_gt_diagnostic.mp4"
+            pattern_diagnostic_video = diagnostic_video_dir / (
+                pattern_video.stem + "_pattern_aligned_roi.avi"
             )
-            print(f"Phase 2/2: {args.gt_mode} GT and stacked diagnostic MP4...")
+            gt_diagnostic_video = diagnostic_video_dir / (
+                pattern_video.stem + "_gt_aligned_roi.avi"
+            )
+            print(f"Phase 2/2: {args.gt_mode} GT and aligned ROI AVI pair...")
             (
                 white_rows,
                 white_corners,
@@ -2154,7 +2771,9 @@ def main() -> int:
                 answer,
                 search_centers,
                 pattern_corners,
-                diagnostic_video,
+                pattern_diagnostic_video,
+                gt_diagnostic_video,
+                args.diagnostic_roi_radius_px,
                 args.cross_arm_px,
                 args.progress_every,
             )
@@ -2218,7 +2837,9 @@ def main() -> int:
             all_comparison_rows.extend(comparison_rows)
             all_corner_rows.extend(corner_rows)
             pair_summaries.append(pair_summary)
-            diagnostic_paths.append(diagnostic_video)
+            diagnostic_paths.extend(
+                (pattern_diagnostic_video, gt_diagnostic_video)
+            )
             if cross_preview_path is not None:
                 cross_preview_paths.append(cross_preview_path)
                 print(f"Cross preview JPG: {cross_preview_path}")
@@ -2283,15 +2904,76 @@ def main() -> int:
         {"parameter": "white_blob_area_min_px", "value": args.white_min_area_px},
         {"parameter": "white_blob_area_max_px", "value": args.white_max_area_px},
         {"parameter": "cross_line_polarity", "value": CROSS_LINE_POLARITY},
-        {"parameter": "cross_threshold_ratio", "value": CROSS_THRESHOLD_RATIO},
         {
-            "parameter": "cross_min_contrast_gray",
-            "value": CROSS_MIN_CONTRAST_GRAY,
+            "parameter": "cross_profile_core_exclusion_px",
+            "value": CROSS_PROFILE_CORE_EXCLUSION_PX,
         },
-        {"parameter": "cross_line_fit_band_px", "value": CROSS_LINE_FIT_BAND_PX},
         {
-            "parameter": "cross_min_arm_support_pixels",
-            "value": CROSS_MIN_ARM_SUPPORT_PIXELS,
+            "parameter": "cross_profile_max_arm_px",
+            "value": CROSS_PROFILE_MAX_ARM_PX,
+        },
+        {
+            "parameter": "cross_profile_along_step_px",
+            "value": CROSS_PROFILE_ALONG_STEP_PX,
+        },
+        {
+            "parameter": "cross_profile_half_width_px",
+            "value": CROSS_PROFILE_HALF_WIDTH_PX,
+        },
+        {
+            "parameter": "cross_profile_sample_step_px",
+            "value": CROSS_PROFILE_SAMPLE_STEP_PX,
+        },
+        {
+            "parameter": "cross_profile_outer_band_start_px",
+            "value": CROSS_PROFILE_OUTER_BAND_START_PX,
+        },
+        {
+            "parameter": "cross_profile_center_search_px",
+            "value": CROSS_PROFILE_CENTER_SEARCH_PX,
+        },
+        {
+            "parameter": "cross_profile_edge_level_ratio",
+            "value": CROSS_PROFILE_EDGE_LEVEL_RATIO,
+        },
+        {
+            "parameter": "cross_profile_min_contrast_gray",
+            "value": CROSS_PROFILE_MIN_CONTRAST_GRAY,
+        },
+        {
+            "parameter": "cross_profile_noise_sigma_multiplier",
+            "value": CROSS_PROFILE_NOISE_SIGMA_MULTIPLIER,
+        },
+        {
+            "parameter": "cross_profile_width_limits_px",
+            "value": (
+                f"{CROSS_PROFILE_MIN_WIDTH_PX:g}.."
+                f"{CROSS_PROFILE_MAX_WIDTH_PX:g}"
+            ),
+        },
+        {
+            "parameter": "cross_min_profile_count",
+            "value": CROSS_MIN_PROFILE_COUNT,
+        },
+        {
+            "parameter": "cross_min_side_profile_count",
+            "value": CROSS_MIN_SIDE_PROFILE_COUNT,
+        },
+        {
+            "parameter": "cross_max_direction_change_deg",
+            "value": CROSS_MAX_DIRECTION_CHANGE_DEG,
+        },
+        {
+            "parameter": "cross_max_line_fit_rms_px",
+            "value": CROSS_MAX_LINE_FIT_RMS_PX,
+        },
+        {
+            "parameter": "cross_max_width_mad_px",
+            "value": CROSS_MAX_WIDTH_MAD_PX,
+        },
+        {
+            "parameter": "cross_max_intersection_shift_px",
+            "value": CROSS_MAX_INTERSECTION_SHIFT_PX,
         },
         {"parameter": "cross_preview_arm_px", "value": CROSS_PREVIEW_ARM_PX},
         {
@@ -2302,10 +2984,27 @@ def main() -> int:
             "parameter": "cross_preview_jpeg_quality",
             "value": CROSS_PREVIEW_JPEG_QUALITY,
         },
+        {
+            "parameter": "diagnostic_roi_margin_each_side_source_px",
+            "value": args.diagnostic_roi_radius_px,
+        },
         {"parameter": "diagnostic_cross_arm_px", "value": args.cross_arm_px},
         {"parameter": "diagnostic_cross_line_width_px", "value": 1},
-        {"parameter": "diagnostic_video_width_px", "value": 960},
-        {"parameter": "diagnostic_video_height_px", "value": 960},
+        {
+            "parameter": "diagnostic_video_width_px",
+            "value": ALIGNED_ROI_OUTPUT_SIZE_PX * 2,
+        },
+        {
+            "parameter": "diagnostic_video_height_px",
+            "value": ALIGNED_ROI_OUTPUT_SIZE_PX,
+        },
+        {"parameter": "diagnostic_video_layout", "value": "left ROI | right ROI"},
+        {"parameter": "diagnostic_video_container", "value": "AVI"},
+        {"parameter": "diagnostic_video_preferred_codec", "value": "FFV1 lossless"},
+        {"parameter": "diagnostic_resize_interpolation", "value": "Lanczos4"},
+        {"parameter": "diagnostic_bilateral_diameter_px", "value": BILATERAL_DIAMETER_PX},
+        {"parameter": "diagnostic_bilateral_sigma_color", "value": BILATERAL_SIGMA_COLOR},
+        {"parameter": "diagnostic_bilateral_sigma_space", "value": BILATERAL_SIGMA_SPACE},
         {
             "parameter": "pattern_ransac_reprojection_threshold_px",
             "value": PATTERN_RANSAC_REPROJECTION_THRESHOLD_PX,
@@ -2318,6 +3017,22 @@ def main() -> int:
         },
         {"parameter": "input_path", "value": str(input_path)},
         {"parameter": "calibration_file", "value": str(calibration)},
+        {
+            "parameter": "aligned diagnostic ROI",
+            "value": (
+                "Pattern and GT are separate AVI files. Each eye reuses the "
+                "same fixed source-pixel crop derived from the temporal Pattern "
+                "corner median; the output layout is left 320x320 then right "
+                "320x320."
+            ),
+        },
+        {
+            "parameter": "diagnostic enlargement",
+            "value": (
+                "each source ROI is bilateral-filtered, enlarged to 320x320 "
+                "with Lanczos4, then one-pixel red subpixel crosses are drawn"
+            ),
+        },
         {
             "parameter": "batch pairing",
             "value": "*_pattern video paired with *_white in the same folder",
@@ -2340,8 +3055,10 @@ def main() -> int:
             "parameter": "GT point detector",
             "value": (
                 "white_blob_centroid uses the background-subtracted intensity-weighted "
-                "center of a bright component; cross_intersection fits the two local "
-                "screen-line centerlines and uses their subpixel intersection"
+                "center of a bright component; cross_intersection excludes the crossing "
+                "core, measures subpixel half-height edge midpoints on both sides of "
+                "each arm, robustly fits two local centerlines with small direction "
+                "corrections, and intersects those fitted lines"
             ),
         },
         {
@@ -2360,7 +3077,9 @@ def main() -> int:
             "parameter": "diagnostic MP4",
             "value": (
                 f"top=ArUco subpixel corners, bottom={args.gt_mode} points; "
-                "2x2 enlarged corner ROIs per eye; red cross line width=1 px"
+                f"2x2 enlarged +/-{args.diagnostic_roi_radius_px} px corner ROIs per eye; "
+                "pattern points use a red cross; each GT point colors its bounding "
+                "floor/ceil source pixels red before nearest-neighbor enlargement"
             ),
         },
         {
@@ -2431,8 +3150,8 @@ def main() -> int:
     add_distance_charts_to_xlsx(output, distance_summary, sheet_index=2)
     print(f"Excel: {output}")
     print("Charts sheet: Distance Charts (set as the active sheet when Excel opens)")
-    print(f"Diagnostic MP4 folder: {diagnostic_video_dir}")
-    print(f"Diagnostic MP4 files written: {len(diagnostic_paths)}")
+    print(f"Aligned ROI AVI folder: {diagnostic_video_dir}")
+    print(f"Aligned Pattern/GT ROI AVI files written: {len(diagnostic_paths)}")
     if args.gt_mode == "cross_intersection":
         print(f"Cross preview JPG files written: {len(cross_preview_paths)}")
     if batch_errors:

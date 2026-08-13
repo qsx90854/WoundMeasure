@@ -58,7 +58,7 @@ _WOUND_DETECTOR_ERROR_LOGGED = False
 # ==================== 全局設定區 ====================
 VIDEO_PATH            = r"HBVCAM_4M2214HD-2-v11"  # 預設影片位置（UI 可另選）
 RECORD_SAVE_DIR       = "HBVCAM_4M2214HD-2-v11"   # 錄影儲存資料夾路徑
-CAMERA_INDEX          = 2                          # Windows 相機裝置索引
+CAMERA_INDEX          = 0                          # Windows 相機裝置索引
 CAMERA_BACKEND        = cv2.CAP_DSHOW              # 避開 MSMF；實際 backend/FOURCC 會印出
 CAMERA_FPS            = 30
 STEREO_REFERENCE_FRAME_INDEX = 50                 # 相容舊介面；ROI 版目前會搜尋全部幀

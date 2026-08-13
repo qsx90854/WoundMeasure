@@ -1,0 +1,6 @@
+﻿distance_cm,angle_deg,requested_frames,marker_total_frames,marker_qualified_frames,marker_qualified_percent,sift_total_frames,sift_qualified_frames,sift_qualified_percent,sift_joint_refined_frames,sift_joint_refined_percent,sift_joint_refined_qualified_frames,sift_joint_refined_qualified_percent,rotation_error_threshold_deg,baseline_error_threshold_percent
+16.3,15.0,1800,1800,4,0.2222222222222222,1800,151,8.38888888888889,1224,68.0,151,8.38888888888889,2.0,5.0
+20.0,15.0,1800,1800,3,0.16666666666666669,1800,89,4.944444444444445,1087,60.38888888888889,87,4.833333333333333,2.0,5.0
+25.0,15.0,1800,1800,0,0.0,1800,27,1.5,1461,81.16666666666667,27,1.5,2.0,5.0
+30.0,15.0,1800,1800,0,0.0,1800,40,2.2222222222222223,1328,73.77777777777777,40,2.2222222222222223,2.0,5.0
+35.0,15.0,1800,1800,0,0.0,1800,161,8.944444444444443,1263,70.16666666666667,161,8.944444444444443,2.0,5.0

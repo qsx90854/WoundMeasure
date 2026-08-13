@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "calibration_type": "monocular_pinhole",
+  "calibration_time": "2026-08-12T10:32:33+08:00",
+  "image_size": {
+    "width": 1920,
+    "height": 1080
+  },
+  "checkerboard": {
+    "inner_corners": {
+      "columns": 10,
+      "rows": 16
+    },
+    "square_size_mm": 15.0
+  },
+  "rms_reprojection_error_px": 0.31150649187062224,
+  "mean_reprojection_error_px": 0.2493376558025678,
+  "camera_matrix": [
+    [
+      1575.573149280589,
+      0.0,
+      968.5710853495918
+    ],
+    [
+      0.0,
+      1576.4622152513539,
+      538.2620409833985
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "dist_coeffs": [
+    0.1226717273632201,
+    -0.4212707292087085,
+    0.00013829517261998894,
+    -0.00010591215005151296,
+    0.28200802864635305
+  ],
+  "optimal_camera_matrix": {
+    "alpha": 0.0,
+    "matrix": [
+      [
+        1578.78549168026,
+        0.0,
+        968.8923052865321
+      ],
+      [
+        0.0,
+        1592.0275694059883,
+        538.353544208476
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "valid_roi": [
+      0,
+      0,
+      1919,
+      1079
+    ]
+  },
+  "images": {
+    "source_directory": "D:\\Lightglue\\lg_env\\monocular_calibration_images",
+    "found_count": 18,
+    "used_count": 18,
+    "rejected_count": 0,
+    "used": [
+      {
+        "image": "mono_20260812_102628_914140.png",
+        "rms_reprojection_error_px": 0.2236606925725937,
+        "mean_reprojection_error_px": 0.1980525404214859
+      },
+      {
+        "image": "mono_20260812_102633_608401.png",
+        "rms_reprojection_error_px": 0.26952698826789856,
+        "mean_reprojection_error_px": 0.23652777075767517
+      },
+      {
+        "image": "mono_20260812_102637_806135.png",
+        "rms_reprojection_error_px": 0.2197754830121994,
+        "mean_reprojection_error_px": 0.19441670179367065
+      },
+      {
+        "image": "mono_20260812_102641_286046.png",
+        "rms_reprojection_error_px": 0.28952598571777344,
+        "mean_reprojection_error_px": 0.23568563163280487
+      },
+      {
+        "image": "mono_20260812_102647_444709.png",
+        "rms_reprojection_error_px": 0.2760434150695801,
+        "mean_reprojection_error_px": 0.23293475806713104
+      },
+      {
+        "image": "mono_20260812_102649_964466.png",
+        "rms_reprojection_error_px": 0.26547184586524963,
+        "mean_reprojection_error_px": 0.23001925647258759
+      },
+      {
+        "image": "mono_20260812_102658_090734.png",
+        "rms_reprojection_error_px": 0.34951990842819214,
+        "mean_reprojection_error_px": 0.27708157896995544
+      },
+      {
+        "image": "mono_20260812_102705_212997.png",
+        "rms_reprojection_error_px": 0.2892008125782013,
+        "mean_reprojection_error_px": 0.23481544852256775
+      },
+      {
+        "image": "mono_20260812_102709_431049.png",
+        "rms_reprojection_error_px": 0.39886143803596497,
+        "mean_reprojection_error_px": 0.3052379786968231
+      },
+      {
+        "image": "mono_20260812_102714_797906.png",
+        "rms_reprojection_error_px": 0.2578270733356476,
+        "mean_reprojection_error_px": 0.2211339920759201
+      },
+      {
+        "image": "mono_20260812_102717_456506.png",
+        "rms_reprojection_error_px": 0.3632189929485321,
+        "mean_reprojection_error_px": 0.27359333634376526
+      },
+      {
+        "image": "mono_20260812_102722_051530.png",
+        "rms_reprojection_error_px": 0.29857176542282104,
+        "mean_reprojection_error_px": 0.24181921780109406
+      },
+      {
+        "image": "mono_20260812_102729_704031.png",
+        "rms_reprojection_error_px": 0.32098135352134705,
+        "mean_reprojection_error_px": 0.26917964220046997
+      },
+      {
+        "image": "mono_20260812_102738_791946.png",
+        "rms_reprojection_error_px": 0.319959819316864,
+        "mean_reprojection_error_px": 0.24792304635047913
+      },
+      {
+        "image": "mono_20260812_102741_652405.png",
+        "rms_reprojection_error_px": 0.2868756055831909,
+        "mean_reprojection_error_px": 0.228932186961174
+      },
+      {
+        "image": "mono_20260812_102750_413693.png",
+        "rms_reprojection_error_px": 0.2745307683944702,
+        "mean_reprojection_error_px": 0.23717615008354187
+      },
+      {
+        "image": "mono_20260812_102756_403080.png",
+        "rms_reprojection_error_px": 0.4450502097606659,
+        "mean_reprojection_error_px": 0.33703646063804626
+      },
+      {
+        "image": "mono_20260812_102811_207868.png",
+        "rms_reprojection_error_px": 0.3627791702747345,
+        "mean_reprojection_error_px": 0.2865121066570282
+      }
+    ],
+    "rejected": []
+  }
+}

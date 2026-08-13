@@ -3,7 +3,12 @@
 Controls
 --------
 S: Save the current full-resolution frame.
+- or [: Lower the focus-peaking threshold (show more edges).
++ or ]: Raise the focus-peaking threshold (show fewer edges).
+Drag the preview window borders or corners to resize it with the mouse.
 Q or Esc: Quit.
+
+Sharp, high-contrast edges are highlighted in red in the preview only.
 """
 
 from __future__ import annotations
@@ -18,13 +23,16 @@ from pathlib import Path
 import cv2
 
 
-OUTPUT_DIR_NAME = "HBVCAM_4M2214HD-2-v11"
+OUTPUT_DIR_NAME = "HBVCAM_4M2214HD-2-v11_20260811"
 DEFAULT_CAMERA_INDEX = 0
 DEFAULT_WIDTH = 3840
 DEFAULT_HEIGHT = 1080
 DEFAULT_FPS = 30
-PREVIEW_MAX_WIDTH = 900
-WINDOW_NAME = "HBVCAM capture - S: save, Q/Esc: quit"
+PREVIEW_MAX_WIDTH = 3840
+FOCUS_PEAKING_THRESHOLD = 40  # 1-255; lower values highlight more edges.
+FOCUS_PEAKING_THRESHOLD_STEP = 5
+FOCUS_PEAKING_COLOR = (0, 0, 255)  # BGR: red
+WINDOW_NAME = "HBVCAM capture - S: save, -/+: peaking, Q/Esc: quit"
 
 
 def parse_args() -> argparse.Namespace:
@@ -167,7 +175,7 @@ class LatestFrameReader:
         self.thread.join(timeout=2.0)
 
 
-def make_preview(frame, capture_fps: float):
+def make_preview(frame, capture_fps: float, focus_peaking_threshold: int):
     height, width = frame.shape[:2]
     if width <= PREVIEW_MAX_WIDTH:
         preview = frame.copy()
@@ -179,9 +187,19 @@ def make_preview(frame, capture_fps: float):
             interpolation=cv2.INTER_LINEAR,
         )
 
+    # Highlight high-frequency edges to make manual focusing easier. This is
+    # applied only to the preview; the full-resolution saved frame is unchanged.
+    gray = cv2.cvtColor(preview, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    edge_strength = cv2.convertScaleAbs(
+        cv2.Laplacian(gray, cv2.CV_16S, ksize=3)
+    )
+    peaking_mask = edge_strength >= focus_peaking_threshold
+    preview[peaking_mask] = FOCUS_PEAKING_COLOR
+
     cv2.putText(
         preview,
-        "S: save image    Q / Esc: quit",
+        "S: save    - / [: more peaks    + / ]: fewer peaks    Q / Esc: quit",
         (20, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.9,
@@ -196,6 +214,16 @@ def make_preview(frame, capture_fps: float):
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        preview,
+        f"Focus peaking: red    Threshold: {focus_peaking_threshold}",
+        (20, 112),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        FOCUS_PEAKING_COLOR,
         2,
         cv2.LINE_AA,
     )
@@ -243,8 +271,20 @@ def main() -> int:
         capture.release()
         return 1
 
+    # Allow mouse resizing by dragging the preview window's borders or corners.
+    # The camera frame and saved image resolution are not changed.
+    window_source_width = actual_width if actual_width > 0 else args.width
+    window_source_height = actual_height if actual_height > 0 else args.height
+    initial_window_width = min(window_source_width, PREVIEW_MAX_WIDTH)
+    initial_window_height = round(
+        window_source_height * initial_window_width / window_source_width
+    )
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO)
+    cv2.resizeWindow(WINDOW_NAME, initial_window_width, initial_window_height)
+
     last_frame_number = -1
     current_frame = None
+    focus_peaking_threshold = FOCUS_PEAKING_THRESHOLD
     try:
         while True:
             frame, frame_number, capture_fps, failed_reads = reader.latest(
@@ -253,14 +293,29 @@ def main() -> int:
             if frame is not None:
                 current_frame = frame
                 last_frame_number = frame_number
-                cv2.imshow(WINDOW_NAME, make_preview(frame, capture_fps))
+                cv2.imshow(
+                    WINDOW_NAME,
+                    make_preview(frame, capture_fps, focus_peaking_threshold),
+                )
             elif failed_reads >= 30:
                 print("[錯誤] 連續 30 次無法讀取相機畫面，程式即將結束。")
                 return 1
 
             key = cv2.waitKey(5) & 0xFF
 
-            if key in (ord("s"), ord("S")):
+            if key in (ord("-"), ord("_"), ord("["), ord("{")):
+                focus_peaking_threshold = max(
+                    1,
+                    focus_peaking_threshold - FOCUS_PEAKING_THRESHOLD_STEP,
+                )
+                print(f"Focus-peaking threshold: {focus_peaking_threshold}")
+            elif key in (ord("+"), ord("="), ord("]"), ord("}")):
+                focus_peaking_threshold = min(
+                    255,
+                    focus_peaking_threshold + FOCUS_PEAKING_THRESHOLD_STEP,
+                )
+                print(f"Focus-peaking threshold: {focus_peaking_threshold}")
+            elif key in (ord("s"), ord("S")):
                 if current_frame is None:
                     print("[警告] 尚未取得可儲存的畫面。")
                     continue

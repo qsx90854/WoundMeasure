@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "pattern_type": "aruco_with_corner_touching_blocks",
+  "dictionary": "DICT_4X4_100",
+  "aruco_id": 5,
+  "border_bits": 1,
+  "dpi": 1200,
+  "image_size_px": [
+    579,
+    579
+  ],
+  "target_size_mm": [
+    12.25,
+    12.25
+  ],
+  "coordinate_system": "origin at target top-left; +X right, +Y down",
+  "central_aruco": {
+    "top_left_mm": [
+      2.0,
+      2.0
+    ],
+    "size_mm": [
+      8.25,
+      8.25
+    ],
+    "corners_mm": [
+      [
+        2.0,
+        2.0
+      ],
+      [
+        10.25,
+        2.0
+      ],
+      [
+        10.25,
+        10.25
+      ],
+      [
+        2.0,
+        10.25
+      ]
+    ]
+  },
+  "auxiliary_corner_blocks": {
+    "top_left": {
+      "top_left_mm": [
+        0.4,
+        0.4
+      ],
+      "size_mm": [
+        1.6,
+        1.6
+      ],
+      "center_mm": [
+        1.2000000000000002,
+        1.2000000000000002
+      ],
+      "corners_mm": [
+        [
+          0.4,
+          0.4
+        ],
+        [
+          2.0,
+          0.4
+        ],
+        [
+          2.0,
+          2.0
+        ],
+        [
+          0.4,
+          2.0
+        ]
+      ]
+    },
+    "top_right": {
+      "top_left_mm": [
+        10.25,
+        0.4
+      ],
+      "size_mm": [
+        1.6,
+        1.6
+      ],
+      "center_mm": [
+        11.05,
+        1.2000000000000002
+      ],
+      "corners_mm": [
+        [
+          10.25,
+          0.4
+        ],
+        [
+          11.85,
+          0.4
+        ],
+        [
+          11.85,
+          2.0
+        ],
+        [
+          10.25,
+          2.0
+        ]
+      ]
+    },
+    "bottom_right": {
+      "top_left_mm": [
+        10.25,
+        10.25
+      ],
+      "size_mm": [
+        1.6,
+        1.6
+      ],
+      "center_mm": [
+        11.05,
+        11.05
+      ],
+      "corners_mm": [
+        [
+          10.25,
+          10.25
+        ],
+        [
+          11.85,
+          10.25
+        ],
+        [
+          11.85,
+          11.85
+        ],
+        [
+          10.25,
+          11.85
+        ]
+      ]
+    },
+    "bottom_left": {
+      "top_left_mm": [
+        0.4,
+        10.25
+      ],
+      "size_mm": [
+        1.6,
+        1.6
+      ],
+      "center_mm": [
+        1.2000000000000002,
+        11.05
+      ],
+      "corners_mm": [
+        [
+          0.4,
+          10.25
+        ],
+        [
+          2.0,
+          10.25
+        ],
+        [
+          2.0,
+          11.85
+        ],
+        [
+          0.4,
+          11.85
+        ]
+      ]
+    }
+  },
+  "important": "The corner-touching blocks are not part of the ArUco code. Detect and refine their extra geometry separately if it is to improve pose precision.",
+  "print_instruction": "Print at 100% / actual size; disable scaling."
+}

@@ -12,7 +12,7 @@ import numpy as np
 
 
 DEFAULT_IMAGE_DIR = "monocular_calibration_images"
-DEFAULT_OUTPUT_JSON = "monocular_calibration_result.json"
+DEFAULT_OUTPUT_JSON = "monocular_calibration_result_F5_0_20260812_2.json"
 DEFAULT_BOARD_COLS = 10
 DEFAULT_BOARD_ROWS = 16
 DEFAULT_SQUARE_SIZE_MM = 15.0

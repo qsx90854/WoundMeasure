@@ -1,0 +1,2 @@
+﻿distance_cm,angle_deg,requested_frames,marker_total_frames,marker_qualified_frames,marker_qualified_percent,sift_total_frames,sift_qualified_frames,sift_qualified_percent,sift_joint_refined_frames,sift_joint_refined_percent,sift_joint_refined_qualified_frames,sift_joint_refined_qualified_percent,rotation_error_threshold_deg,baseline_error_threshold_percent
+16.3,15.0,300,300,1,0.33333333333333337,300,9,3.0,253,84.33333333333334,9,3.0,2.0,5.0
