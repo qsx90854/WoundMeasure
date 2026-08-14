@@ -26,7 +26,10 @@ from matplotlib.widgets import RadioButtons, Button, CheckButtons, TextBox
 import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
 from Algorithm import camera_preprocess as camera_algo
-from Algorithm import video_pose_analysis as video_pose_algo
+# Isolated temporal RT implementation; the original video_pose_analysis.py is
+# intentionally retained unchanged for direct A/B fallback.
+#from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
+from Algorithm import video_pose_analysis_temporal_unified as video_pose_algo
 from Algorithm.perf_timer import StageTimer
 from Algorithm.specular_detection import (
     compute_specular_mask_bgr_wound_adaptive,
@@ -87,7 +90,7 @@ ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (m
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
 DEFAULT_WOUND_HEIGHT_OFFSET_MM = 10.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
-MIN_BASELINE_MM       = 8.0                        # 最小基準線限制 (mm)
+MIN_BASELINE_MM       = 35.0#8.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
 ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
