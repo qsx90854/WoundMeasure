@@ -29,7 +29,7 @@ from Algorithm import camera_preprocess as camera_algo
 # Isolated temporal RT implementation; the original video_pose_analysis.py is
 # intentionally retained unchanged for direct A/B fallback.
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
-from Algorithm import video_pose_analysis_temporal_unified as video_pose_algo
+from Algorithm import video_pose_analysis_temporal_unified_pattern_guided_local_window as video_pose_algo
 from Algorithm.perf_timer import StageTimer
 from Algorithm.specular_detection import (
     compute_specular_mask_bgr_wound_adaptive,
@@ -658,6 +658,40 @@ def preprocess_gray(gray_img, enable_clahe=True):
 def compute_global_plane(imgA_gray, K_L, marker_size_mm):
     return aruco_algo.compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print)
 
+
+def compute_marker_pose_plane(valid_poses, frame_idx, reference_normal=None):
+    """Return the anchor-marker z=0 plane in the selected camera frame.
+
+    ``valid_poses[frame_idx]`` follows the temporal analyzer convention
+    T_camera<-anchor_marker.  The marker center is therefore ``t`` and its
+    plane normal is the third column of ``R``.  Align the sign with the legacy
+    plane when available so switching the display mode cannot invert the wound
+    height sign.
+    """
+    if not isinstance(valid_poses, dict):
+        return None, None
+    pose = valid_poses.get(int(frame_idx))
+    if pose is None or len(pose) != 2:
+        return None, None
+    try:
+        R = np.asarray(pose[0], dtype=np.float64).reshape(3, 3)
+        c = np.asarray(pose[1], dtype=np.float64).reshape(3)
+    except (TypeError, ValueError):
+        return None, None
+    if not np.all(np.isfinite(R)) or not np.all(np.isfinite(c)):
+        return None, None
+    n = R[:, 2].copy()
+    n_norm = float(np.linalg.norm(n))
+    if n_norm <= 1e-12:
+        return None, None
+    n /= n_norm
+    if reference_normal is not None:
+        ref_n = np.asarray(reference_normal, dtype=np.float64).reshape(3)
+        ref_norm = float(np.linalg.norm(ref_n))
+        if ref_norm > 1e-12 and float(np.dot(n, ref_n / ref_norm)) < 0.0:
+            n = -n
+    return n, c
+
 def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None, marker_map=None, map_calibrated=False):
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
     if hasattr(cv2.aruco, 'ArucoDetector'):
@@ -973,7 +1007,137 @@ def snap_to_aruco_corner(x, y, corners_dict):
             return float(corners[np.argmin(dists)][0]), float(corners[np.argmin(dists)][1])
     return x, y
 
-def record_video_from_camera():
+
+def draw_high_contrast_preview_text(image, text, origin, font_scale=1.0):
+    """Draw blue preview text with a thick white outline for readability."""
+    cv2.putText(image, str(text), tuple(origin), cv2.FONT_HERSHEY_SIMPLEX,
+                float(font_scale), (255, 255, 255), 7, cv2.LINE_AA)
+    cv2.putText(image, str(text), tuple(origin), cv2.FONT_HERSHEY_SIMPLEX,
+                float(font_scale), (255, 70, 0), 2, cv2.LINE_AA)
+
+
+def estimate_aruco_pattern_distances(
+        frame_bgr, camera_matrix, distortion, marker_size_mm,
+        detector=None, calibration_image_size=None):
+    """Estimate camera-centre to ArUco-centre distances in a raw camera frame.
+
+    The returned distance is ``||tvec||`` (not only optical-axis Z). Raw image
+    corners are paired with the original calibrated K/distortion model. When
+    the live stream resolution differs from the calibration resolution, K is
+    scaled to the live frame before PnP.
+    """
+    if frame_bgr is None or frame_bgr.size == 0 or camera_matrix is None:
+        return {}
+    marker_size_mm = float(marker_size_mm)
+    if not np.isfinite(marker_size_mm) or marker_size_mm <= 0.0:
+        return {}
+
+    K = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3).copy()
+    dist = (np.zeros((5, 1), dtype=np.float64) if distortion is None else
+            np.asarray(distortion, dtype=np.float64).reshape(-1, 1))
+    frame_h, frame_w = frame_bgr.shape[:2]
+    if calibration_image_size is not None:
+        calib_w, calib_h = map(float, calibration_image_size)
+        if calib_w > 0.0 and calib_h > 0.0:
+            sx = float(frame_w) / calib_w
+            sy = float(frame_h) / calib_h
+            K[0, 0] *= sx
+            K[0, 2] *= sx
+            K[1, 1] *= sy
+            K[1, 2] *= sy
+
+    gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    if detector is None:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+        if hasattr(cv2.aruco, "ArucoDetector"):
+            detector = cv2.aruco.ArucoDetector(
+                dictionary, cv2.aruco.DetectorParameters())
+    if detector is not None:
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+        params = cv2.aruco.DetectorParameters_create()
+        corners, ids, _ = cv2.aruco.detectMarkers(
+            gray, dictionary, parameters=params)
+    if ids is None or len(ids) == 0:
+        return {}
+
+    term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.001)
+    for corner in corners:
+        try:
+            cv2.cornerSubPix(gray, corner, (4, 4), (-1, -1), term)
+        except cv2.error:
+            # A marker very close to the image boundary can lack a complete
+            # refinement window; its detector coordinates remain usable.
+            pass
+
+    half = marker_size_mm * 0.5
+    object_points = np.array([
+        [-half, half, 0.0],
+        [half, half, 0.0],
+        [half, -half, 0.0],
+        [-half, -half, 0.0],
+    ], dtype=np.float64)
+    estimates = {}
+    for marker_id_raw, corner in zip(ids.reshape(-1), corners):
+        image_points = np.asarray(corner, dtype=np.float64).reshape(4, 2)
+        pose_candidates = []
+        try:
+            solved = cv2.solvePnPGeneric(
+                object_points, image_points, K, dist,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE)
+            if solved and bool(solved[0]):
+                for rvec, tvec in zip(solved[1], solved[2]):
+                    pose_candidates.append((
+                        np.asarray(rvec, dtype=np.float64).reshape(3, 1),
+                        np.asarray(tvec, dtype=np.float64).reshape(3, 1)))
+        except cv2.error:
+            pose_candidates = []
+        if not pose_candidates:
+            try:
+                ok, rvec, tvec = cv2.solvePnP(
+                    object_points, image_points, K, dist,
+                    flags=cv2.SOLVEPNP_ITERATIVE)
+                if ok:
+                    pose_candidates.append((rvec.reshape(3, 1), tvec.reshape(3, 1)))
+            except cv2.error:
+                continue
+
+        scored = []
+        for rvec, tvec in pose_candidates:
+            if not np.all(np.isfinite(tvec)) or float(tvec[2, 0]) <= 0.0:
+                continue
+            projected, _ = cv2.projectPoints(object_points, rvec, tvec, K, dist)
+            projected = projected.reshape(4, 2)
+            rms = float(np.sqrt(np.mean(np.sum(
+                (projected - image_points) ** 2, axis=1))))
+            scored.append((rms, rvec, tvec))
+        if not scored:
+            continue
+        rms, rvec, tvec = min(scored, key=lambda item: item[0])
+        R_marker_to_camera, _ = cv2.Rodrigues(rvec)
+        marker_normal_camera = R_marker_to_camera[:, 2]
+        marker_to_camera = -tvec.reshape(3)
+        marker_to_camera /= max(float(np.linalg.norm(marker_to_camera)), 1e-12)
+        # abs() makes the result independent of which side of the mathematical
+        # marker normal is selected: 0 degrees means a fronto-parallel view.
+        cos_view_angle = float(np.clip(abs(np.dot(
+            marker_normal_camera, marker_to_camera)), 0.0, 1.0))
+        view_angle_deg = float(np.degrees(np.arccos(cos_view_angle)))
+        estimates[int(marker_id_raw)] = {
+            "distance_mm": float(np.linalg.norm(tvec)),
+            "z_mm": float(tvec[2, 0]),
+            "view_angle_deg": view_angle_deg,
+            "reprojection_rms_px": rms,
+            "rvec": rvec,
+            "tvec": tvec,
+            "corners": image_points,
+        }
+    return estimates
+
+
+def record_video_from_camera(camera_matrix=None, distortion=None,
+                             marker_size_mm=ACTUAL_MARKER_SIZE_MM):
     import datetime
     # 建立影片儲存資料夾（如果不存在的話）
     save_path = RECORD_SAVE_DIR
@@ -1003,6 +1167,16 @@ def record_video_from_camera():
     video_name = None
     has_recorded = False
 
+    # The preview estimates distance only; overlays are not written to video.
+    preview_detector = None
+    if camera_matrix is not None:
+        dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
+        if hasattr(cv2.aruco, "ArucoDetector"):
+            preview_detector = cv2.aruco.ArucoDetector(
+                dictionary, cv2.aruco.DetectorParameters())
+    last_distance_update = 0.0
+    distance_estimates = {}
+
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -1015,6 +1189,52 @@ def record_video_from_camera():
 
         display_frame = frame.copy()
         h, w = display_frame.shape[:2]
+
+        # ArUco detection is throttled so the recording preview remains fluid.
+        now_monotonic = time.monotonic()
+        if now_monotonic - last_distance_update >= 0.12:
+            distance_estimates = estimate_aruco_pattern_distances(
+                frame, camera_matrix, distortion, marker_size_mm,
+                detector=preview_detector,
+                calibration_image_size=(CAMERA_WIDTH, CAMERA_HEIGHT))
+            last_distance_update = now_monotonic
+
+        if distance_estimates:
+            distances = [v["distance_mm"] for v in distance_estimates.values()]
+            view_angles = [v["view_angle_deg"] for v in distance_estimates.values()]
+            median_distance = float(np.median(distances))
+            median_view_angle = float(np.median(view_angles))
+            distance_text = (
+                f"Pattern distance: {median_distance:.1f} mm "
+                f"({median_distance / 10.0:.1f} cm) | "
+                f"Angle: {median_view_angle:.1f} deg")
+            draw_high_contrast_preview_text(
+                display_frame, distance_text, (30, 103), font_scale=1.02)
+            for row, (marker_id, estimate) in enumerate(
+                    sorted(distance_estimates.items())):
+                pts = np.rint(estimate["corners"]).astype(np.int32).reshape(-1, 1, 2)
+                cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2,
+                              cv2.LINE_AA)
+                origin = tuple(pts[0, 0].tolist())
+                draw_high_contrast_preview_text(
+                    display_frame,
+                    f"ID {marker_id}: {estimate['distance_mm']:.1f} mm  "
+                    f"{estimate['view_angle_deg']:.1f} deg",
+                    (origin[0], max(24, origin[1] - 10)),
+                    font_scale=0.68)
+                if row < 3:
+                    draw_high_contrast_preview_text(
+                        display_frame,
+                        f"ID {marker_id}: {estimate['distance_mm']:.1f} mm  "
+                        f"Angle {estimate['view_angle_deg']:.1f} deg  "
+                        f"RMS {estimate['reprojection_rms_px']:.2f}px",
+                        (30, 143 + row * 38), font_scale=0.68)
+        else:
+            status = ("Pattern distance: calibration unavailable" if
+                      camera_matrix is None else
+                      "Pattern distance: ArUco not detected")
+            draw_high_contrast_preview_text(
+                display_frame, status, (30, 103), font_scale=0.86)
 
         # 顯示錄影狀態指示
         if is_recording:
@@ -1494,10 +1714,19 @@ def main():
     if action is None:
         print("❌ 未選擇任何影片來源，程式結束。")
         sys.exit(0)
+
+    # Load calibration before opening the live preview so the same calibrated
+    # K/distortion model can be used for the on-screen Pattern distance.
+    mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = \
+        camera_algo.load_json_camera_params(PARAMS_JSON_PATH)
+    if mtxL_o is None or distL is None:
+        print(f"❌ 無法載入相機標定參數: {PARAMS_JSON_PATH}")
+        sys.exit(1)
         
     global VIDEO_PATH
     if action == "camera":
-        recorded_path = record_video_from_camera()
+        recorded_path = record_video_from_camera(
+            mtxL_o, distL, ACTUAL_MARKER_SIZE_MM)
         if recorded_path is None or not os.path.exists(recorded_path):
             print("❌ 錄影失敗或未錄製影片，程式結束。")
             sys.exit(1)
@@ -1511,8 +1740,7 @@ def main():
     
     startup_timer = StageTimer("啟動流程 (選定影片 → UI 就緒)")
 
-    # 1. 讀取相機內參
-    mtxL_o, distL, mtxR_o, distR, extrinsic, F_orig = camera_algo.load_json_camera_params(PARAMS_JSON_PATH)
+    # 1. The intrinsics loaded above are shared by live preview and analysis.
     
     # 由於去畸變時需要影像尺寸，我們先用 VideoCapture 打開影片讀取第一影格取得原影像寬高
     cap_temp = cv2.VideoCapture(VIDEO_PATH)
@@ -1611,6 +1839,31 @@ def main():
     global_plane_c = video_data.get('global_plane_c')
     if global_plane_n is None or global_plane_c is None:
         global_plane_n, global_plane_c = compute_global_plane(imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+    # Keep the historical triangulated/SVD plane untouched for matching and for
+    # A/B comparison.  The alternate display-only plane comes directly from the
+    # temporally selected anchor-marker pose in the left image (frame B).
+    legacy_height_plane_n = None if global_plane_n is None else np.asarray(
+        global_plane_n, dtype=np.float64).reshape(3).copy()
+    legacy_height_plane_c = None if global_plane_c is None else np.asarray(
+        global_plane_c, dtype=np.float64).reshape(3).copy()
+    pose_height_plane_n, pose_height_plane_c = compute_marker_pose_plane(
+        video_data.get('valid_poses', {}), video_data['idx_B'],
+        reference_normal=legacy_height_plane_n)
+    if pose_height_plane_n is not None:
+        if legacy_height_plane_n is not None:
+            _legacy_n_unit = legacy_height_plane_n / max(
+                float(np.linalg.norm(legacy_height_plane_n)), 1e-12)
+            _plane_angle_deg = float(np.degrees(np.arccos(np.clip(
+                abs(float(np.dot(_legacy_n_unit, pose_height_plane_n))),
+                -1.0, 1.0))))
+            log_and_print(
+                f"[Height Plane] Marker-pose plane ready; legacy normal delta "
+                f"{_plane_angle_deg:.3f} deg")
+        else:
+            log_and_print("[Height Plane] Marker-pose plane ready; no legacy plane for comparison")
+    else:
+        log_and_print(
+            "[Height Plane] Marker-pose plane unavailable; height display will remain in legacy mode")
     
     # 預設直接鎖定
     locked_L = imgA_bgr.copy()
@@ -2073,6 +2326,9 @@ def main():
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+    # Display-only selector.  RT, baseline, matching and triangulated p3d never
+    # change when this state is toggled.
+    height_plane_state = {'use_pose_plane': False}
 
     # HighPts / MidPts 預設關閉：初始同步散點顯示狀態
     for _artist in (scatter_grad_ref_A, scatter_grad_ref_B, scatter_grad_inject, scatter_grad_match):
@@ -3001,18 +3257,25 @@ def main():
                 else:
                     plane_dist_history.clear()
                     p_dist_str = f"\nWound Height (Custom Plane): {p_dist:.1f}mm"
-            elif res['p3d'] is not None and current_cand['plane_n'] is not None:
+            elif res['p3d'] is not None:
                 # 與平面同鏈: 高度用最優對的 p3d (平面即由最優對 RT 三角化)，誤差相消才成立
-                _p3d_plane = res['p3d_best'] if res.get('p3d_best') is not None else res['p3d']
-                p_dist = (np.dot(current_cand['plane_n'], _p3d_plane - current_cand['plane_c']))
-                if auto_calc_active:
-                    plane_dist_history.append(p_dist)
-                    display_wound_height = np.mean(plane_dist_history) - DEFAULT_WOUND_HEIGHT_OFFSET_MM
-                    p_dist_str = f"\nWound Height: {display_wound_height:.1f}mm"
-                else:
-                    plane_dist_history.clear()
-                    display_wound_height = p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM
-                    p_dist_str = f"\nWound Height: {display_wound_height:.1f}mm"
+                _use_pose_plane = (
+                    height_plane_state['use_pose_plane']
+                    and pose_height_plane_n is not None
+                    and pose_height_plane_c is not None)
+                _height_plane_n = pose_height_plane_n if _use_pose_plane else legacy_height_plane_n
+                _height_plane_c = pose_height_plane_c if _use_pose_plane else legacy_height_plane_c
+                if _height_plane_n is not None and _height_plane_c is not None:
+                    _p3d_plane = res['p3d_best'] if res.get('p3d_best') is not None else res['p3d']
+                    p_dist = float(np.dot(_height_plane_n, _p3d_plane - _height_plane_c))
+                    if auto_calc_active:
+                        plane_dist_history.append(p_dist)
+                        display_wound_height = np.mean(plane_dist_history) - DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                    else:
+                        plane_dist_history.clear()
+                        display_wound_height = p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                    _plane_label = "Marker Pose Plane" if _use_pose_plane else "Legacy Plane"
+                    p_dist_str = f"\nWound Height ({_plane_label}): {display_wound_height:.1f}mm"
             
             if res['depth'] is not None:
                 # 這裡的 res['depth'] 就是左相機坐標系下的 z 座標
@@ -3247,6 +3510,9 @@ def main():
     ax_btn_rt_sift = fig.add_axes([0.88, 0.74, 0.08, 0.04])
     btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
 
+    ax_btn_height_plane = fig.add_axes([0.58, 0.68, 0.18, 0.04])
+    btn_height_plane = Button(ax_btn_height_plane, "Height Plane: Legacy", **btn_style)
+
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
@@ -3270,7 +3536,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -3285,7 +3551,7 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
@@ -3564,6 +3830,29 @@ def main():
 
     btn_rt_sift.on_clicked(on_rt_sift_toggle)
 
+    def on_height_plane_toggle(event):
+        if pose_height_plane_n is None or pose_height_plane_c is None:
+            print("[Height Plane] Marker-pose plane is unavailable; keeping Legacy mode")
+            return
+        height_plane_state['use_pose_plane'] = not height_plane_state['use_pose_plane']
+        use_pose = height_plane_state['use_pose_plane']
+        btn_height_plane.label.set_text(
+            "Height Plane: Marker Pose" if use_pose else "Height Plane: Legacy")
+        btn_height_plane.ax.patch.set_facecolor('#145A32' if use_pose else '#1A1A1A')
+        plane_dist_history.clear()
+        print(
+            "[Height Plane] Display mode -> "
+            + ("Marker Pose Plane" if use_pose else "Legacy Triangulated/SVD Plane")
+            + "; RT, baseline, matching and p3d unchanged")
+        if custom_plane_fitted:
+            print("[Height Plane] Custom Plane is active and still has display priority")
+        if last_click and current_cand['idx'] in measure_results:
+            update_display(None, [])
+        else:
+            request_blit_refresh()
+
+    btn_height_plane.on_clicked(on_height_plane_toggle)
+
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
     btn_calc.on_clicked(on_calc)
@@ -3586,7 +3875,8 @@ def main():
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
-                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift]),
+                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift,
+                     ax_btn_height_plane]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]

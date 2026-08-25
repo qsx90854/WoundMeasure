@@ -148,6 +148,41 @@ CIRCLE_LABEL_DISK_MIN_INK_FRACTION = 0.16
 CIRCLE_LABEL_DISK_MIN_CONTRAST = 14.0
 CIRCLE_LABEL_DISK_MIN_SAT_DELTA = 16.0
 CIRCLE_LABEL_DISK_MIN_COLOR_SAT = 58.0
+
+# ----------------- 4x6 circle-grid guided detector -----------------
+# The target used by this program contains 4 rows x 6 columns. 17 of the 24
+# disks are blue/green and therefore form very reliable anchors; the remaining
+# black disks are recovered from the fitted projective grid and refined locally.
+CIRCLE_GRID_GUIDED_ENABLED = True
+CIRCLE_GRID_ROWS = 4
+CIRCLE_GRID_COLS = 6
+CIRCLE_GRID_COLOR_SAT_MIN = 150              # OpenCV HSV S, blue/green anchors are close to 255 in the Zebra video.
+CIRCLE_GRID_COLOR_VAL_MIN = 25
+CIRCLE_GRID_COLOR_VAL_MAX = 245
+CIRCLE_GRID_ANCHOR_MIN_AXIS_RATIO = 0.50
+CIRCLE_GRID_MIN_ANCHORS = 12
+CIRCLE_GRID_MAX_ANCHORS = 24
+CIRCLE_GRID_MAX_HOMOGRAPHY_RMS_PX = 6.0
+CIRCLE_GRID_EDGE_ROI_SCALE = 2.10             # local refinement crop half-size / expected radius
+CIRCLE_GRID_EDGE_ANNULUS_INNER = 0.55
+CIRCLE_GRID_EDGE_ANNULUS_OUTER = 1.45
+CIRCLE_GRID_EDGE_MAG_PERCENTILE = 65.0
+CIRCLE_GRID_EDGE_RADIAL_COS_MIN = 0.55
+CIRCLE_GRID_EDGE_MAX_CENTER_SHIFT_RATIO = 0.65
+CIRCLE_GRID_EDGE_MIN_POINTS = 18
+CIRCLE_GRID_DRAW_DEBUG = True
+
+# Colored cells in the physical 4x6 board. Black cells are intentionally omitted.
+# Row 0: black, blue, green, black, blue, green
+# Row 1: green, black, blue, green, black, blue
+# Row 2: blue, green, black, blue, green, black
+# Row 3: green, blue, green, black, blue, green
+CIRCLE_GRID_COLORED_COLS_BY_ROW = {
+    0: (1, 2, 4, 5),
+    1: (0, 2, 3, 5),
+    2: (0, 1, 3, 4),
+    3: (0, 1, 2, 4, 5),
+}
 CIRCLE_LABEL_DEBUG_REASON_ORDER = (
     'accepted',
     'area',
@@ -563,7 +598,7 @@ def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask):
     })
     return ((x, y), radius, score), info
 
-def collect_circle_label_contours(bgr):
+def collect_circle_label_contours_legacy(bgr):
     gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
     if gray is None:
         return {
@@ -604,6 +639,364 @@ def collect_circle_label_contours(bgr):
         'centers': centers,
         'radii': radii,
     }
+
+
+def _circle_grid_kmeans_1d(values, k):
+    """Cluster one-dimensional values and remap labels to ascending order."""
+    values = np.asarray(values, dtype=np.float32).reshape(-1, 1)
+    if len(values) < int(k):
+        return None, None
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        100,
+        1e-4,
+    )
+    _compactness, labels, centers = cv2.kmeans(
+        values, int(k), None, criteria, 20, cv2.KMEANS_PP_CENTERS
+    )
+    centers = centers.reshape(-1)
+    order = np.argsort(centers)
+    remap = np.empty(int(k), dtype=np.int32)
+    remap[order] = np.arange(int(k), dtype=np.int32)
+    return remap[labels.reshape(-1)], centers[order]
+
+
+def collect_circle_grid_color_anchors(bgr):
+    """Detect only the saturated blue/green disks used as robust grid anchors."""
+    if bgr is None or bgr.size == 0:
+        return [], None
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    color_mask = (
+        (sat >= int(CIRCLE_GRID_COLOR_SAT_MIN)) &
+        (val >= int(CIRCLE_GRID_COLOR_VAL_MIN)) &
+        (val <= int(CIRCLE_GRID_COLOR_VAL_MAX))
+    ).astype(np.uint8) * 255
+
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
+
+    contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    anchors = []
+    min_area = max(80.0, 0.45 * np.pi * float(CIRCLE_LABEL_MIN_RADIUS_PX) ** 2)
+    max_area = max(float(CIRCLE_LABEL_MAX_AREA_PX), 1.8 * np.pi * float(CIRCLE_LABEL_MAX_RADIUS_PX) ** 2)
+
+    for cnt in contours:
+        area = float(cv2.contourArea(cnt))
+        if area < min_area or area > max_area or len(cnt) < 5:
+            continue
+        ellipse = cv2.fitEllipse(cnt)
+        (x, y), (axis_a, axis_b), angle = ellipse
+        major = max(float(axis_a), float(axis_b))
+        minor = min(float(axis_a), float(axis_b))
+        if major <= 1e-6:
+            continue
+        axis_ratio = minor / major
+        radius = 0.25 * (major + minor)
+        if radius < 0.60 * float(CIRCLE_LABEL_MIN_RADIUS_PX):
+            continue
+        if radius > 1.25 * float(CIRCLE_LABEL_MAX_RADIUS_PX):
+            continue
+        if axis_ratio < float(CIRCLE_GRID_ANCHOR_MIN_AXIS_RATIO):
+            continue
+
+        xi = int(np.clip(round(x), 0, bgr.shape[1] - 1))
+        yi = int(np.clip(round(y), 0, bgr.shape[0] - 1))
+        anchors.append({
+            'center': np.array([float(x), float(y)], dtype=np.float32),
+            'radius': float(radius),
+            'area': area,
+            'axis_ratio': float(axis_ratio),
+            'ellipse': ellipse,
+            'contour': cnt,
+            'hue': int(hsv[yi, xi, 0]),
+            'sat': int(hsv[yi, xi, 1]),
+            'val': int(hsv[yi, xi, 2]),
+        })
+
+    # Saturation/shape filtering should leave 17 anchors in the current target.
+    # If spurious saturated components remain, keep the most disk-like/largest ones.
+    if len(anchors) > int(CIRCLE_GRID_MAX_ANCHORS):
+        anchors.sort(key=lambda a: (a['axis_ratio'], a['area']), reverse=True)
+        anchors = anchors[:int(CIRCLE_GRID_MAX_ANCHORS)]
+    return anchors, color_mask
+
+
+def _estimate_circle_grid_row_slope(points):
+    """Estimate image-space row slope from short, mostly-horizontal anchor pairs."""
+    pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    slopes = []
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            dx = float(pts[j, 0] - pts[i, 0])
+            dy = float(pts[j, 1] - pts[i, 1])
+            adx, ady = abs(dx), abs(dy)
+            if adx < 1e-6:
+                continue
+            # Scale limits derive from the configured disk radius, so they survive
+            # moderate image resizing better than fixed full-resolution numbers.
+            min_dx = max(12.0, 1.8 * float(CIRCLE_LABEL_MIN_RADIUS_PX))
+            max_dx = max(80.0, 7.5 * float(CIRCLE_LABEL_MAX_RADIUS_PX))
+            if min_dx <= adx <= max_dx and ady <= 0.35 * adx:
+                slopes.append(dy / dx)
+    if not slopes:
+        return 0.0
+    slopes = np.asarray(slopes, dtype=np.float32)
+    med = float(np.median(slopes))
+    # Recompute from the central population to suppress diagonal cross-row pairs.
+    mad = float(np.median(np.abs(slopes - med)))
+    if mad > 1e-6:
+        keep = np.abs(slopes - med) <= max(0.08, 2.5 * 1.4826 * mad)
+        if np.any(keep):
+            med = float(np.median(slopes[keep]))
+    return med
+
+
+def fit_circle_grid_from_color_anchors(anchors):
+    """
+    Fit the known 4x6 projective grid from saturated disk centers.
+
+    Fast/strict path intentionally uses the known colored-cell layout. On the
+    supplied Zebra video it sees all 17 colored disks in every tested frame.
+    If the pattern is incomplete, caller falls back to the legacy detector.
+    """
+    if len(anchors) < int(CIRCLE_GRID_MIN_ANCHORS):
+        return None
+
+    points = np.asarray([a['center'] for a in anchors], dtype=np.float32)
+    row_slope = _estimate_circle_grid_row_slope(points)
+    row_coord = points[:, 1] - float(row_slope) * points[:, 0]
+    row_labels, row_centers = _circle_grid_kmeans_1d(row_coord, CIRCLE_GRID_ROWS)
+    if row_labels is None:
+        return None
+
+    # Try image top->bottom and bottom->top. Horizontal reversal is also tried;
+    # the physical set of predicted centers is identical under a mirror, but the
+    # lower-RMS mapping is useful for deterministic debug indexing.
+    best = None
+    for row_flip in (False, True):
+        for col_flip in (False, True):
+            object_points = []
+            image_points = []
+            anchor_indices = []
+            valid_layout = True
+
+            for group_idx in range(int(CIRCLE_GRID_ROWS)):
+                idxs = np.flatnonzero(row_labels == group_idx)
+                physical_row = (CIRCLE_GRID_ROWS - 1 - group_idx) if row_flip else group_idx
+                expected_cols = list(CIRCLE_GRID_COLORED_COLS_BY_ROW[int(physical_row)])
+                if len(idxs) != len(expected_cols):
+                    valid_layout = False
+                    break
+
+                # Within one physical row x is monotonic for the current target.
+                idxs = idxs[np.argsort(points[idxs, 0])]
+                if col_flip:
+                    expected_cols = list(reversed(expected_cols))
+                for anchor_idx, col in zip(idxs, expected_cols):
+                    object_points.append([float(col), float(physical_row)])
+                    image_points.append(points[anchor_idx])
+                    anchor_indices.append(int(anchor_idx))
+
+            if not valid_layout or len(object_points) < 8:
+                continue
+
+            object_points = np.asarray(object_points, dtype=np.float32)
+            image_points = np.asarray(image_points, dtype=np.float32)
+            H, inlier_mask = cv2.findHomography(object_points, image_points, 0)
+            if H is None or not np.all(np.isfinite(H)):
+                continue
+
+            reproj = cv2.perspectiveTransform(object_points.reshape(1, -1, 2), H)[0]
+            errors = np.linalg.norm(reproj - image_points, axis=1)
+            rms = float(np.sqrt(np.mean(errors ** 2)))
+            if not np.isfinite(rms):
+                continue
+
+            candidate = {
+                'H': H.astype(np.float64),
+                'rms': rms,
+                'errors': errors.astype(np.float32),
+                'object_points': object_points,
+                'image_points': image_points,
+                'anchor_indices': anchor_indices,
+                'row_slope': float(row_slope),
+                'row_labels': row_labels.copy(),
+                'row_centers': row_centers.copy(),
+                'row_flip': bool(row_flip),
+                'col_flip': bool(col_flip),
+            }
+            if best is None or candidate['rms'] < best['rms']:
+                best = candidate
+
+    if best is None or best['rms'] > float(CIRCLE_GRID_MAX_HOMOGRAPHY_RMS_PX):
+        return None
+
+    grid_obj = np.asarray(
+        [[float(c), float(r)] for r in range(int(CIRCLE_GRID_ROWS)) for c in range(int(CIRCLE_GRID_COLS))],
+        dtype=np.float32,
+    )
+    best['grid_object_points'] = grid_obj
+    best['grid_seed_centers'] = cv2.perspectiveTransform(grid_obj.reshape(1, -1, 2), best['H'])[0]
+    best['expected_radius'] = float(np.median([a['radius'] for a in anchors]))
+    return best
+
+
+def refine_circle_center_from_local_edges(bgr, seed_center, expected_radius):
+    """
+    Sub-pixel-ish local ellipse refinement around a grid-predicted center.
+
+    Only strong edges in an annulus around the expected disk radius are used,
+    and their gradient direction must be approximately radial. This rejects tile
+    borders, text labels, and most unrelated texture without global thresholding.
+    """
+    h, w = bgr.shape[:2]
+    cx, cy = map(float, seed_center)
+    expected_radius = max(3.0, float(expected_radius))
+    radius = expected_radius
+    half = int(np.ceil(max(18.0, expected_radius * float(CIRCLE_GRID_EDGE_ROI_SCALE))))
+    x0 = max(0, int(np.floor(cx - half)))
+    x1 = min(w, int(np.ceil(cx + half + 1)))
+    y0 = max(0, int(np.floor(cy - half)))
+    y1 = min(h, int(np.ceil(cy + half + 1)))
+    if x1 - x0 < 10 or y1 - y0 < 10:
+        return np.array([cx, cy], dtype=np.float32), expected_radius, False, None
+
+    gray = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0.6)
+    gx = cv2.Scharr(gray, cv2.CV_32F, 1, 0)
+    gy = cv2.Scharr(gray, cv2.CV_32F, 0, 1)
+    mag = cv2.magnitude(gx, gy)
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+
+    accepted = False
+    last_ellipse = None
+    last_support = 0
+    for _ in range(2):
+        dx = xx - float(cx)
+        dy = yy - float(cy)
+        rr = np.sqrt(dx * dx + dy * dy) + 1e-6
+        annulus = (
+            (rr >= float(CIRCLE_GRID_EDGE_ANNULUS_INNER) * radius) &
+            (rr <= float(CIRCLE_GRID_EDGE_ANNULUS_OUTER) * radius)
+        )
+        vals = mag[annulus]
+        if vals.size < int(CIRCLE_GRID_EDGE_MIN_POINTS):
+            break
+
+        mag_threshold = max(60.0, float(np.percentile(vals, float(CIRCLE_GRID_EDGE_MAG_PERCENTILE))))
+        radial_cos = np.abs((gx * dx + gy * dy) / (mag * rr + 1e-6))
+        selected = (
+            annulus &
+            (mag >= mag_threshold) &
+            (radial_cos >= float(CIRCLE_GRID_EDGE_RADIAL_COS_MIN))
+        )
+        ys, xs = np.nonzero(selected)
+        last_support = int(len(xs))
+        if last_support < int(CIRCLE_GRID_EDGE_MIN_POINTS):
+            break
+
+        edge_points = np.stack([xs + x0, ys + y0], axis=1).astype(np.float32).reshape(-1, 1, 2)
+        ellipse = cv2.fitEllipse(edge_points)
+        (nx, ny), (axis_a, axis_b), _angle = ellipse
+        major = max(float(axis_a), float(axis_b))
+        minor = min(float(axis_a), float(axis_b))
+        new_radius = 0.25 * (major + minor)
+        axis_ratio = minor / max(major, 1e-6)
+        shift = float(np.hypot(float(nx) - cx, float(ny) - cy))
+
+        if axis_ratio < 0.45:
+            break
+        if new_radius < 0.55 * expected_radius or new_radius > 1.50 * expected_radius:
+            break
+        if shift > float(CIRCLE_GRID_EDGE_MAX_CENTER_SHIFT_RATIO) * expected_radius:
+            break
+
+        cx, cy = float(nx), float(ny)
+        radius = 0.60 * radius + 0.40 * new_radius
+        last_ellipse = ellipse
+        accepted = True
+
+    info = {
+        'seed': np.asarray(seed_center, dtype=np.float32),
+        'center': np.array([cx, cy], dtype=np.float32),
+        'radius': float(radius),
+        'accepted': bool(accepted),
+        'support_points': int(last_support),
+        'ellipse': last_ellipse,
+    }
+    return np.array([cx, cy], dtype=np.float32), float(radius), bool(accepted), info
+
+
+def collect_circle_label_grid_guided(bgr):
+    anchors, color_mask = collect_circle_grid_color_anchors(bgr)
+    fit = fit_circle_grid_from_color_anchors(anchors)
+    if fit is None:
+        return None
+
+    seeds = np.asarray(fit['grid_seed_centers'], dtype=np.float32)
+    expected_radius = float(fit['expected_radius'])
+    refined_centers = []
+    refined_radii = []
+    refinements = []
+    refined_ok = 0
+    for seed in seeds:
+        center, radius, ok, info = refine_circle_center_from_local_edges(
+            bgr, seed, expected_radius)
+        refined_centers.append(center if ok else seed)
+        refined_radii.append(radius if ok else expected_radius)
+        if info is not None:
+            refinements.append(info)
+        refined_ok += int(bool(ok))
+
+    centers = np.asarray(refined_centers, dtype=np.float32).reshape(-1, 2)
+    radii = np.asarray(refined_radii, dtype=np.float32)
+    gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
+    return {
+        'gray': gray,
+        'hsv': hsv,
+        'mask': color_mask if color_mask is not None else ink_mask,
+        'legacy_mask': ink_mask,
+        'contours': [],
+        'hough': [],
+        'centers': centers,
+        'radii': radii,
+        'method': 'grid-guided',
+        'anchors': anchors,
+        'grid_fit': fit,
+        'grid_seed_centers': seeds,
+        'refinements': refinements,
+        'refined_ok': int(refined_ok),
+    }
+
+
+def collect_circle_label_contours(bgr):
+    """
+    Public circle detector used by the rest of the program.
+
+    Preferred path: saturated anchors -> known 4x6 homography -> local edge/ellipse
+    refinement. If the anchor layout cannot be trusted, automatically fall back
+    to the previous threshold/contour/Hough implementation.
+    """
+    if CIRCLE_GRID_GUIDED_ENABLED:
+        guided = collect_circle_label_grid_guided(bgr)
+        if guided is not None:
+            return guided
+
+    legacy = collect_circle_label_contours_legacy(bgr)
+    legacy['method'] = 'legacy-contour'
+    legacy['anchors'] = []
+    legacy['grid_fit'] = None
+    legacy['grid_seed_centers'] = _empty_points()
+    legacy['refinements'] = []
+    legacy['refined_ok'] = 0
+    return legacy
 
 def detect_circle_label_centers(bgr):
     debug = collect_circle_label_contours(bgr)
@@ -699,6 +1092,44 @@ def draw_circle_label_contour_debug_overlay(bgr, debug):
                 markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1,
                 line_type=cv2.LINE_AA
             )
+
+    # Grid-guided debug: saturated anchors, predicted grid, and locally refined centers.
+    if debug.get('method') == 'grid-guided' and CIRCLE_GRID_DRAW_DEBUG:
+        fit = debug.get('grid_fit') or {}
+        seeds = np.asarray(debug.get('grid_seed_centers', _empty_points()), dtype=np.float32).reshape(-1, 2)
+        centers = np.asarray(debug.get('centers', _empty_points()), dtype=np.float32).reshape(-1, 2)
+
+        # Draw the 4x6 predicted grid as thin magenta lines.
+        if len(seeds) == int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS):
+            grid2 = seeds.reshape(int(CIRCLE_GRID_ROWS), int(CIRCLE_GRID_COLS), 2)
+            for r in range(int(CIRCLE_GRID_ROWS)):
+                pts = np.round(grid2[r]).astype(np.int32).reshape(-1, 1, 2)
+                cv2.polylines(overlay, [pts], False, (255, 80, 255), 1, cv2.LINE_AA)
+            for c in range(int(CIRCLE_GRID_COLS)):
+                pts = np.round(grid2[:, c]).astype(np.int32).reshape(-1, 1, 2)
+                cv2.polylines(overlay, [pts], False, (255, 80, 255), 1, cv2.LINE_AA)
+
+        for anchor in debug.get('anchors', []):
+            x, y = anchor['center']
+            rr = max(3, int(round(anchor['radius'])))
+            cv2.circle(overlay, (int(round(x)), int(round(y))), rr, (0, 255, 255), 1, cv2.LINE_AA)
+
+        for seed in seeds:
+            cv2.drawMarker(
+                overlay, tuple(np.round(seed).astype(int)), (255, 80, 255),
+                markerType=cv2.MARKER_CROSS, markerSize=7, thickness=1, line_type=cv2.LINE_AA)
+        for center in centers:
+            cv2.drawMarker(
+                overlay, tuple(np.round(center).astype(int)), (255, 255, 0),
+                markerType=cv2.MARKER_CROSS, markerSize=9, thickness=1, line_type=cv2.LINE_AA)
+
+        text = (
+            f"grid anchors={len(debug.get('anchors', []))} "
+            f"refined={debug.get('refined_ok', 0)}/{len(centers)} "
+            f"rms={float(fit.get('rms', 0.0)):.2f}px"
+        )
+        cv2.putText(overlay, text, (10, overlay.shape[0] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     overlay = draw_circle_label_debug_legend(overlay, reason_counts)
     return overlay
@@ -4166,9 +4597,9 @@ def main():
 
         panels = [
             (dbg_axes[0, 0], left_debug['mask'], "Left binary mask", 'gray'),
-            (dbg_axes[0, 1], left_overlay, f"Left contours: {len(left_debug['centers'])} accepted", None),
+            (dbg_axes[0, 1], left_overlay, f"Left {left_debug.get('method', 'detector')}: {len(left_debug['centers'])} centers", None),
             (dbg_axes[1, 0], right_debug['mask'], "Right binary mask", 'gray'),
-            (dbg_axes[1, 1], right_overlay, f"Right contours: {len(right_debug['centers'])} accepted", None),
+            (dbg_axes[1, 1], right_overlay, f"Right {right_debug.get('method', 'detector')}: {len(right_debug['centers'])} centers", None),
         ]
         for ax_dbg, img_dbg, title, cmap in panels:
             ax_dbg.set_facecolor('#1E1E1E')
@@ -4180,8 +4611,8 @@ def main():
         dbg_fig.tight_layout()
         dbg_fig.show()
         print(
-            f"[CircleLabel Debug] left accepted={len(left_debug['centers'])}/{len(left_debug['contours'])}, "
-            f"right accepted={len(right_debug['centers'])}/{len(right_debug['contours'])}"
+            f"[CircleLabel Debug] left method={left_debug.get('method')} centers={len(left_debug['centers'])}, "
+            f"right method={right_debug.get('method')} centers={len(right_debug['centers'])}"
         )
         
     def on_return_menu(event):

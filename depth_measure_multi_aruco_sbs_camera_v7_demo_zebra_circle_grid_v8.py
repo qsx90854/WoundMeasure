@@ -12,7 +12,7 @@ depth_measure_multi_aruco_sbs_camera.py
 - 動態 UI：提供右圖候選幀切換選單與匹配狀態切換
 """
 
-import os, sys, glob, json, threading, queue, time
+import os, sys, glob, json, csv, threading, queue, time
 from pathlib import Path
 import numpy as np
 import cv2
@@ -148,6 +148,41 @@ CIRCLE_LABEL_DISK_MIN_INK_FRACTION = 0.16
 CIRCLE_LABEL_DISK_MIN_CONTRAST = 14.0
 CIRCLE_LABEL_DISK_MIN_SAT_DELTA = 16.0
 CIRCLE_LABEL_DISK_MIN_COLOR_SAT = 58.0
+
+# ----------------- 4x6 circle-grid guided detector -----------------
+# The target used by this program contains 4 rows x 6 columns. 17 of the 24
+# disks are blue/green and therefore form very reliable anchors; the remaining
+# black disks are recovered from the fitted projective grid and refined locally.
+CIRCLE_GRID_GUIDED_ENABLED = True
+CIRCLE_GRID_ROWS = 4
+CIRCLE_GRID_COLS = 6
+CIRCLE_GRID_COLOR_SAT_MIN = 150              # OpenCV HSV S, blue/green anchors are close to 255 in the Zebra video.
+CIRCLE_GRID_COLOR_VAL_MIN = 25
+CIRCLE_GRID_COLOR_VAL_MAX = 245
+CIRCLE_GRID_ANCHOR_MIN_AXIS_RATIO = 0.50
+CIRCLE_GRID_MIN_ANCHORS = 12
+CIRCLE_GRID_MAX_ANCHORS = 24
+CIRCLE_GRID_MAX_HOMOGRAPHY_RMS_PX = 6.0
+CIRCLE_GRID_EDGE_ROI_SCALE = 2.10             # local refinement crop half-size / expected radius
+CIRCLE_GRID_EDGE_ANNULUS_INNER = 0.55
+CIRCLE_GRID_EDGE_ANNULUS_OUTER = 1.45
+CIRCLE_GRID_EDGE_MAG_PERCENTILE = 65.0
+CIRCLE_GRID_EDGE_RADIAL_COS_MIN = 0.55
+CIRCLE_GRID_EDGE_MAX_CENTER_SHIFT_RATIO = 0.65
+CIRCLE_GRID_EDGE_MIN_POINTS = 18
+CIRCLE_GRID_DRAW_DEBUG = True
+
+# Colored cells in the physical 4x6 board. Black cells are intentionally omitted.
+# Row 0: black, blue, green, black, blue, green
+# Row 1: green, black, blue, green, black, blue
+# Row 2: blue, green, black, blue, green, black
+# Row 3: green, blue, green, black, blue, green
+CIRCLE_GRID_COLORED_COLS_BY_ROW = {
+    0: (1, 2, 4, 5),
+    1: (0, 2, 3, 5),
+    2: (0, 1, 3, 4),
+    3: (0, 1, 2, 4, 5),
+}
 CIRCLE_LABEL_DEBUG_REASON_ORDER = (
     'accepted',
     'area',
@@ -563,7 +598,7 @@ def evaluate_circle_label_contour(cnt, gray, hsv, ink_mask):
     })
     return ((x, y), radius, score), info
 
-def collect_circle_label_contours(bgr):
+def collect_circle_label_contours_legacy(bgr):
     gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
     if gray is None:
         return {
@@ -604,6 +639,364 @@ def collect_circle_label_contours(bgr):
         'centers': centers,
         'radii': radii,
     }
+
+
+def _circle_grid_kmeans_1d(values, k):
+    """Cluster one-dimensional values and remap labels to ascending order."""
+    values = np.asarray(values, dtype=np.float32).reshape(-1, 1)
+    if len(values) < int(k):
+        return None, None
+    criteria = (
+        cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+        100,
+        1e-4,
+    )
+    _compactness, labels, centers = cv2.kmeans(
+        values, int(k), None, criteria, 20, cv2.KMEANS_PP_CENTERS
+    )
+    centers = centers.reshape(-1)
+    order = np.argsort(centers)
+    remap = np.empty(int(k), dtype=np.int32)
+    remap[order] = np.arange(int(k), dtype=np.int32)
+    return remap[labels.reshape(-1)], centers[order]
+
+
+def collect_circle_grid_color_anchors(bgr):
+    """Detect only the saturated blue/green disks used as robust grid anchors."""
+    if bgr is None or bgr.size == 0:
+        return [], None
+
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    color_mask = (
+        (sat >= int(CIRCLE_GRID_COLOR_SAT_MIN)) &
+        (val >= int(CIRCLE_GRID_COLOR_VAL_MIN)) &
+        (val <= int(CIRCLE_GRID_COLOR_VAL_MAX))
+    ).astype(np.uint8) * 255
+
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    color_mask = cv2.morphologyEx(
+        color_mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
+
+    contours, _ = cv2.findContours(color_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    anchors = []
+    min_area = max(80.0, 0.45 * np.pi * float(CIRCLE_LABEL_MIN_RADIUS_PX) ** 2)
+    max_area = max(float(CIRCLE_LABEL_MAX_AREA_PX), 1.8 * np.pi * float(CIRCLE_LABEL_MAX_RADIUS_PX) ** 2)
+
+    for cnt in contours:
+        area = float(cv2.contourArea(cnt))
+        if area < min_area or area > max_area or len(cnt) < 5:
+            continue
+        ellipse = cv2.fitEllipse(cnt)
+        (x, y), (axis_a, axis_b), angle = ellipse
+        major = max(float(axis_a), float(axis_b))
+        minor = min(float(axis_a), float(axis_b))
+        if major <= 1e-6:
+            continue
+        axis_ratio = minor / major
+        radius = 0.25 * (major + minor)
+        if radius < 0.60 * float(CIRCLE_LABEL_MIN_RADIUS_PX):
+            continue
+        if radius > 1.25 * float(CIRCLE_LABEL_MAX_RADIUS_PX):
+            continue
+        if axis_ratio < float(CIRCLE_GRID_ANCHOR_MIN_AXIS_RATIO):
+            continue
+
+        xi = int(np.clip(round(x), 0, bgr.shape[1] - 1))
+        yi = int(np.clip(round(y), 0, bgr.shape[0] - 1))
+        anchors.append({
+            'center': np.array([float(x), float(y)], dtype=np.float32),
+            'radius': float(radius),
+            'area': area,
+            'axis_ratio': float(axis_ratio),
+            'ellipse': ellipse,
+            'contour': cnt,
+            'hue': int(hsv[yi, xi, 0]),
+            'sat': int(hsv[yi, xi, 1]),
+            'val': int(hsv[yi, xi, 2]),
+        })
+
+    # Saturation/shape filtering should leave 17 anchors in the current target.
+    # If spurious saturated components remain, keep the most disk-like/largest ones.
+    if len(anchors) > int(CIRCLE_GRID_MAX_ANCHORS):
+        anchors.sort(key=lambda a: (a['axis_ratio'], a['area']), reverse=True)
+        anchors = anchors[:int(CIRCLE_GRID_MAX_ANCHORS)]
+    return anchors, color_mask
+
+
+def _estimate_circle_grid_row_slope(points):
+    """Estimate image-space row slope from short, mostly-horizontal anchor pairs."""
+    pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    slopes = []
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            dx = float(pts[j, 0] - pts[i, 0])
+            dy = float(pts[j, 1] - pts[i, 1])
+            adx, ady = abs(dx), abs(dy)
+            if adx < 1e-6:
+                continue
+            # Scale limits derive from the configured disk radius, so they survive
+            # moderate image resizing better than fixed full-resolution numbers.
+            min_dx = max(12.0, 1.8 * float(CIRCLE_LABEL_MIN_RADIUS_PX))
+            max_dx = max(80.0, 7.5 * float(CIRCLE_LABEL_MAX_RADIUS_PX))
+            if min_dx <= adx <= max_dx and ady <= 0.35 * adx:
+                slopes.append(dy / dx)
+    if not slopes:
+        return 0.0
+    slopes = np.asarray(slopes, dtype=np.float32)
+    med = float(np.median(slopes))
+    # Recompute from the central population to suppress diagonal cross-row pairs.
+    mad = float(np.median(np.abs(slopes - med)))
+    if mad > 1e-6:
+        keep = np.abs(slopes - med) <= max(0.08, 2.5 * 1.4826 * mad)
+        if np.any(keep):
+            med = float(np.median(slopes[keep]))
+    return med
+
+
+def fit_circle_grid_from_color_anchors(anchors):
+    """
+    Fit the known 4x6 projective grid from saturated disk centers.
+
+    Fast/strict path intentionally uses the known colored-cell layout. On the
+    supplied Zebra video it sees all 17 colored disks in every tested frame.
+    If the pattern is incomplete, caller falls back to the legacy detector.
+    """
+    if len(anchors) < int(CIRCLE_GRID_MIN_ANCHORS):
+        return None
+
+    points = np.asarray([a['center'] for a in anchors], dtype=np.float32)
+    row_slope = _estimate_circle_grid_row_slope(points)
+    row_coord = points[:, 1] - float(row_slope) * points[:, 0]
+    row_labels, row_centers = _circle_grid_kmeans_1d(row_coord, CIRCLE_GRID_ROWS)
+    if row_labels is None:
+        return None
+
+    # Try image top->bottom and bottom->top. Horizontal reversal is also tried;
+    # the physical set of predicted centers is identical under a mirror, but the
+    # lower-RMS mapping is useful for deterministic debug indexing.
+    best = None
+    for row_flip in (False, True):
+        for col_flip in (False, True):
+            object_points = []
+            image_points = []
+            anchor_indices = []
+            valid_layout = True
+
+            for group_idx in range(int(CIRCLE_GRID_ROWS)):
+                idxs = np.flatnonzero(row_labels == group_idx)
+                physical_row = (CIRCLE_GRID_ROWS - 1 - group_idx) if row_flip else group_idx
+                expected_cols = list(CIRCLE_GRID_COLORED_COLS_BY_ROW[int(physical_row)])
+                if len(idxs) != len(expected_cols):
+                    valid_layout = False
+                    break
+
+                # Within one physical row x is monotonic for the current target.
+                idxs = idxs[np.argsort(points[idxs, 0])]
+                if col_flip:
+                    expected_cols = list(reversed(expected_cols))
+                for anchor_idx, col in zip(idxs, expected_cols):
+                    object_points.append([float(col), float(physical_row)])
+                    image_points.append(points[anchor_idx])
+                    anchor_indices.append(int(anchor_idx))
+
+            if not valid_layout or len(object_points) < 8:
+                continue
+
+            object_points = np.asarray(object_points, dtype=np.float32)
+            image_points = np.asarray(image_points, dtype=np.float32)
+            H, inlier_mask = cv2.findHomography(object_points, image_points, 0)
+            if H is None or not np.all(np.isfinite(H)):
+                continue
+
+            reproj = cv2.perspectiveTransform(object_points.reshape(1, -1, 2), H)[0]
+            errors = np.linalg.norm(reproj - image_points, axis=1)
+            rms = float(np.sqrt(np.mean(errors ** 2)))
+            if not np.isfinite(rms):
+                continue
+
+            candidate = {
+                'H': H.astype(np.float64),
+                'rms': rms,
+                'errors': errors.astype(np.float32),
+                'object_points': object_points,
+                'image_points': image_points,
+                'anchor_indices': anchor_indices,
+                'row_slope': float(row_slope),
+                'row_labels': row_labels.copy(),
+                'row_centers': row_centers.copy(),
+                'row_flip': bool(row_flip),
+                'col_flip': bool(col_flip),
+            }
+            if best is None or candidate['rms'] < best['rms']:
+                best = candidate
+
+    if best is None or best['rms'] > float(CIRCLE_GRID_MAX_HOMOGRAPHY_RMS_PX):
+        return None
+
+    grid_obj = np.asarray(
+        [[float(c), float(r)] for r in range(int(CIRCLE_GRID_ROWS)) for c in range(int(CIRCLE_GRID_COLS))],
+        dtype=np.float32,
+    )
+    best['grid_object_points'] = grid_obj
+    best['grid_seed_centers'] = cv2.perspectiveTransform(grid_obj.reshape(1, -1, 2), best['H'])[0]
+    best['expected_radius'] = float(np.median([a['radius'] for a in anchors]))
+    return best
+
+
+def refine_circle_center_from_local_edges(bgr, seed_center, expected_radius):
+    """
+    Sub-pixel-ish local ellipse refinement around a grid-predicted center.
+
+    Only strong edges in an annulus around the expected disk radius are used,
+    and their gradient direction must be approximately radial. This rejects tile
+    borders, text labels, and most unrelated texture without global thresholding.
+    """
+    h, w = bgr.shape[:2]
+    cx, cy = map(float, seed_center)
+    expected_radius = max(3.0, float(expected_radius))
+    radius = expected_radius
+    half = int(np.ceil(max(18.0, expected_radius * float(CIRCLE_GRID_EDGE_ROI_SCALE))))
+    x0 = max(0, int(np.floor(cx - half)))
+    x1 = min(w, int(np.ceil(cx + half + 1)))
+    y0 = max(0, int(np.floor(cy - half)))
+    y1 = min(h, int(np.ceil(cy + half + 1)))
+    if x1 - x0 < 10 or y1 - y0 < 10:
+        return np.array([cx, cy], dtype=np.float32), expected_radius, False, None
+
+    gray = cv2.cvtColor(bgr[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0.6)
+    gx = cv2.Scharr(gray, cv2.CV_32F, 1, 0)
+    gy = cv2.Scharr(gray, cv2.CV_32F, 0, 1)
+    mag = cv2.magnitude(gx, gy)
+    yy, xx = np.mgrid[y0:y1, x0:x1].astype(np.float32)
+
+    accepted = False
+    last_ellipse = None
+    last_support = 0
+    for _ in range(2):
+        dx = xx - float(cx)
+        dy = yy - float(cy)
+        rr = np.sqrt(dx * dx + dy * dy) + 1e-6
+        annulus = (
+            (rr >= float(CIRCLE_GRID_EDGE_ANNULUS_INNER) * radius) &
+            (rr <= float(CIRCLE_GRID_EDGE_ANNULUS_OUTER) * radius)
+        )
+        vals = mag[annulus]
+        if vals.size < int(CIRCLE_GRID_EDGE_MIN_POINTS):
+            break
+
+        mag_threshold = max(60.0, float(np.percentile(vals, float(CIRCLE_GRID_EDGE_MAG_PERCENTILE))))
+        radial_cos = np.abs((gx * dx + gy * dy) / (mag * rr + 1e-6))
+        selected = (
+            annulus &
+            (mag >= mag_threshold) &
+            (radial_cos >= float(CIRCLE_GRID_EDGE_RADIAL_COS_MIN))
+        )
+        ys, xs = np.nonzero(selected)
+        last_support = int(len(xs))
+        if last_support < int(CIRCLE_GRID_EDGE_MIN_POINTS):
+            break
+
+        edge_points = np.stack([xs + x0, ys + y0], axis=1).astype(np.float32).reshape(-1, 1, 2)
+        ellipse = cv2.fitEllipse(edge_points)
+        (nx, ny), (axis_a, axis_b), _angle = ellipse
+        major = max(float(axis_a), float(axis_b))
+        minor = min(float(axis_a), float(axis_b))
+        new_radius = 0.25 * (major + minor)
+        axis_ratio = minor / max(major, 1e-6)
+        shift = float(np.hypot(float(nx) - cx, float(ny) - cy))
+
+        if axis_ratio < 0.45:
+            break
+        if new_radius < 0.55 * expected_radius or new_radius > 1.50 * expected_radius:
+            break
+        if shift > float(CIRCLE_GRID_EDGE_MAX_CENTER_SHIFT_RATIO) * expected_radius:
+            break
+
+        cx, cy = float(nx), float(ny)
+        radius = 0.60 * radius + 0.40 * new_radius
+        last_ellipse = ellipse
+        accepted = True
+
+    info = {
+        'seed': np.asarray(seed_center, dtype=np.float32),
+        'center': np.array([cx, cy], dtype=np.float32),
+        'radius': float(radius),
+        'accepted': bool(accepted),
+        'support_points': int(last_support),
+        'ellipse': last_ellipse,
+    }
+    return np.array([cx, cy], dtype=np.float32), float(radius), bool(accepted), info
+
+
+def collect_circle_label_grid_guided(bgr):
+    anchors, color_mask = collect_circle_grid_color_anchors(bgr)
+    fit = fit_circle_grid_from_color_anchors(anchors)
+    if fit is None:
+        return None
+
+    seeds = np.asarray(fit['grid_seed_centers'], dtype=np.float32)
+    expected_radius = float(fit['expected_radius'])
+    refined_centers = []
+    refined_radii = []
+    refinements = []
+    refined_ok = 0
+    for seed in seeds:
+        center, radius, ok, info = refine_circle_center_from_local_edges(
+            bgr, seed, expected_radius)
+        refined_centers.append(center if ok else seed)
+        refined_radii.append(radius if ok else expected_radius)
+        if info is not None:
+            refinements.append(info)
+        refined_ok += int(bool(ok))
+
+    centers = np.asarray(refined_centers, dtype=np.float32).reshape(-1, 2)
+    radii = np.asarray(refined_radii, dtype=np.float32)
+    gray, hsv, ink_mask = build_circle_label_ink_mask(bgr)
+    return {
+        'gray': gray,
+        'hsv': hsv,
+        'mask': color_mask if color_mask is not None else ink_mask,
+        'legacy_mask': ink_mask,
+        'contours': [],
+        'hough': [],
+        'centers': centers,
+        'radii': radii,
+        'method': 'grid-guided',
+        'anchors': anchors,
+        'grid_fit': fit,
+        'grid_seed_centers': seeds,
+        'refinements': refinements,
+        'refined_ok': int(refined_ok),
+    }
+
+
+def collect_circle_label_contours(bgr):
+    """
+    Public circle detector used by the rest of the program.
+
+    Preferred path: saturated anchors -> known 4x6 homography -> local edge/ellipse
+    refinement. If the anchor layout cannot be trusted, automatically fall back
+    to the previous threshold/contour/Hough implementation.
+    """
+    if CIRCLE_GRID_GUIDED_ENABLED:
+        guided = collect_circle_label_grid_guided(bgr)
+        if guided is not None:
+            return guided
+
+    legacy = collect_circle_label_contours_legacy(bgr)
+    legacy['method'] = 'legacy-contour'
+    legacy['anchors'] = []
+    legacy['grid_fit'] = None
+    legacy['grid_seed_centers'] = _empty_points()
+    legacy['refinements'] = []
+    legacy['refined_ok'] = 0
+    return legacy
 
 def detect_circle_label_centers(bgr):
     debug = collect_circle_label_contours(bgr)
@@ -699,6 +1092,44 @@ def draw_circle_label_contour_debug_overlay(bgr, debug):
                 markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1,
                 line_type=cv2.LINE_AA
             )
+
+    # Grid-guided debug: saturated anchors, predicted grid, and locally refined centers.
+    if debug.get('method') == 'grid-guided' and CIRCLE_GRID_DRAW_DEBUG:
+        fit = debug.get('grid_fit') or {}
+        seeds = np.asarray(debug.get('grid_seed_centers', _empty_points()), dtype=np.float32).reshape(-1, 2)
+        centers = np.asarray(debug.get('centers', _empty_points()), dtype=np.float32).reshape(-1, 2)
+
+        # Draw the 4x6 predicted grid as thin magenta lines.
+        if len(seeds) == int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS):
+            grid2 = seeds.reshape(int(CIRCLE_GRID_ROWS), int(CIRCLE_GRID_COLS), 2)
+            for r in range(int(CIRCLE_GRID_ROWS)):
+                pts = np.round(grid2[r]).astype(np.int32).reshape(-1, 1, 2)
+                cv2.polylines(overlay, [pts], False, (255, 80, 255), 1, cv2.LINE_AA)
+            for c in range(int(CIRCLE_GRID_COLS)):
+                pts = np.round(grid2[:, c]).astype(np.int32).reshape(-1, 1, 2)
+                cv2.polylines(overlay, [pts], False, (255, 80, 255), 1, cv2.LINE_AA)
+
+        for anchor in debug.get('anchors', []):
+            x, y = anchor['center']
+            rr = max(3, int(round(anchor['radius'])))
+            cv2.circle(overlay, (int(round(x)), int(round(y))), rr, (0, 255, 255), 1, cv2.LINE_AA)
+
+        for seed in seeds:
+            cv2.drawMarker(
+                overlay, tuple(np.round(seed).astype(int)), (255, 80, 255),
+                markerType=cv2.MARKER_CROSS, markerSize=7, thickness=1, line_type=cv2.LINE_AA)
+        for center in centers:
+            cv2.drawMarker(
+                overlay, tuple(np.round(center).astype(int)), (255, 255, 0),
+                markerType=cv2.MARKER_CROSS, markerSize=9, thickness=1, line_type=cv2.LINE_AA)
+
+        text = (
+            f"grid anchors={len(debug.get('anchors', []))} "
+            f"refined={debug.get('refined_ok', 0)}/{len(centers)} "
+            f"rms={float(fit.get('rms', 0.0)):.2f}px"
+        )
+        cv2.putText(overlay, text, (10, overlay.shape[0] - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
 
     overlay = draw_circle_label_debug_legend(overlay, reason_counts)
     return overlay
@@ -2279,8 +2710,24 @@ def main():
     sift = cv2.SIFT_create(contrastThreshold=0.005)
     orb = cv2.ORB_create(nfeatures=1000)
     
-    # 選定左右影格若共同看到至少兩個 pattern，使用兩者的全部角點
-    # 三角化後共同擬合基準平面；僅有一個時才保留 RT 分析的單-pattern 平面。
+    # ------------------------------------------------------------------
+    # Reference plane setup
+    #
+    # IMPORTANT:
+    # Keep the original (0.7-mm baseline version) startup path EXACTLY:
+    #   1) first fit the two-pattern plane from the selected stereo pair;
+    #   2) only if that fails, fall back to the precomputed single-pattern plane.
+    #
+    # We only *remember* the precomputed 1-pattern plane here.  If it is absent,
+    # it will be computed lazily when the user actually presses the Plane button.
+    # This avoids changing any startup state used by the original 2-pattern result.
+    # ------------------------------------------------------------------
+    single_pattern_plane_n = video_data.get('global_plane_n')
+    single_pattern_plane_c = video_data.get('global_plane_c')
+    single_pattern_plane_ids = video_data.get('global_plane_marker_ids')
+    single_pattern_plane_rms_mm = video_data.get('global_plane_rms_mm')
+
+    # --- ORIGINAL 0.7-mm baseline plane path: keep behavior unchanged ---
     multi_pattern_plane = fit_reference_plane_from_shared_patterns(
         video_data.get('cornersB'),
         video_data.get('cornersA'),
@@ -2297,12 +2744,50 @@ def main():
         video_data['global_plane_rms_mm'] = plane_rms_mm
     else:
         # 優先使用進度條執行期間在背景預先計算的單-pattern 平面。
-        global_plane_n = video_data.get('global_plane_n')
-        global_plane_c = video_data.get('global_plane_c')
+        global_plane_n = single_pattern_plane_n
+        global_plane_c = single_pattern_plane_c
         if global_plane_n is None or global_plane_c is None:
             global_plane_n, global_plane_c = compute_global_plane(
                 imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
-    
+
+    # Build switchable plane registry *after* the original active plane has
+    # already been selected, so this registry cannot alter the default result.
+    reference_planes = {}
+    if single_pattern_plane_n is not None and single_pattern_plane_c is not None:
+        reference_planes['1-pattern'] = {
+            'plane_n': np.asarray(single_pattern_plane_n, dtype=np.float64),
+            'plane_c': np.asarray(single_pattern_plane_c, dtype=np.float64),
+            'marker_ids': single_pattern_plane_ids,
+            'rms_mm': single_pattern_plane_rms_mm,
+        }
+        video_data['single_pattern_plane_n'] = reference_planes['1-pattern']['plane_n']
+        video_data['single_pattern_plane_c'] = reference_planes['1-pattern']['plane_c']
+
+    if multi_pattern_plane is not None:
+        reference_planes['2-pattern'] = {
+            'plane_n': np.asarray(global_plane_n, dtype=np.float64),
+            'plane_c': np.asarray(global_plane_c, dtype=np.float64),
+            'marker_ids': list(plane_pattern_ids),
+            'rms_mm': float(plane_rms_mm),
+        }
+        video_data['multi_pattern_plane_n'] = reference_planes['2-pattern']['plane_n']
+        video_data['multi_pattern_plane_c'] = reference_planes['2-pattern']['plane_c']
+        video_data['multi_pattern_plane_marker_ids'] = list(plane_pattern_ids)
+        video_data['multi_pattern_plane_rms_mm'] = float(plane_rms_mm)
+
+    # The initial UI mode is merely a label for the plane already chosen by the
+    # original code above.  Do not reassign global_plane_* here.
+    reference_plane_mode = '2-pattern' if multi_pattern_plane is not None else '1-pattern'
+    if reference_plane_mode == '1-pattern' and reference_plane_mode not in reference_planes:
+        # The original fallback may have computed this plane just above.
+        if global_plane_n is not None and global_plane_c is not None:
+            reference_planes['1-pattern'] = {
+                'plane_n': np.asarray(global_plane_n, dtype=np.float64),
+                'plane_c': np.asarray(global_plane_c, dtype=np.float64),
+                'marker_ids': video_data.get('global_plane_marker_ids'),
+                'rms_mm': video_data.get('global_plane_rms_mm'),
+            }
+
     # 預設直接鎖定
     locked_L = imgA_bgr.copy()
     locked_R = imgB_bgr.copy()
@@ -2312,10 +2797,30 @@ def main():
     locked_R_idx = video_data['idx_A']
     locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
     locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
+    circle_debug_L = None
+    circle_debug_R = None
+    circle_grid_ordered_L = False
+    circle_grid_ordered_R = False
     if CIRCLE_LABEL_MATCH_ENABLED:
-        circle_centers_L, circle_radii_L = detect_circle_label_centers(locked_L_clean)
-        circle_centers_R, circle_radii_R = detect_circle_label_centers(locked_R_clean)
-        print(f"[CircleLabel] detected left={len(circle_centers_L)} right={len(circle_centers_R)} centers")
+        circle_debug_L = collect_circle_label_contours(locked_L_clean)
+        circle_debug_R = collect_circle_label_contours(locked_R_clean)
+        circle_centers_L = circle_debug_L['centers']
+        circle_radii_L = circle_debug_L['radii']
+        circle_centers_R = circle_debug_R['centers']
+        circle_radii_R = circle_debug_R['radii']
+        expected_grid_count = int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS)
+        circle_grid_ordered_L = (
+            circle_debug_L.get('method') == 'grid-guided' and
+            len(circle_centers_L) == expected_grid_count
+        )
+        circle_grid_ordered_R = (
+            circle_debug_R.get('method') == 'grid-guided' and
+            len(circle_centers_R) == expected_grid_count
+        )
+        print(
+            f"[CircleLabel] detected left={len(circle_centers_L)} ({circle_debug_L.get('method')}) "
+            f"right={len(circle_centers_R)} ({circle_debug_R.get('method')}) centers"
+        )
     else:
         circle_centers_L, circle_radii_L = _empty_points(), np.empty((0,), dtype=np.float32)
         circle_centers_R, circle_radii_R = _empty_points(), np.empty((0,), dtype=np.float32)
@@ -2350,6 +2855,7 @@ def main():
     current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
     current_cand['circle_centers'] = circle_centers_R
     current_cand['circle_radii'] = circle_radii_R
+    current_cand['circle_grid_ordered'] = bool(circle_grid_ordered_R)
     
     # 若背景計算因任何理由未獲得特徵，則降級在主線程中計算
     if not current_cand['kpB'] or current_cand['desB'] is None:
@@ -2382,11 +2888,22 @@ def main():
             'spec_temporal_mask': None,
         }
         if CIRCLE_LABEL_MATCH_ENABLED:
-            extra_cand['circle_centers'], extra_cand['circle_radii'] = detect_circle_label_centers(imgB_extra_bgr)
-            print(f"[CircleLabel] detected right F{extra_cand['idx']}={len(extra_cand['circle_centers'])} centers")
+            extra_circle_debug = collect_circle_label_contours(imgB_extra_bgr)
+            extra_cand['circle_centers'] = extra_circle_debug['centers']
+            extra_cand['circle_radii'] = extra_circle_debug['radii']
+            expected_grid_count = int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS)
+            extra_cand['circle_grid_ordered'] = bool(
+                extra_circle_debug.get('method') == 'grid-guided' and
+                len(extra_cand['circle_centers']) == expected_grid_count
+            )
+            print(
+                f"[CircleLabel] detected right F{extra_cand['idx']}="
+                f"{len(extra_cand['circle_centers'])} ({extra_circle_debug.get('method')}) centers"
+            )
         else:
             extra_cand['circle_centers'] = _empty_points()
             extra_cand['circle_radii'] = np.empty((0,), dtype=np.float32)
+            extra_cand['circle_grid_ordered'] = False
         # 若背景中未成功提取，才在主線程中提取特徵
         if not extra_cand['kpB'] or extra_cand['desB'] is None:
             kb_e, db_e = sift.detectAndCompute(extra_cand['gray'], None)
@@ -2567,6 +3084,42 @@ def main():
         s=75, facecolors='none', edgecolors='#FFE066', marker='o', linewidths=1.4,
         alpha=0.95, zorder=4.5
     )
+    # 4x6 circle-grid row/column labels.  Only show them when the detector
+    # guarantees row-major order, so R/C never lies about a legacy contour result.
+    circle_grid_label_artists_A = []
+    circle_grid_label_artists_B = []
+
+    def refresh_circle_grid_labels():
+        for artist in circle_grid_label_artists_A + circle_grid_label_artists_B:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        circle_grid_label_artists_A.clear()
+        circle_grid_label_artists_B.clear()
+
+        def _add_labels(ax, centers, enabled, color, store):
+            pts = np.asarray(centers if centers is not None else _empty_points(), dtype=np.float32).reshape(-1, 2)
+            expected = int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS)
+            if not enabled or len(pts) != expected:
+                return
+            for idx, (x, y) in enumerate(pts):
+                row_id = idx // int(CIRCLE_GRID_COLS) + 1
+                col_id = idx % int(CIRCLE_GRID_COLS) + 1
+                txt = ax.text(
+                    float(x) + 7.0, float(y) - 7.0, f"R{row_id}C{col_id}",
+                    color=color, fontsize=7, fontweight='bold', zorder=8,
+                    bbox=dict(facecolor='black', alpha=0.45, edgecolor='none', pad=0.8)
+                )
+                store.append(txt)
+
+        _add_labels(ax_A, circle_centers_L, circle_grid_ordered_L, '#00E5FF', circle_grid_label_artists_A)
+        _add_labels(
+            ax_B, current_cand.get('circle_centers', _empty_points()),
+            current_cand.get('circle_grid_ordered', False), '#FFE066', circle_grid_label_artists_B
+        )
+
+    refresh_circle_grid_labels()
     epi_line, = ax_B.plot([], [], 'yellow', lw=1, alpha=0.6, zorder=4)
     sift_rect = Rectangle((0, 0), 0, 0, linewidth=1, edgecolor='magenta', facecolor='none', linestyle='--', alpha=0.8, zorder=4)
     ax_B.add_patch(sift_rect)
@@ -3633,6 +4186,7 @@ def main():
         scatter_mid_grad_match.set_offsets(np.empty((0,2)))
         scatter_circle_A.set_offsets(circle_centers_L if len(circle_centers_L) else _empty_points())
         scatter_circle_B.set_offsets(current_cand.get('circle_centers', _empty_points()))
+        refresh_circle_grid_labels()
         
         if res.get('g_refA') is not None and res.get('g_refB') is not None:
             refA_groups = res.get('g_refA_groups')
@@ -4007,6 +4561,13 @@ def main():
     ax_btn_contour_debug = fig.add_axes([0.88, 0.74, 0.08, 0.04])
     btn_contour_debug = Button(ax_btn_contour_debug, "Show Contours", **btn_style)
 
+    ax_btn_plane_mode = fig.add_axes([0.58, 0.68, 0.08, 0.04])
+    _plane_btn_initial = "Plane: 2P" if reference_plane_mode == '2-pattern' else "Plane: 1P"
+    btn_plane_mode = Button(ax_btn_plane_mode, _plane_btn_initial, **btn_style)
+
+    ax_btn_circle_csv = fig.add_axes([0.68, 0.68, 0.08, 0.04])
+    btn_circle_csv = Button(ax_btn_circle_csv, "24Pt Export", **btn_style)
+
     ax_btn_rt_sift = fig.add_axes([0.88, 0.68, 0.08, 0.04])
     btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
 
@@ -4033,7 +4594,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug, btn_rt_sift]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug, btn_plane_mode, btn_circle_csv, btn_rt_sift]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -4044,15 +4605,17 @@ def main():
         b.ax.patch.set_edgecolor('#007ACC')
         
     # 2. 深度計算類：使用警告橘/強調橘 (#D83B01)
-    for b in [btn_calc, btn_auto_calc]:
+    for b in [btn_calc, btn_auto_calc, btn_circle_csv]:
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_contour_debug, btn_plane_mode]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
     btn_return_menu.ax.patch.set_edgecolor('#28A745')
+    btn_plane_mode.ax.patch.set_edgecolor(
+        '#28A745' if reference_plane_mode == '2-pattern' else '#D83B01')
         
     btn_grad_toggle.label.set_fontsize(7) # 特長文字微調
     btn_contour_debug.label.set_fontsize(7)
@@ -4166,9 +4729,9 @@ def main():
 
         panels = [
             (dbg_axes[0, 0], left_debug['mask'], "Left binary mask", 'gray'),
-            (dbg_axes[0, 1], left_overlay, f"Left contours: {len(left_debug['centers'])} accepted", None),
+            (dbg_axes[0, 1], left_overlay, f"Left {left_debug.get('method', 'detector')}: {len(left_debug['centers'])} centers", None),
             (dbg_axes[1, 0], right_debug['mask'], "Right binary mask", 'gray'),
-            (dbg_axes[1, 1], right_overlay, f"Right contours: {len(right_debug['centers'])} accepted", None),
+            (dbg_axes[1, 1], right_overlay, f"Right {right_debug.get('method', 'detector')}: {len(right_debug['centers'])} centers", None),
         ]
         for ax_dbg, img_dbg, title, cmap in panels:
             ax_dbg.set_facecolor('#1E1E1E')
@@ -4180,8 +4743,8 @@ def main():
         dbg_fig.tight_layout()
         dbg_fig.show()
         print(
-            f"[CircleLabel Debug] left accepted={len(left_debug['centers'])}/{len(left_debug['contours'])}, "
-            f"right accepted={len(right_debug['centers'])}/{len(right_debug['contours'])}"
+            f"[CircleLabel Debug] left method={left_debug.get('method')} centers={len(left_debug['centers'])}, "
+            f"right method={right_debug.get('method')} centers={len(right_debug['centers'])}"
         )
         
     def on_return_menu(event):
@@ -4320,6 +4883,344 @@ def main():
                 depth_text.set_text(f"Custom plane fitted. Points: {len(pts)}")
                 request_blit_refresh()
         
+    def _format_reference_plane_ids(value):
+        if value is None:
+            return "N/A"
+        if isinstance(value, np.ndarray):
+            value = value.tolist()
+        if isinstance(value, (list, tuple, set)):
+            return ";".join(str(int(v)) for v in value) if len(value) else "N/A"
+        return str(value)
+
+    def on_reference_plane_toggle(event):
+        nonlocal reference_plane_mode, global_plane_n, global_plane_c
+
+        if reference_plane_mode == '2-pattern':
+            target_mode = '1-pattern'
+        else:
+            target_mode = '2-pattern'
+
+        # If the analysis stage did not precompute a 1-pattern plane, build it
+        # lazily only when the user explicitly requests 1P.  This is intentional:
+        # default 2P startup remains byte-for-byte equivalent to the 0.7-mm version.
+        if target_mode == '1-pattern' and target_mode not in reference_planes:
+            lazy_n, lazy_c = compute_global_plane(
+                imgA_gray, KL, ACTUAL_MARKER_SIZE_MM)
+            if lazy_n is not None and lazy_c is not None:
+                reference_planes['1-pattern'] = {
+                    'plane_n': np.asarray(lazy_n, dtype=np.float64),
+                    'plane_c': np.asarray(lazy_c, dtype=np.float64),
+                    'marker_ids': video_data.get('global_plane_marker_ids'),
+                    'rms_mm': video_data.get('global_plane_rms_mm'),
+                }
+                video_data['single_pattern_plane_n'] = reference_planes['1-pattern']['plane_n']
+                video_data['single_pattern_plane_c'] = reference_planes['1-pattern']['plane_c']
+
+        if target_mode not in reference_planes:
+            print(f"⚠️ [基準平面] {target_mode} 平面不可用，維持 {reference_plane_mode}。")
+            depth_text.set_text(f"Reference plane {target_mode} is unavailable")
+            request_blit_refresh()
+            return
+
+        reference_plane_mode = target_mode
+        plane_info = reference_planes[reference_plane_mode]
+        global_plane_n = plane_info['plane_n']
+        global_plane_c = plane_info['plane_c']
+        video_data['global_plane_n'] = global_plane_n
+        video_data['global_plane_c'] = global_plane_c
+        video_data['global_plane_marker_ids'] = plane_info.get('marker_ids')
+        video_data['global_plane_rms_mm'] = plane_info.get('rms_mm')
+
+        # Every right-frame candidate shares the same UI-left reference plane.
+        for _cand in [current_cand] + extra_candidates_list:
+            _cand['plane_n'] = global_plane_n
+            _cand['plane_c'] = global_plane_c
+
+        plane_dist_history.clear()
+        btn_plane_mode.label.set_text(
+            "Plane: 2P" if reference_plane_mode == '2-pattern' else "Plane: 1P")
+        btn_plane_mode.ax.patch.set_edgecolor(
+            '#28A745' if reference_plane_mode == '2-pattern' else '#D83B01')
+        ids_text = _format_reference_plane_ids(plane_info.get('marker_ids'))
+        rms_val = plane_info.get('rms_mm')
+        rms_text = f"{float(rms_val):.3f} mm" if rms_val is not None else "N/A"
+        print(
+            f"📐 [基準平面切換] 現在使用 {reference_plane_mode} | "
+            f"IDs={ids_text} | RMS={rms_text}"
+        )
+        if custom_plane_fitted:
+            print("ℹ️ Custom Plane 目前已擬合；畫面 Wound Height 仍優先顯示 Custom Plane。24Pt CSV 固定使用目前選擇的 ArUco 基準平面。")
+
+        # Recompute the last selected point immediately so the displayed height
+        # changes as soon as the plane button is pressed.
+        if last_click and not custom_plane_mode:
+            do_measure(last_click[0], last_click[1])
+        else:
+            depth_text.set_text(
+                f"Reference plane: {reference_plane_mode} | IDs={ids_text} | RMS={rms_text}")
+            request_blit_refresh()
+
+    def on_export_circle_heights_csv(event):
+        """Export all 4x6 circle heights using the SAME CircleLabel path as a UI click.
+
+        Important consistency rules:
+        1) The left point is exactly the ordered detected circle center (equivalent to snap distance 0).
+        2) Do NOT inject the right row/column center as a manual match.
+           Instead set circle_label_match_active=True and let compute_measure() call
+           circle_label_search_rect() + find_circle_center_in_rect(), exactly like do_measure().
+        3) Wound Height is calculated from the best-pair 3D point.  A normal UI click stores
+           this as res['p3d_best']; here we call only current_cand, so res['p3d'] IS p3d_best.
+        """
+        expected_count = int(CIRCLE_GRID_ROWS) * int(CIRCLE_GRID_COLS)
+        right_centers = np.asarray(
+            current_cand.get('circle_centers', _empty_points()), dtype=np.float32).reshape(-1, 2)
+        left_centers = np.asarray(circle_centers_L, dtype=np.float32).reshape(-1, 2)
+
+        if reference_plane_mode not in reference_planes:
+            print("⚠️ [24Pt CSV] 目前沒有可用的 ArUco 基準平面。")
+            depth_text.set_text("24Pt CSV failed: no reference plane")
+            request_blit_refresh()
+            return
+        if not circle_grid_ordered_L or not current_cand.get('circle_grid_ordered', False):
+            print(
+                "⚠️ [24Pt CSV] 左/右圖必須都由 grid-guided 4x6 detector 成功建立順序，"
+                "避免 legacy contour 的任意順序造成錯誤 row/col 標示。")
+            depth_text.set_text("24Pt CSV failed: 4x6 grid order unavailable")
+            request_blit_refresh()
+            return
+        if len(left_centers) != expected_count or len(right_centers) != expected_count:
+            print(
+                f"⚠️ [24Pt CSV] 需要左右各 {expected_count} 個圓心，"
+                f"目前 left={len(left_centers)}, right={len(right_centers)}。")
+            depth_text.set_text(
+                f"24Pt CSV failed: left={len(left_centers)}, right={len(right_centers)}")
+            request_blit_refresh()
+            return
+
+        plane_info = reference_planes[reference_plane_mode]
+        plane_n = np.asarray(plane_info['plane_n'], dtype=np.float64)
+        plane_c = np.asarray(plane_info['plane_c'], dtype=np.float64)
+        ids_text = _format_reference_plane_ids(plane_info.get('marker_ids'))
+        plane_rms = plane_info.get('rms_mm')
+
+        left_gray = cv2.cvtColor(locked_L_clean, cv2.COLOR_BGR2GRAY)
+        left_gray = preprocess_gray(left_gray, view_state.get('enable_clahe', False))
+
+        # This is the critical difference from the previous CSV implementation:
+        # emulate a click that has snapped exactly onto a circle center.
+        batch_vs = dict(view_state)
+        batch_vs['circle_label_match_active'] = True
+        batch_vs['circle_label_snap_dist'] = 0.0
+
+        rows = []
+        valid_count = 0
+        print("\n" + "=" * 80)
+        print(
+            f"📊 [24Pt CSV] 開始計算 {expected_count} 個圓點 | "
+            f"Plane={reference_plane_mode}, IDs={ids_text} | matching=UI CircleLabel path")
+        print("=" * 80)
+
+        for idx in range(expected_count):
+            row_id = idx // int(CIRCLE_GRID_COLS) + 1
+            col_id = idx % int(CIRCLE_GRID_COLS) + 1
+            left_pt = left_centers[idx].astype(np.float32)
+            expected_right_pt = right_centers[idx].astype(np.float32)
+            u, v = map(float, left_pt)
+
+            # Same matching branch as do_measure() after magnetic snapping:
+            # no manual_match_pt, therefore compute_measure() uses the geometry-predicted
+            # ROI and chooses a detected right circle center.
+            res = compute_measure(
+                u, v, current_cand, left_gray, batch_vs,
+                manual_match_pt=None, left_cache={})
+
+            # A UI click later calls multi-frame fusion for displayed distance, but Wound Height
+            # deliberately uses p3d_best. Since this batch call uses current_cand only, p3d is
+            # exactly the same best-pair 3D point used by the UI height calculation.
+            p3d_best = res.get('p3d')
+            right_used = res.get('pt')
+
+            matched_right_index = ''
+            matched_row = ''
+            matched_col = ''
+            grid_match_ok = ''
+            if right_used is not None and np.all(np.isfinite(right_used)):
+                dists = np.linalg.norm(right_centers - np.asarray(right_used, dtype=np.float32), axis=1)
+                if len(dists):
+                    matched_idx0 = int(np.argmin(dists))
+                    # CircleLabel returns an actual detected center, so this should be ~0.
+                    if float(dists[matched_idx0]) <= max(2.0, float(CIRCLE_LABEL_MERGE_DISTANCE_PX)):
+                        matched_right_index = matched_idx0 + 1
+                        matched_row = matched_idx0 // int(CIRCLE_GRID_COLS) + 1
+                        matched_col = matched_idx0 % int(CIRCLE_GRID_COLS) + 1
+                        grid_match_ok = bool(matched_idx0 == idx)
+
+            record = {
+                'point_index': idx + 1,
+                'row': row_id,
+                'col': col_id,
+                'left_frame': int(locked_L_idx),
+                'right_frame': int(locked_R_idx),
+                'plane_mode': reference_plane_mode,
+                'plane_pattern_ids': ids_text,
+                'plane_rms_mm': '' if plane_rms is None else float(plane_rms),
+                'left_u_px': u,
+                'left_v_px': v,
+                'right_expected_u_px': float(expected_right_pt[0]),
+                'right_expected_v_px': float(expected_right_pt[1]),
+                'right_used_u_px': '',
+                'right_used_v_px': '',
+                'matched_right_index': matched_right_index,
+                'matched_row': matched_row,
+                'matched_col': matched_col,
+                'grid_match_ok': grid_match_ok,
+                'x_mm': '',
+                'y_mm': '',
+                'z_mm': '',
+                'camera_distance_mm': '',
+                'height_signed_mm': '',
+                'height_abs_mm': '',
+                'height_side': '',
+                'reprojection_error_px': '',
+                'match_method': res.get('method', ''),
+                'status': 'failed',
+                'fail_reason': res.get('fail_reason', ''),
+            }
+
+            if right_used is not None and np.all(np.isfinite(right_used)):
+                record['right_used_u_px'] = float(right_used[0])
+                record['right_used_v_px'] = float(right_used[1])
+            if res.get('error') is not None:
+                record['reprojection_error_px'] = float(res['error'])
+
+            if p3d_best is not None and np.all(np.isfinite(p3d_best)):
+                p3d_best = np.asarray(p3d_best, dtype=np.float64)
+                signed_height = float(np.dot(plane_n, p3d_best - plane_c))
+                record.update({
+                    'x_mm': float(p3d_best[0]),
+                    'y_mm': float(p3d_best[1]),
+                    'z_mm': float(p3d_best[2]),
+                    'camera_distance_mm': float(np.linalg.norm(p3d_best)),
+                    'height_signed_mm': signed_height,
+                    'height_abs_mm': abs(signed_height),
+                    'height_side': 'Above' if signed_height > 0 else ('Below' if signed_height < 0 else 'OnPlane'),
+                    'status': 'ok',
+                    'fail_reason': '',
+                })
+                valid_count += 1
+                match_note = (
+                    f"matched=R{matched_row}C{matched_col}" if matched_row != ''
+                    else "matched=?"
+                )
+                print(
+                    f"  P{idx + 1:02d} (R{row_id}C{col_id}) "
+                    f"height={signed_height:+.3f} mm | {match_note} | method={res.get('method', '')}")
+            else:
+                print(
+                    f"  P{idx + 1:02d} (R{row_id}C{col_id}) FAILED: "
+                    f"{record['fail_reason']}")
+            rows.append(record)
+
+        video_path_obj = Path(VIDEO_PATH)
+        save_dir = video_path_obj.parent if str(video_path_obj.parent) not in ('', '.') else Path(RECORD_SAVE_DIR)
+        if not save_dir.is_absolute():
+            save_dir = Path.cwd() / save_dir
+        save_dir.mkdir(parents=True, exist_ok=True)
+        stem = video_path_obj.stem if video_path_obj.stem else 'measurement'
+        plane_tag = '2pattern' if reference_plane_mode == '2-pattern' else '1pattern'
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        csv_path = save_dir / f"{stem}_circle_heights_{plane_tag}_{timestamp}.csv"
+        xlsx_path = save_dir / f"{stem}_circle_heights_{plane_tag}_{timestamp}.xlsx"
+
+        fieldnames = [
+            'point_index', 'row', 'col', 'left_frame', 'right_frame',
+            'plane_mode', 'plane_pattern_ids', 'plane_rms_mm',
+            'left_u_px', 'left_v_px',
+            'right_expected_u_px', 'right_expected_v_px',
+            'right_used_u_px', 'right_used_v_px',
+            'matched_right_index', 'matched_row', 'matched_col', 'grid_match_ok',
+            'x_mm', 'y_mm', 'z_mm', 'camera_distance_mm',
+            'height_signed_mm', 'height_abs_mm', 'height_side',
+            'reprojection_error_px', 'match_method', 'status', 'fail_reason',
+        ]
+        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f_csv:
+            writer = csv.DictWriter(f_csv, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        # CSV 本身不支援多分頁，因此同步輸出一份 XLSX：
+        #   Sheet 1: Details              -> 與 CSV 相同的完整逐點資料
+        #   Sheet 2: Height_abs_mm_4x6   -> 4(row) x 6(col) 的 height_abs_mm 矩陣
+        # 第二頁每一格仍保存「數值」，但以 Excel number format 顯示成
+        # R1C1  0.703 / R1C2  0.418 ...，因此最上面一排會直接看到 R1C1~R1C6。
+        xlsx_saved = False
+        xlsx_error = None
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
+
+            wb = Workbook()
+            ws_detail = wb.active
+            ws_detail.title = 'Details'
+
+            # Sheet 1: detailed table (same columns as CSV)
+            ws_detail.append(fieldnames)
+            for rec in rows:
+                ws_detail.append([rec.get(name, '') for name in fieldnames])
+
+            header_fill = PatternFill('solid', fgColor='1F4E78')
+            header_font = Font(color='FFFFFF', bold=True)
+            thin = Side(style='thin', color='D9E1F2')
+            for cell in ws_detail[1]:
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+            ws_detail.freeze_panes = 'A2'
+            for col_cells in ws_detail.columns:
+                max_len = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col_cells)
+                ws_detail.column_dimensions[col_cells[0].column_letter].width = min(max(max_len + 2, 10), 24)
+
+            # Sheet 2: true 4x6 matrix. Values remain numeric for later Excel formulas.
+            ws_grid = wb.create_sheet('Height_abs_mm_4x6')
+            grid_font = Font(bold=True, size=11)
+            grid_fill = PatternFill('solid', fgColor='E2F0D9')
+
+            for idx, rec in enumerate(rows[:expected_count]):
+                r = idx // int(CIRCLE_GRID_COLS) + 1
+                c = idx % int(CIRCLE_GRID_COLS) + 1
+                cell = ws_grid.cell(row=r, column=c)
+                value = rec.get('height_abs_mm', '')
+                if value != '' and value is not None:
+                    cell.value = float(value)
+                    # Keep numeric value, but visually prefix the cell with its grid ID.
+                    cell.number_format = f'"R{r}C{c}  "0.000'
+                else:
+                    cell.value = f'R{r}C{c}  N/A'
+                cell.font = grid_font
+                cell.fill = grid_fill
+                cell.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+
+            for c in range(1, int(CIRCLE_GRID_COLS) + 1):
+                ws_grid.column_dimensions[ws_grid.cell(1, c).column_letter].width = 18
+            for r in range(1, int(CIRCLE_GRID_ROWS) + 1):
+                ws_grid.row_dimensions[r].height = 28
+
+            wb.save(xlsx_path)
+            xlsx_saved = True
+        except Exception as exc:
+            xlsx_error = exc
+            print(f"⚠️ [24Pt XLSX] 輸出失敗: {exc}")
+            print("   若是缺少 openpyxl，請執行: pip install openpyxl")
+
+        print(f"✅ [24Pt CSV] 已完成 {valid_count}/{expected_count} 點，CSV: {csv_path}")
+        if xlsx_saved:
+            print(f"✅ [24Pt XLSX] Details + Height_abs_mm_4x6 已輸出: {xlsx_path}")
+        depth_text.set_text(
+            f"24Pt export: {valid_count}/{expected_count} valid\n"
+            f"CSV + {'XLSX' if xlsx_saved else 'XLSX failed'} | Plane: {reference_plane_mode}")
+        request_blit_refresh()
+
     def on_calc(event):
         if last_click:
             do_measure(last_click[0], last_click[1])
@@ -4361,6 +5262,8 @@ def main():
         request_blit_refresh()
 
     btn_rt_sift.on_clicked(on_rt_sift_toggle)
+    btn_plane_mode.on_clicked(on_reference_plane_toggle)
+    btn_circle_csv.on_clicked(on_export_circle_heights_csv)
 
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
@@ -4385,7 +5288,8 @@ def main():
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
-                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift]),
+                     ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay,
+                     ax_btn_plane_mode, ax_btn_circle_csv, ax_btn_rt_sift]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]
