@@ -1,0 +1,84 @@
+{
+  "video": "D:\\Lightglue\\lg_env\\test_video_Zebra\\video_20260825_164357.mp4",
+  "frame_count": 257,
+  "mode": "original",
+  "idx_A": 127,
+  "idx_B": 179,
+  "baseline_mm": 50.52550599280517,
+  "analysis_total_elapsed_s": 3.184926699992502,
+  "analysis_stage_timing_s": [
+    {
+      "stage": "影片索引建立(257 幀)",
+      "elapsed_s": 0.010143699997570366
+    },
+    {
+      "stage": "ArUco偵測+配對搜尋(含極線重排)",
+      "elapsed_s": 3.063011299993377
+    },
+    {
+      "stage": "混合RT精修+次佳打包",
+      "elapsed_s": 0.059648599999491125
+    },
+    {
+      "stage": "最終RT閉環+品質驗證",
+      "elapsed_s": 0.001285900012589991
+    },
+    {
+      "stage": "RT SIFT診斷檔輸出",
+      "elapsed_s": 0.010347899980843067
+    },
+    {
+      "stage": "診斷狀態封裝",
+      "elapsed_s": 2.820001100189984e-05
+    },
+    {
+      "stage": "影像去畸變+輸出幀準備",
+      "elapsed_s": 0.030511099990690127
+    },
+    {
+      "stage": "基準平面建立",
+      "elapsed_s": 0.0099476000177674
+    },
+    {
+      "stage": "深度匹配特徵延後計算",
+      "elapsed_s": 4.799978341907263e-06
+    }
+  ],
+  "pair_search_timing_s": {
+    "endpoint_proposal": 3.649998689070344e-05,
+    "marker_map_temporal": 0.9765333000104874,
+    "pattern_guided_expansion": 0.0030657000024802983,
+    "local_window_klt": 1.5275718999910168,
+    "candidate_enumeration": 0.10058090000529774,
+    "sift_essential_rerank": 0.4549600000027567,
+    "other_overhead": 0.0002629999944474548
+  },
+  "pair_search_detail_timing_s": {
+    "endpoint_frame_decode_aruco": 0.0,
+    "endpoint_pose_direction_rank": 3.649998689070344e-05,
+    "marker_probe_decode_detect": 0.9367025000101421,
+    "marker_map_graph": 0.00017549999756738544,
+    "temporal_pose_hypotheses": 0.012841599993407726,
+    "temporal_path_dp": 0.0263697000045795,
+    "marker_temporal_overhead": 0.0004440000047907233,
+    "pattern_core_geometry": 0.003028000006452203,
+    "pattern_extra_probe_rebuild": 0.0,
+    "pattern_overhead": 3.7699996028095484e-05,
+    "local_provisional_pair": 0.24753490000148304,
+    "local_frame_decode_detect": 0.2892279000079725,
+    "local_pose_hypotheses": 0.022296300012385473,
+    "local_klt_tracking": 0.26295209999079816,
+    "local_path_rerank": 0.3681835999886971,
+    "local_global_dp_rebuild": 0.33715020000818186,
+    "local_overhead": 0.00022689998149871826,
+    "candidate_branch_pack": 0.00011260001338087022,
+    "candidate_pair_branch_score": 0.10016850000829436,
+    "candidate_topk_budget": 0.00028819998260587454,
+    "candidate_overhead": 1.1600001016631722e-05,
+    "sift_feature_extract": 0.3125655000039842,
+    "sift_descriptor_match": 0.022326699981931597,
+    "sift_essential_geometry": 0.07242860001861118,
+    "sift_rerank_and_select": 0.04556940001202747,
+    "sift_overhead": 0.00206979998620227
+  }
+}

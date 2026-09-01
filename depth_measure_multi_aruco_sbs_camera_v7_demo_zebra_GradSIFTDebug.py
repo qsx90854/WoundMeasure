@@ -114,6 +114,7 @@ ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
 SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
 ENABLE_POSE_SMOOTHING  = True                      # 是否啟用時序平滑濾波 (EMA)
 POSE_SMOOTHING_ALPHA   = 0.3                         # 平滑係數
+ENABLE_ECC_REFINEMENT_DEFAULT = False              # Grad-SIFT/ORB debug：先關閉點擊匹配後的 ECC 精修
 ENABLE_CLAHE_DEFAULT  = False                      # 預設是否啟用 CLAHE
 CLAHE_CLIP_LIMIT      = 2.0                        # CLAHE 對比度限制閾值 (數值愈大對比愈強，雜訊也愈大)
 CLAHE_TILE_GRID_SIZE  = (8, 8)                     # CLAHE 分塊大小 (8, 8) 代表 8x8 的網格
@@ -136,9 +137,9 @@ EPIPOLAR_SEARCH_WEAK_FLOOR = 0.05                   # Epi-band search: weak scor
 LEFT_PATCH_SEARCH_RADIUS      = 30#18                         # 左圖點選候選點周圍的搜索半徑 (pixels)
 RIGHT_PATCH_SEARCH_RADIUS     = 75#40#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
 GRAD_SIFT_MAX_RT_ADJUST_PX    = 75#40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
-LEFT_GRADIENT_POINTS_COUNT    = 150                        # 左圖周圍取梯度最高的特徵點數量
+LEFT_GRADIENT_POINTS_COUNT    = 80                         # 左圖周圍取梯度最高的特徵點數量
 RIGHT_GRADIENT_POINTS_COUNT   = 300                       # 右圖周圍取梯度最高的特徵點數量
-LEFT_MID_GRADIENT_POINTS_COUNT = 150                       # 左圖周圍取梯度中等的特徵點數量
+LEFT_MID_GRADIENT_POINTS_COUNT = 80                        # 左圖周圍取梯度中等的特徵點數量
 RIGHT_MID_GRADIENT_POINTS_COUNT = 300                      # 右圖周圍取梯度中等的特徵點數量
 
 GRAD_SIFT_RATIO_TEST          = 0.78                       # v1 Grad-SIFT KNN ratio test threshold
@@ -2044,20 +2045,45 @@ def main():
     precompute_masks_with_progress_window(extra_candidates_list, compute_locked_spec_masks)
     startup_timer.stage("高光遮罩預計算")
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6), facecolor='#1E1E1E')
+    # Debug 版改為上下兩列：上方保留原本左右量測圖，
+    # 下方顯示點擊區域的放大匹配診斷圖。
+    fig, axes_grid = plt.subplots(2, 2, figsize=(14, 10), facecolor='#1E1E1E')
     fig.canvas.manager.set_window_title("MeasureTool")
     try:
         fig.canvas.toolbar.pack_forget() # 隱藏底部的功能條
     except:
         pass
-    fig.subplots_adjust(top=0.58, right=0.98, left=0.05, bottom=0.08)
-    ax_A, ax_B = axes
+    fig.subplots_adjust(
+        top=0.735, right=0.98, left=0.05, bottom=0.130,
+        hspace=0.10, wspace=0.04)
+    (ax_A, ax_B), (ax_debug_A, ax_debug_B) = axes_grid
+    # Debug 說明移到影像外的獨立左右資訊列，避免長文字覆蓋 ROI，
+    # 並保留中間間距防止兩欄互相重疊。
+    ax_debug_info_A = fig.add_axes(
+        [0.05, 0.012, 0.445, 0.105], facecolor='#101010')
+    ax_debug_info_B = fig.add_axes(
+        [0.535, 0.012, 0.445, 0.105], facecolor='#101010')
+    for ax_info, border_color in (
+            (ax_debug_info_A, '#8FD3FF'),
+            (ax_debug_info_B, '#FFD29A')):
+        ax_info.set_xticks([])
+        ax_info.set_yticks([])
+        for spine in ax_info.spines.values():
+            spine.set_color(border_color)
+            spine.set_linewidth(0.8)
     im_A = ax_A.imshow(cv2.cvtColor(imgA_bgr, cv2.COLOR_BGR2RGB))
     im_B = ax_B.imshow(current_cand['rgb'])
-    for ax in axes:
+    # Debug panels show the actual grayscale inputs used by the default
+    # Grad-SIFT/ORB path, rather than the display-only RGB/overlay images.
+    im_debug_A = ax_debug_A.imshow(cv2.cvtColor(imgA_gray, cv2.COLOR_GRAY2RGB))
+    im_debug_B = ax_debug_B.imshow(
+        cv2.cvtColor(current_cand['gray'], cv2.COLOR_GRAY2RGB))
+    for ax in axes_grid.flat:
         ax.axis("off")
         ax.set_facecolor('#1E1E1E')
     ax_B.set_visible(False)
+    ax_debug_B.set_visible(False)
+    ax_debug_info_B.set_visible(False)
         
     # 加入專業感的影像外框
     from matplotlib.patches import Rectangle
@@ -2067,8 +2093,14 @@ def main():
     ax_B.add_patch(border_B)
     
     # 設定標題為白色
-    ax_A.set_title('Camera (Live)', color='white', fontsize=10, fontweight='bold', pad=10)
-    ax_B.set_title('右圖 (Locked)', color='white', fontsize=10, fontweight='bold', pad=10)
+    ax_A.set_title('Camera (Live)', color='white', fontsize=10, fontweight='bold', pad=5)
+    ax_B.set_title('右圖 (Locked)', color='white', fontsize=10, fontweight='bold', pad=5)
+    ax_debug_A.set_title(
+        'Grad-SIFT/ORB Debug - Left ROI (wheel zoom; double-click reset)', color='#8FD3FF',
+        fontsize=10, fontweight='bold', pad=5)
+    ax_debug_B.set_title(
+        'Grad-SIFT/ORB Debug - Right ROI (wheel zoom; double-click reset)', color='#FFD29A',
+        fontsize=10, fontweight='bold', pad=5)
 
     def draw_aruco(ax, corners):
         if not hasattr(ax, 'art'): ax.art = []
@@ -2204,8 +2236,90 @@ def main():
     sift_rect.set_visible(False)
     sift_rect_center, = ax_B.plot([], [], '+', color='magenta', markersize=12, markeredgewidth=1.5, zorder=5)
     sift_rect_center.set_visible(False)
+
+    # ---------------- Grad-SIFT/ORB 放大 Debug 圖層 ----------------
+    # 淺色小點：全部候選參考點；實心大點：最後通過的匹配點。
+    dbg_ref_high_A = ax_debug_A.scatter(
+        [], [], s=9, c='#8FD3FF', alpha=0.45, zorder=3)
+    dbg_ref_high_B = ax_debug_B.scatter(
+        [], [], s=9, c='#8FD3FF', alpha=0.45, zorder=3)
+    dbg_ref_mid_A = ax_debug_A.scatter(
+        [], [], s=9, c='#FFD29A', alpha=0.45, zorder=3)
+    dbg_ref_mid_B = ax_debug_B.scatter(
+        [], [], s=9, c='#FFD29A', alpha=0.45, zorder=3)
+    dbg_inlier_high_A = ax_debug_A.scatter(
+        [], [], s=38, facecolors='none', edgecolors='#00BFFF',
+        linewidths=1.3, zorder=6)
+    dbg_inlier_high_B = ax_debug_B.scatter(
+        [], [], s=38, facecolors='none', edgecolors='#00BFFF',
+        linewidths=1.3, zorder=6)
+    dbg_inlier_mid_A = ax_debug_A.scatter(
+        [], [], s=38, facecolors='none', edgecolors='#FF8C00',
+        linewidths=1.3, zorder=6)
+    dbg_inlier_mid_B = ax_debug_B.scatter(
+        [], [], s=38, facecolors='none', edgecolors='#FF8C00',
+        linewidths=1.3, zorder=6)
+    dbg_click_A = ax_debug_A.scatter(
+        [], [], s=120, c='white', marker='x', linewidths=2.0, zorder=9)
+    dbg_seed_B = ax_debug_B.scatter(
+        [], [], s=130, c='#FF00FF', marker='+', linewidths=2.0, zorder=8)
+    dbg_raw_B = ax_debug_B.scatter(
+        [], [], s=90, facecolors='none', edgecolors='white', marker='D',
+        linewidths=1.5, zorder=9)
+    dbg_final_B = ax_debug_B.scatter(
+        [], [], s=120, c='#00FF66', marker='x', linewidths=2.2, zorder=10)
+    dbg_pred_B = ax_debug_B.scatter(
+        [], [], s=28, facecolors='none', edgecolors='#FF00FF', marker='o',
+        linewidths=0.9, alpha=0.8, zorder=5)
+    # Descriptor audit selection.  These artists only explain the KNN result;
+    # they never feed back into Grad-SIFT/ORB matching.
+    dbg_audit_selected_A = ax_debug_A.scatter(
+        [], [], s=150, facecolors='none', edgecolors='#FFFF00', marker='*',
+        linewidths=1.8, zorder=11)
+    dbg_audit_top1_B = ax_debug_B.scatter(
+        [], [], s=120, facecolors='none', edgecolors='#39FF14', marker='o',
+        linewidths=2.0, zorder=11)
+    dbg_audit_top2_B = ax_debug_B.scatter(
+        [], [], s=115, facecolors='none', edgecolors='#FF3333', marker='s',
+        linewidths=1.8, zorder=11)
+    dbg_audit_local_seed_B = ax_debug_B.scatter(
+        [], [], s=90, c='#FF00FF', marker='x', linewidths=1.5, zorder=10)
+    dbg_epi_line, = ax_debug_B.plot(
+        [], [], color='#FFFF00', lw=1.0, alpha=0.75, zorder=4)
+    dbg_hull_line, = ax_debug_A.plot(
+        [], [], color='#00FF66', lw=1.4, linestyle='--', alpha=0.9, zorder=5)
+    dbg_hull_line_B, = ax_debug_B.plot(
+        [], [], color='#00FF66', lw=1.4, linestyle='--', alpha=0.9, zorder=5)
+    dbg_search_rect = Rectangle(
+        (0, 0), 0, 0, linewidth=1.2, edgecolor='#FF00FF',
+        facecolor='none', linestyle='--', alpha=0.8, zorder=4)
+    ax_debug_B.add_patch(dbg_search_rect)
+    dbg_search_rect.set_visible(False)
+    dbg_info_A = ax_debug_info_A.text(
+        0.012, 0.95, "Click the upper-left image to inspect matching",
+        transform=ax_debug_info_A.transAxes, color='white', fontsize=7,
+        va='top', ha='left', zorder=12, clip_on=True)
+    dbg_info_B = ax_debug_info_B.text(
+        0.012, 0.95,
+        "purple +=RT/plane seed | white diamond=raw | green x=final",
+        transform=ax_debug_info_B.transAxes, color='white', fontsize=7,
+        va='top', ha='left', zorder=12, clip_on=True)
+    # 每次點擊都會重建的跨圖連線、Homography residual 線與編號標籤。
+    debug_pair_artists = []
+    # Descriptor-audit selection lines are managed separately so clicking a
+    # raw reference can replace only the Top-1/Top-2 explanation.
+    debug_audit_artists = []
+    debug_audit_state = {
+        'records': [], 'selected_index': None,
+        'base_left_text': '', 'base_right_text': '',
+        'descriptor_name': 'N/A', 'audit': None,
+    }
+    # Home limits are refreshed for every measurement.  Debug zoom/reset only
+    # changes the axes view and never feeds coordinates back into matching.
+    debug_zoom_home = {'A': None, 'B': None}
+
     # HUD 風格的文字面板
-    depth_text = fig.text(0.53, 0.35, "", transform=fig.transFigure,
+    depth_text = fig.text(0.53, 0.50, "", transform=fig.transFigure,
                           color='white', fontweight='bold', fontsize=13,
                           bbox=dict(facecolor='#121212', alpha=0.7, edgecolor='#00FFFF', lw=1))
     fps_text = ax_A.text(0.01, 1.03, "FPS: --", transform=ax_A.transAxes,
@@ -2233,9 +2347,10 @@ def main():
     if pose_err is not None:
         pose_status_str += f" ({pose_err:.2f} px)"
         
-    pose_status_text = fig.text(0.975, 0.025, pose_status_str, transform=fig.transFigure,
-                                 color=pose_status_color, fontsize=10, fontweight='bold',
-                                 ha='right', va='bottom',
+    # 右側控制區少一列，將姿態狀態放在該空列，避免覆蓋放大的影像。
+    pose_status_text = fig.text(0.975, 0.785, pose_status_str, transform=fig.transFigure,
+                                 color=pose_status_color, fontsize=8, fontweight='bold',
+                                 ha='right', va='center',
                                  bbox=dict(facecolor='#121212', alpha=0.7, edgecolor=pose_status_color, lw=1), zorder=10)
                                  
     # Blit 最佳化：標記每幀會改變的 artists 為 animated，防止它們被無謂嫚入靜態背景圖
@@ -2370,31 +2485,38 @@ def main():
 
     # 勾選框面板 (改成兩行排列，每顆獨立以利排版)
     # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
-    ax_c1 = fig.add_axes([0.05, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c2 = fig.add_axes([0.17, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c3 = fig.add_axes([0.29, 0.92, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c4 = fig.add_axes([0.05, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c5 = fig.add_axes([0.17, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c6 = fig.add_axes([0.29, 0.86, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c7 = fig.add_axes([0.05, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c8 = fig.add_axes([0.17, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c9 = fig.add_axes([0.29, 0.80, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c10 = fig.add_axes([0.05, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c11 = fig.add_axes([0.17, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c12 = fig.add_axes([0.29, 0.74, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c13 = fig.add_axes([0.05, 0.68, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c14 = fig.add_axes([0.17, 0.68, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c15 = fig.add_axes([0.29, 0.68, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c16 = fig.add_axes([0.05, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c17 = fig.add_axes([0.17, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
-    ax_c19 = fig.add_axes([0.29, 0.62, 0.11, 0.04], facecolor='#1E1E1E')
+    # 頂端保留 0.965 以上給面板顯示切換小圓點；其餘控制項緊密
+    # 排在 0.772~0.958，讓下方 2x2 影像區能向上延伸。
+    control_row_y = (0.932, 0.900, 0.868, 0.836, 0.804, 0.772)
+    control_h = 0.026
+    ax_c1 = fig.add_axes([0.05, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c2 = fig.add_axes([0.17, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c3 = fig.add_axes([0.29, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c4 = fig.add_axes([0.05, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c5 = fig.add_axes([0.17, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c6 = fig.add_axes([0.29, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c7 = fig.add_axes([0.05, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.17, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c9 = fig.add_axes([0.29, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c10 = fig.add_axes([0.05, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c11 = fig.add_axes([0.17, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c12 = fig.add_axes([0.29, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c13 = fig.add_axes([0.05, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c14 = fig.add_axes([0.17, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c15 = fig.add_axes([0.29, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c16 = fig.add_axes([0.05, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c17 = fig.add_axes([0.17, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c19 = fig.add_axes([0.29, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
     
     # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
     c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
     c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
     c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
-    c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
+    c4 = Button(
+        ax_c4,
+        "[X] 啟用 ECC 精修" if ENABLE_ECC_REFINEMENT_DEFAULT else "[ ] 啟用 ECC 精修",
+        **btn_opt_style)
     c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
     c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
     c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
@@ -2410,8 +2532,9 @@ def main():
     c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
     c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
 
-    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
-                  'use_hamming': True, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
+    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True,
+                  'ecc': ENABLE_ECC_REFINEMENT_DEFAULT, 'manual': False,
+                  'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
                   'show_score': SHOW_SCORE_DEFAULT,
                   'use_color_hist': False,
@@ -2442,7 +2565,7 @@ def main():
         _artist.set_visible(view_state['show_mid_grad_points'])
 
     # 建立測量模式單選框，置於中間空白處
-    ax_mode = fig.add_axes([0.42, 0.86, 0.13, 0.10], facecolor='#1E1E1E')
+    ax_mode = fig.add_axes([0.42, 0.836, 0.13, 0.12], facecolor='#1E1E1E')
     ax_mode.patch.set_edgecolor('white')
     ax_mode.patch.set_linewidth(1.0)
     radio_mode = RadioButtons(ax_mode, ('雙幀直接', '多幀去漂移', '多幀純光流'),
@@ -2452,7 +2575,7 @@ def main():
     # 調整單選框字型與色彩
     for label in radio_mode.labels:
         label.set_color('white')
-        label.set_fontsize(8)
+        label.set_fontsize(7)
         
     def on_mode_change(label_text):
         global MEASURE_MODE
@@ -2472,7 +2595,7 @@ def main():
     # 統一設定文字顏色為白色，並將按鈕外框設為白色
     for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c19]:
         c.label.set_color('white')
-        c.label.set_fontsize(8)
+        c.label.set_fontsize(7)
         c.ax.patch.set_edgecolor('white')
         c.ax.patch.set_linewidth(1.0)
             
@@ -2589,6 +2712,540 @@ def main():
     last_click = None
     spec_mask_lock = threading.Lock()  # 高光遮罩計算互斥：背景預計算 vs 點擊時延遲計算
 
+    def build_grad_descriptor_audit(ref_a, ref_b, ref_a_groups, ref_b_groups,
+                                    left_gray, right_gray, left_bgr, cand,
+                                    click_pt, snap_view_state,
+                                    final_pts_a=None, final_pts_b=None,
+                                    final_groups=None):
+        """Recompute the read-only global KNN distances used by Grad-SIFT/ORB."""
+        ratio_limit = float(getattr(stereo_algo, 'GRAD_SIFT_RATIO_TEST', 0.78))
+        epi_limit = float(getattr(stereo_algo, 'GRAD_SIFT_EPIPOLAR_TOL_PX', 3.0))
+        seed_limit = float(getattr(stereo_algo, 'GRAD_SIFT_MAX_RT_ADJUST_PX', 80.0))
+        guided_radius = float(getattr(
+            stereo_algo, 'GRAD_SIFT_GUIDED_RADIUS_PX', 10.0))
+        guided_ratio_limit = float(getattr(
+            stereo_algo, 'GRAD_SIFT_GUIDED_RATIO_TEST', 0.95))
+        min_group_inliers = int(getattr(
+            stereo_algo, 'GRAD_SIFT_MIN_GROUP_INLIERS', 3))
+        use_hamming = bool(snap_view_state.get('use_hamming', False))
+        use_rgb_sift = bool(snap_view_state.get('use_rgb_sift', False))
+        use_opponent_sift = bool(snap_view_state.get('use_opponent_sift', False))
+
+        if use_hamming:
+            descriptor_name = 'ORB/Hamming'
+            match_threshold = 100.0
+            norm_type = cv2.NORM_HAMMING
+        elif use_rgb_sift:
+            descriptor_name = 'RGB-SIFT/L2'
+            match_threshold = 780.0
+            norm_type = cv2.NORM_L2
+        elif use_opponent_sift:
+            descriptor_name = 'Opponent-SIFT/L2'
+            match_threshold = 780.0
+            norm_type = cv2.NORM_L2
+        else:
+            descriptor_name = 'Gray-SIFT/L2'
+            match_threshold = 450.0
+            norm_type = cv2.NORM_L2
+
+        audit = {
+            'kind': 'global_knn',
+            'descriptor_name': descriptor_name,
+            'ratio_limit': ratio_limit,
+            'guided_radius': guided_radius,
+            'guided_ratio_limit': guided_ratio_limit,
+            'min_group_inliers': min_group_inliers,
+            'match_threshold': match_threshold,
+            'records': [],
+            'groups': {},
+            'default_index': None,
+        }
+        if ref_a is None or ref_b is None or left_gray is None or right_gray is None:
+            return audit
+
+        ref_a = np.asarray(ref_a, dtype=np.float32).reshape(-1, 2)
+        ref_b = np.asarray(ref_b, dtype=np.float32).reshape(-1, 2)
+        labels_a = np.asarray(
+            ref_a_groups if ref_a_groups is not None
+            else ['high'] * len(ref_a), dtype=object).reshape(-1)
+        labels_b = np.asarray(
+            ref_b_groups if ref_b_groups is not None
+            else ['high'] * len(ref_b), dtype=object).reshape(-1)
+        if len(labels_a) != len(ref_a):
+            labels_a = np.asarray(['high'] * len(ref_a), dtype=object)
+        if len(labels_b) != len(ref_b):
+            labels_b = np.asarray(['high'] * len(ref_b), dtype=object)
+
+        right_bgr = None
+        if cand.get('rgb') is not None:
+            right_bgr = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR)
+
+        def compute_descriptors(gray, bgr, keypoints):
+            if not keypoints:
+                return None, None
+            if use_hamming:
+                return orb.compute(gray, keypoints)
+            if use_rgb_sift:
+                return compute_rgb_sift_descriptors(bgr, keypoints, sift)
+            if use_opponent_sift:
+                return compute_opponent_sift_descriptors(bgr, keypoints, sift)
+            return sift.compute(gray, keypoints)
+
+        click_arr = np.asarray(click_pt, dtype=np.float32).reshape(2)
+        try:
+            rt_seed, _ = predict_right_seed_from_geometry(click_arr, cand, KL)
+            rt_seed = np.asarray(rt_seed, dtype=np.float32).reshape(2)
+        except Exception:
+            rt_seed = click_arr.copy()
+
+        for group_key, group_label in (('high', 'HIGH'), ('mid', 'MID')):
+            points_left = ref_a[labels_a == group_key]
+            points_right = ref_b[labels_b == group_key]
+            group_summary = {
+                'raw_left': int(len(points_left)),
+                'raw_right': int(len(points_right)),
+                'desc_left': 0,
+                'desc_right': 0,
+                'record_count': 0,
+            }
+            audit['groups'][group_key] = group_summary
+            if len(points_left) == 0 or len(points_right) == 0:
+                print(
+                    f"   [Descriptor Audit {descriptor_name} {group_label}] "
+                    f"no raw references: left={len(points_left)}, right={len(points_right)}")
+                continue
+
+            kpts_left_raw = [
+                cv2.KeyPoint(float(point[0]), float(point[1]), 31.0)
+                for point in points_left
+            ]
+            kpts_right_raw = [
+                cv2.KeyPoint(float(point[0]), float(point[1]), 31.0)
+                for point in points_right
+            ]
+            try:
+                kpts_left, des_left = compute_descriptors(
+                    left_gray, left_bgr, kpts_left_raw)
+                kpts_right, des_right = compute_descriptors(
+                    right_gray, right_bgr, kpts_right_raw)
+            except cv2.error as exc:
+                group_summary['error'] = str(exc)
+                print(
+                    f"   [Descriptor Audit {descriptor_name} {group_label}] "
+                    f"descriptor error: {exc}")
+                continue
+            if (kpts_left is None or des_left is None or
+                    kpts_right is None or des_right is None or
+                    len(des_left) == 0 or len(des_right) == 0):
+                print(
+                    f"   [Descriptor Audit {descriptor_name} {group_label}] "
+                    "no descriptors")
+                continue
+
+            n_left = min(len(kpts_left), len(des_left))
+            n_right = min(len(kpts_right), len(des_right))
+            kpts_left = list(kpts_left[:n_left])
+            kpts_right = list(kpts_right[:n_right])
+            des_left = des_left[:n_left]
+            des_right = des_right[:n_right]
+            group_summary['desc_left'] = int(n_left)
+            group_summary['desc_right'] = int(n_right)
+            if n_left == 0 or n_right == 0:
+                continue
+
+            matcher = cv2.BFMatcher(norm_type)
+            try:
+                knn_lr = matcher.knnMatch(des_left, des_right, k=2)
+                knn_rl = matcher.knnMatch(des_right, des_left, k=1)
+            except cv2.error as exc:
+                group_summary['error'] = str(exc)
+                print(
+                    f"   [Descriptor Audit {descriptor_name} {group_label}] "
+                    f"KNN error: {exc}")
+                continue
+            reverse_best = {
+                match.queryIdx: match.trainIdx
+                for pair in knn_rl for match in pair[:1]
+            }
+
+            group_records = []
+            for pair in knn_lr:
+                if not pair:
+                    continue
+                best = pair[0]
+                second = pair[1] if len(pair) > 1 else None
+                p_left = np.asarray(
+                    kpts_left[best.queryIdx].pt, dtype=np.float32)
+                p_top1 = np.asarray(
+                    kpts_right[best.trainIdx].pt, dtype=np.float32)
+                p_top2 = (
+                    np.asarray(kpts_right[second.trainIdx].pt, dtype=np.float32)
+                    if second is not None else None
+                )
+                d1 = float(best.distance)
+                d2 = float(second.distance) if second is not None else None
+                if d2 is None:
+                    ratio = None
+                elif d2 == 0.0:
+                    ratio = (
+                        float('nan') if d1 == 0.0 else float('inf'))
+                else:
+                    ratio = d1 / d2
+                pass_distance = d1 < match_threshold
+                # This intentionally mirrors the matcher: with one neighbour
+                # there is no ratio rejection; with d2==0 even 0/0 is rejected.
+                pass_ratio = (
+                    second is None or d1 < ratio_limit * float(second.distance))
+                pass_mutual = reverse_best.get(best.trainIdx) == best.queryIdx
+                if not pass_distance:
+                    decision = 'DIST'
+                elif not pass_ratio:
+                    decision = 'RATIO'
+                elif not pass_mutual:
+                    decision = 'MUTUAL'
+                else:
+                    decision = 'KNN_PASS'
+
+                epi_distance = None
+                if cand.get('F') is not None:
+                    line = cand['F'] @ np.array(
+                        [p_left[0], p_left[1], 1.0], dtype=np.float64)
+                    denom = float(np.hypot(line[0], line[1]))
+                    if denom > 1e-8:
+                        epi_distance = abs(float(
+                            line[0] * p_top1[0]
+                            + line[1] * p_top1[1]
+                            + line[2])) / denom
+                local_seed = rt_seed + (p_left - click_arr)
+                seed_distance = float(np.linalg.norm(p_top1 - local_seed))
+                top12_spatial_distance = (
+                    float(np.linalg.norm(p_top1 - p_top2))
+                    if p_top2 is not None else None
+                )
+                record = {
+                    'audit_index': len(audit['records']),
+                    'group': group_key,
+                    'group_label': group_label,
+                    'query_index': int(best.queryIdx),
+                    'pL': p_left,
+                    'top1': p_top1,
+                    'top2': p_top2,
+                    'local_seed': local_seed,
+                    'd1': d1,
+                    'd2': d2,
+                    'ratio': ratio,
+                    'gap': (d2 - d1) if d2 is not None else None,
+                    'top12_spatial_distance': top12_spatial_distance,
+                    'pass_distance': bool(pass_distance),
+                    'pass_ratio': bool(pass_ratio),
+                    'pass_mutual': bool(pass_mutual),
+                    'decision': decision,
+                    'epi_distance': epi_distance,
+                    'pass_epi': (
+                        None if epi_distance is None
+                        else bool(epi_distance <= epi_limit)
+                    ),
+                    'seed_distance': seed_distance,
+                    'pass_seed': bool(seed_distance <= seed_limit),
+                    'match_threshold': match_threshold,
+                    'ratio_limit': ratio_limit,
+                }
+                audit['records'].append(record)
+                group_records.append(record)
+
+            # Replay the matcher-guided candidate restriction without feeding
+            # anything back into matching.  This uses the same returned
+            # keypoints/descriptors and the same strict gates as
+            # map_from_gradient_group().
+            global_good_count = sum(
+                record['decision'] == 'KNN_PASS' for record in group_records)
+            guided_triggered = global_good_count < min_group_inliers
+            group_summary['guided_triggered'] = bool(guided_triggered)
+            group_summary['guided_attempted'] = 0
+            group_summary['guided_candidate_pass'] = 0
+            pts_right_arr = np.asarray(
+                [kp.pt for kp in kpts_right], dtype=np.float32)
+            for record in group_records:
+                record.update({
+                    'guided_triggered': bool(guided_triggered),
+                    'guided_radius': guided_radius,
+                    'guided_ratio_limit': guided_ratio_limit,
+                    'guided_attempted': False,
+                    'guided_radius_candidate_count': 0,
+                    'guided_candidate_count': 0,
+                    'guided_top1': None,
+                    'guided_top2': None,
+                    'guided_d1': None,
+                    'guided_d2': None,
+                    'guided_ratio': None,
+                    'guided_pass_distance': None,
+                    'guided_pass_ratio': None,
+                    'guided_candidate_pass': False,
+                    'guided_decision': (
+                        'GLOBAL_ALREADY_GOOD'
+                        if record['decision'] == 'KNN_PASS'
+                        else 'NOT_TRIGGERED'),
+                })
+                if not guided_triggered or record['decision'] == 'KNN_PASS':
+                    continue
+
+                p_left = record['pL']
+                if float(np.linalg.norm(p_left - click_arr)) >= 50.0:
+                    record['guided_decision'] = 'OUTSIDE_CLICK_RADIUS'
+                    continue
+                record['guided_attempted'] = True
+                group_summary['guided_attempted'] += 1
+                local_seed = record['local_seed']
+                spatial_d = np.linalg.norm(pts_right_arr - local_seed, axis=1)
+                cand_idx = np.flatnonzero(spatial_d <= guided_radius)
+                record['guided_radius_candidate_count'] = int(len(cand_idx))
+                if len(cand_idx) == 0:
+                    record['guided_decision'] = 'NO_RADIUS_CANDIDATES'
+                    continue
+
+                if cand.get('F') is not None:
+                    epi_line = cand['F'] @ np.array(
+                        [p_left[0], p_left[1], 1.0], dtype=np.float64)
+                    denom = float(np.hypot(epi_line[0], epi_line[1]))
+                    if denom > 1e-8:
+                        epi_d = np.abs(
+                            epi_line[0] * pts_right_arr[cand_idx, 0]
+                            + epi_line[1] * pts_right_arr[cand_idx, 1]
+                            + epi_line[2]
+                        ) / denom
+                        cand_idx = cand_idx[epi_d <= epi_limit]
+                record['guided_candidate_count'] = int(len(cand_idx))
+                if len(cand_idx) == 0:
+                    record['guided_decision'] = 'NO_EPI_CANDIDATES'
+                    continue
+
+                qi = int(record['query_index'])
+                if use_hamming:
+                    guided_dists = np.asarray([
+                        cv2.norm(
+                            des_left[qi], des_right[int(ri)],
+                            cv2.NORM_HAMMING)
+                        for ri in cand_idx
+                    ], dtype=np.float32)
+                else:
+                    guided_diff = (
+                        des_right[cand_idx].astype(np.float32)
+                        - des_left[qi].astype(np.float32))
+                    guided_dists = np.linalg.norm(guided_diff, axis=1)
+                order = np.argsort(guided_dists)
+                best_pos = int(order[0])
+                best_ri = int(cand_idx[best_pos])
+                guided_d1 = float(guided_dists[best_pos])
+                if len(order) > 1:
+                    second_pos = int(order[1])
+                    second_ri = int(cand_idx[second_pos])
+                    guided_d2 = float(guided_dists[second_pos])
+                    guided_top2 = pts_right_arr[second_ri].copy()
+                    if guided_d2 == 0.0:
+                        guided_ratio = (
+                            float('nan') if guided_d1 == 0.0
+                            else float('inf'))
+                    else:
+                        guided_ratio = guided_d1 / guided_d2
+                else:
+                    guided_d2 = None
+                    guided_top2 = None
+                    guided_ratio = None
+
+                guided_pass_distance = guided_d1 < match_threshold
+                guided_pass_ratio = (
+                    guided_d2 is None
+                    or guided_d1 < guided_ratio_limit * guided_d2)
+                if not guided_pass_distance:
+                    guided_decision = 'DIST'
+                elif not guided_pass_ratio:
+                    guided_decision = 'RATIO'
+                else:
+                    guided_decision = 'CANDIDATE_PASS'
+                    group_summary['guided_candidate_pass'] += 1
+                record.update({
+                    'guided_top1': pts_right_arr[best_ri].copy(),
+                    'guided_top2': guided_top2,
+                    'guided_d1': guided_d1,
+                    'guided_d2': guided_d2,
+                    'guided_ratio': guided_ratio,
+                    'guided_pass_distance': bool(guided_pass_distance),
+                    'guided_pass_ratio': bool(guided_pass_ratio),
+                    'guided_candidate_pass': bool(
+                        guided_pass_distance and guided_pass_ratio),
+                    'guided_decision': guided_decision,
+                })
+
+            group_summary['record_count'] = len(group_records)
+            group_summary['distance_pass'] = int(sum(
+                record['pass_distance'] for record in group_records))
+            group_summary['ratio_pass'] = int(sum(
+                record['pass_ratio'] for record in group_records))
+            group_summary['mutual_pass'] = int(sum(
+                record['pass_mutual'] for record in group_records))
+            group_summary['ratio_stage_reached'] = int(sum(
+                record['pass_distance'] for record in group_records))
+            group_summary['ratio_stage_pass'] = int(sum(
+                record['pass_distance'] and record['pass_ratio']
+                for record in group_records))
+            group_summary['mutual_stage_reached'] = int(sum(
+                record['pass_distance'] and record['pass_ratio']
+                for record in group_records))
+            group_summary['knn_pass'] = int(sum(
+                record['decision'] == 'KNN_PASS' for record in group_records))
+            group_summary['reject_dist'] = int(sum(
+                record['decision'] == 'DIST' for record in group_records))
+            group_summary['reject_ratio'] = int(sum(
+                record['decision'] == 'RATIO' for record in group_records))
+            group_summary['reject_mutual'] = int(sum(
+                record['decision'] == 'MUTUAL' for record in group_records))
+            group_summary['d2_zero'] = int(sum(
+                record.get('d2') == 0.0 for record in group_records))
+            finite_ratios = np.asarray([
+                record['ratio'] for record in group_records
+                if record['ratio'] is not None and np.isfinite(record['ratio'])
+            ], dtype=np.float64)
+            if finite_ratios.size:
+                group_summary['ratio_min'] = float(np.min(finite_ratios))
+                group_summary['ratio_median'] = float(np.median(finite_ratios))
+                group_summary['ratio_p90'] = float(
+                    np.percentile(finite_ratios, 90))
+                ratio_stats = (
+                    f"min/median/p90={group_summary['ratio_min']:.3f}/"
+                    f"{group_summary['ratio_median']:.3f}/"
+                    f"{group_summary['ratio_p90']:.3f}")
+            else:
+                ratio_stats = 'min/median/p90=N/A'
+            sensitivity = ', '.join(
+                f"<{limit:.2f}:{int(np.count_nonzero(finite_ratios < limit))}"
+                for limit in (ratio_limit, 0.85, 0.90, 0.95)
+            )
+            print(
+                f"   [Descriptor Audit {descriptor_name} {group_label}] "
+                f"n={len(group_records)}, abs<{match_threshold:g}:"
+                f"{group_summary['distance_pass']}, "
+                f"Lowe<{ratio_limit:.2f}:{group_summary['ratio_pass']}, "
+                f"mutual(any):{group_summary['mutual_pass']}, "
+                f"KNN_PASS:{group_summary['knn_pass']}, "
+                f"stage reject D/R/M="
+                f"{group_summary['reject_dist']}/"
+                f"{group_summary['reject_ratio']}/"
+                f"{group_summary['reject_mutual']}, "
+                f"d2=0:{group_summary['d2_zero']} | "
+                f"ratio {ratio_stats} | {sensitivity}")
+            print(
+                f"   [Descriptor Audit guided {group_label}] "
+                f"triggered={guided_triggered} "
+                f"(global_good={global_good_count} < "
+                f"min={min_group_inliers}), "
+                f"attempted={group_summary['guided_attempted']}, "
+                f"candidate_pass={group_summary['guided_candidate_pass']}, "
+                f"radius<={guided_radius:g}px, epi<={epi_limit:g}px, "
+                f"ratio<{guided_ratio_limit:.2f}")
+
+        # Compare the global-KNN audit with the matcher output that actually
+        # survived geometry/offset/RANSAC and participated in interpolation.
+        # If a final support point failed global KNN, its only possible source
+        # in the current matcher is the guided fallback.
+        if final_pts_a is None or final_pts_b is None:
+            accepted_left = np.empty((0, 2), dtype=np.float32)
+            accepted_right = np.empty((0, 2), dtype=np.float32)
+            accepted_groups = np.empty((0,), dtype=object)
+        else:
+            accepted_left = np.asarray(
+                final_pts_a, dtype=np.float32).reshape(-1, 2)
+            accepted_right = np.asarray(
+                final_pts_b, dtype=np.float32).reshape(-1, 2)
+            accepted_count = min(len(accepted_left), len(accepted_right))
+            accepted_left = accepted_left[:accepted_count]
+            accepted_right = accepted_right[:accepted_count]
+            if final_groups is None:
+                accepted_groups = np.asarray(
+                    ['high'] * accepted_count, dtype=object)
+            else:
+                accepted_groups = np.asarray(
+                    final_groups, dtype=object).reshape(-1)
+                if len(accepted_groups) != accepted_count:
+                    accepted_groups = np.asarray(
+                        ['high'] * accepted_count, dtype=object)
+
+        for record in audit['records']:
+            record['used_in_interpolation'] = False
+            record['guided_rescue'] = False
+            record['support_source'] = 'NOT_USED'
+            record['accepted_pR'] = None
+            record['guided_matches_final'] = None
+            if len(accepted_left) == 0:
+                continue
+            same_group = np.flatnonzero(accepted_groups == record['group'])
+            if len(same_group) == 0:
+                continue
+            distances = np.linalg.norm(
+                accepted_left[same_group] - record['pL'], axis=1)
+            nearest_pos = int(np.argmin(distances))
+            if float(distances[nearest_pos]) > 0.25:
+                continue
+            support_index = int(same_group[nearest_pos])
+            record['used_in_interpolation'] = True
+            record['accepted_pR'] = accepted_right[support_index].copy()
+            if record['decision'] == 'KNN_PASS':
+                record['support_source'] = 'GLOBAL_KNN'
+            else:
+                record['guided_rescue'] = True
+                record['support_source'] = 'GUIDED_RESCUE'
+                guided_top1 = record.get('guided_top1')
+                if guided_top1 is not None:
+                    record['guided_matches_final'] = bool(
+                        np.linalg.norm(
+                            np.asarray(guided_top1, dtype=np.float32)
+                            - record['accepted_pR']) <= 0.25)
+
+        for group_key, group_label in (('high', 'HIGH'), ('mid', 'MID')):
+            group_records = [
+                record for record in audit['records']
+                if record['group'] == group_key
+            ]
+            final_support_count = sum(
+                record['used_in_interpolation'] for record in group_records)
+            guided_rescue_count = sum(
+                record['guided_rescue'] for record in group_records)
+            global_support_count = sum(
+                record['support_source'] == 'GLOBAL_KNN'
+                for record in group_records)
+            audit['groups'].setdefault(group_key, {})[
+                'final_support_count'] = int(final_support_count)
+            audit['groups'][group_key][
+                'guided_rescue_count'] = int(guided_rescue_count)
+            print(
+                f"   [Descriptor Audit support {group_label}] "
+                f"final={final_support_count}, "
+                f"global={global_support_count}, "
+                f"guided_rescue={guided_rescue_count}")
+
+        if audit['records']:
+            nearest = min(
+                audit['records'],
+                key=lambda record: float(np.linalg.norm(record['pL'] - click_arr)))
+            audit['default_index'] = int(nearest['audit_index'])
+            d2_text = 'N/A' if nearest['d2'] is None else f"{nearest['d2']:.3f}"
+            if nearest['ratio'] is None:
+                ratio_text = 'N/A'
+            elif np.isnan(nearest['ratio']):
+                ratio_text = 'undefined(0/0)'
+            elif np.isinf(nearest['ratio']):
+                ratio_text = 'inf'
+            else:
+                ratio_text = f"{nearest['ratio']:.4f}"
+            print(
+                f"   [Descriptor Audit nearest] #{nearest['audit_index']:03d} "
+                f"{nearest['group_label']} "
+                f"L=({nearest['pL'][0]:.1f},{nearest['pL'][1]:.1f}) "
+                f"Top1=({nearest['top1'][0]:.1f},{nearest['top1'][1]:.1f}) "
+                f"d1={nearest['d1']:.3f}, d2={d2_text}, "
+                f"d1/d2={ratio_text} -> {nearest['decision']}, "
+                f"support={nearest['support_source']}")
+        return audit
+
     # ---- 純計算（可在背景執行緒安全呼叫，不觸碰 Matplotlib）----
     def compute_measure(u, v, snap_cand, snap_imgA_gray, snap_view_state, manual_match_pt=None, left_cache=None):
         """純計算版 do_measure，回傳結果 dict，不更新任何 UI 元件。"""
@@ -2616,6 +3273,7 @@ def main():
         rt_bound_reject_reason = None
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
         trajectory_res = None
+        grad_descriptor_audit = None
 
         if not cand.get('pose_valid', True):
             print(f"❌ [測量失敗] 當前候選影格位姿無效 (pose_valid == False)，原因: {cand.get('pose_info', '未知')}")
@@ -2679,6 +3337,35 @@ def main():
                         if gs['reject_reason']:
                             rt_bound_reject_reason = gs['reject_reason']
                     t_prof['Grad/Improved匹配'] = time.perf_counter() - _t_blk
+                    # Debug-only: replay the same global KNN descriptor stage
+                    # for the displayed/best right frame.  This is deliberately
+                    # outside the matcher and cannot alter good/inliers/m_pt.
+                    if (not snap_view_state.get('use_improved_matching', False)
+                            and cand.get('idx') == current_cand.get('idx')
+                            and g_refA is not None and g_refB is not None):
+                        _t_audit = time.perf_counter()
+                        try:
+                            grad_descriptor_audit = build_grad_descriptor_audit(
+                                g_refA, g_refB,
+                                g_refA_groups, g_refB_groups,
+                                snap_imgA_gray, cand['gray'],
+                                locked_L, cand, (u, v), snap_view_state,
+                                final_pts_a=g_ptsA,
+                                final_pts_b=g_ptsB,
+                                final_groups=g_groups)
+                        except Exception as exc:
+                            # A diagnostic overlay must never make a valid
+                            # measurement fail.
+                            print(f"   [Descriptor Audit] unavailable: {exc}")
+                            grad_descriptor_audit = {
+                                'kind': 'global_knn',
+                                'descriptor_name': 'ERROR',
+                                'records': [],
+                                'groups': {},
+                                'error': str(exc),
+                            }
+                        t_prof['Descriptor audit'] = (
+                            time.perf_counter() - _t_audit)
                 if (m_pt is None and snap_view_state['precise']):
                     _t_blk = time.perf_counter()
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
@@ -2943,8 +3630,13 @@ def main():
                 'g_refA': g_refA, 'g_refB': g_refB,
                 'g_refA_groups': g_refA_groups, 'g_refB_groups': g_refB_groups,
                 'g_kptsB': g_kptsB, 'g_rect': g_rect,
+                'grad_descriptor_audit': grad_descriptor_audit,
                 'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
-                'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score}
+                'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score,
+                # Read-only references for the lower debug panels.  These are
+                # the exact grayscale arrays passed into Grad-SIFT/ORB.
+                'debug_left_gray': snap_imgA_gray,
+                'debug_right_gray': cand['gray']}
 
     def compute_wound_size_with_current_v1():
         left_rect = extract_wound_rect(wound_state.get('left_pred'), locked_L_clean.shape)
@@ -3200,6 +3892,595 @@ def main():
         update_display(avg, summary)
     
     plane_dist_history = collections.deque(maxlen=15)
+
+    def select_grad_descriptor_audit(index=None, screen_xy=None,
+                                     announce=False, refresh=False):
+        """Select one audited left reference and expose its Top-1/Top-2."""
+        empty = np.empty((0, 2), dtype=np.float32)
+        records = debug_audit_state.get('records', [])
+
+        if not records:
+            for artist in debug_audit_artists:
+                try:
+                    artist.remove()
+                except Exception:
+                    pass
+            debug_audit_artists.clear()
+            debug_audit_state['selected_index'] = None
+            dbg_audit_selected_A.set_offsets(empty)
+            dbg_audit_top1_B.set_offsets(empty)
+            dbg_audit_top2_B.set_offsets(empty)
+            dbg_audit_local_seed_B.set_offsets(empty)
+            dbg_info_A.set_text(
+                debug_audit_state.get('base_left_text', '')
+                + "\nGlobal KNN audit unavailable for this result")
+            dbg_info_B.set_text(debug_audit_state.get('base_right_text', ''))
+            if refresh:
+                request_blit_refresh()
+            return False
+
+        if screen_xy is not None:
+            left_points = np.asarray(
+                [record['pL'] for record in records], dtype=np.float32)
+            display_points = ax_debug_A.transData.transform(left_points)
+            mouse_display = np.asarray(screen_xy, dtype=np.float64).reshape(2)
+            display_distances = np.linalg.norm(
+                display_points - mouse_display, axis=1)
+            index = int(np.argmin(display_distances))
+            # Prevent an accidental click on empty space from silently
+            # selecting a distant, densely packed raw reference.
+            if float(display_distances[index]) > 12.0:
+                if announce:
+                    print(
+                        "   [Descriptor Audit] 請點下方左圖的 High/Mid 候選點 "
+                        "(距游標 12 screen px 內)")
+                return False
+        elif index is None:
+            index = 0
+
+        index = int(index)
+        if index < 0 or index >= len(records):
+            return False
+        for artist in debug_audit_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_audit_artists.clear()
+        record = records[index]
+        debug_audit_state['selected_index'] = index
+
+        p_left = np.asarray(record['pL'], dtype=np.float32).reshape(2)
+        p_top1 = np.asarray(record['top1'], dtype=np.float32).reshape(2)
+        p_top2 = (
+            None if record.get('top2') is None
+            else np.asarray(record['top2'], dtype=np.float32).reshape(2)
+        )
+        local_seed = (
+            None if record.get('local_seed') is None
+            else np.asarray(record['local_seed'], dtype=np.float32).reshape(2)
+        )
+        dbg_audit_selected_A.set_offsets([p_left])
+        dbg_audit_top1_B.set_offsets([p_top1])
+        dbg_audit_top2_B.set_offsets(
+            [p_top2] if p_top2 is not None else empty)
+        dbg_audit_local_seed_B.set_offsets(
+            [local_seed] if local_seed is not None else empty)
+
+        top1_line = ConnectionPatch(
+            xyA=p_left, xyB=p_top1,
+            coordsA='data', coordsB='data',
+            axesA=ax_debug_A, axesB=ax_debug_B,
+            color='#39FF14', lw=1.7, alpha=0.9, zorder=10)
+        ax_debug_B.add_artist(top1_line)
+        debug_audit_artists.append(top1_line)
+        if p_top2 is not None:
+            top2_line = ConnectionPatch(
+                xyA=p_left, xyB=p_top2,
+                coordsA='data', coordsB='data',
+                axesA=ax_debug_A, axesB=ax_debug_B,
+                color='#FF3333', lw=1.2, linestyle='--',
+                alpha=0.8, zorder=9)
+            ax_debug_B.add_artist(top2_line)
+            debug_audit_artists.append(top2_line)
+
+        d2_text = (
+            'N/A' if record.get('d2') is None
+            else f"{record['d2']:.3f}")
+        ratio_value = record.get('ratio')
+        if ratio_value is None:
+            ratio_text = 'N/A'
+        elif np.isnan(ratio_value):
+            ratio_text = 'undefined(0/0)'
+        elif np.isinf(ratio_value):
+            ratio_text = 'inf'
+        else:
+            ratio_text = f"{ratio_value:.4f}"
+        gap_text = (
+            'N/A' if record.get('gap') is None
+            else f"{record['gap']:.3f}")
+        spatial_text = (
+            'N/A' if record.get('top12_spatial_distance') is None
+            else f"{record['top12_spatial_distance']:.1f}px")
+        epi_text = (
+            'N/A' if record.get('epi_distance') is None
+            else f"{record['epi_distance']:.2f}px/"
+                 f"{'PASS' if record.get('pass_epi') else 'FAIL'}")
+        seed_text = (
+            'N/A' if record.get('seed_distance') is None
+            else f"{record['seed_distance']:.1f}px/"
+                 f"{'PASS' if record.get('pass_seed') else 'FAIL'}")
+        abs_text = 'PASS' if record.get('pass_distance') else 'FAIL'
+        if not record.get('pass_distance'):
+            ratio_gate_text = 'NOT_REACHED'
+            mutual_text = 'NOT_REACHED'
+        elif not record.get('pass_ratio'):
+            ratio_gate_text = 'FAIL'
+            mutual_text = 'NOT_REACHED'
+        else:
+            ratio_gate_text = 'PASS'
+            mutual_text = 'PASS' if record.get('pass_mutual') else 'FAIL'
+        support_source = record.get('support_source', 'NOT_USED')
+        accepted_pR = record.get('accepted_pR')
+        if accepted_pR is not None:
+            accepted_pR = np.asarray(
+                accepted_pR, dtype=np.float32).reshape(2)
+            support_text = (
+                f"{support_source}, used R="
+                f"({accepted_pR[0]:.1f},{accepted_pR[1]:.1f})")
+        else:
+            support_text = support_source
+        if record.get('guided_rescue'):
+            geometry_role = (
+                'global Top1 diagnostic; guided used the final R below')
+        elif record.get('decision') == 'KNN_PASS':
+            geometry_role = 'next gates'
+        else:
+            geometry_role = 'diagnostic only; pipeline stopped earlier'
+        ratio_limit = float(record.get('ratio_limit', 0.78))
+        match_threshold = float(record.get('match_threshold', 0.0))
+        guided_detail = ''
+        if record.get('guided_triggered'):
+            guided_decision = record.get('guided_decision', 'N/A')
+            if record.get('guided_attempted'):
+                guided_d1 = record.get('guided_d1')
+                guided_d2 = record.get('guided_d2')
+                guided_ratio = record.get('guided_ratio')
+                guided_d1_text = (
+                    'N/A' if guided_d1 is None else f'{guided_d1:.3f}')
+                guided_d2_text = (
+                    'N/A(single)' if guided_d2 is None
+                    else f'{guided_d2:.3f}')
+                if guided_ratio is None:
+                    guided_ratio_text = 'N/A(single)'
+                elif np.isnan(guided_ratio):
+                    guided_ratio_text = 'undefined(0/0)'
+                elif np.isinf(guided_ratio):
+                    guided_ratio_text = 'inf'
+                else:
+                    guided_ratio_text = f'{guided_ratio:.4f}'
+                guided_detail = (
+                    f"\nGUIDED subset radius/epi candidates="
+                    f"{record.get('guided_radius_candidate_count', 0)}/"
+                    f"{record.get('guided_candidate_count', 0)}; "
+                    f"d1={guided_d1_text}, d2={guided_d2_text}, "
+                    f"ratio={guided_ratio_text} => {guided_decision}")
+            else:
+                guided_detail = f"\nGUIDED: {guided_decision}"
+
+        dbg_info_A.set_text(
+            debug_audit_state.get('base_left_text', '')
+            + f"\nSelected global-KNN {record['group_label']}"
+              f" #{record['audit_index']:03d} at "
+              f"({p_left[0]:.1f},{p_left[1]:.1f}); "
+              "click another raw point")
+        dbg_info_B.set_text(
+            debug_audit_state.get('base_right_text', '')
+            + f"\nGLOBAL {record['group_label']} #{record['audit_index']:03d}: "
+              f"d1={record['d1']:.3f}, d2={d2_text}, "
+              f"d1/d2={ratio_text} (need <{ratio_limit:.2f}) "
+              f"=> {record['decision']}"
+            + f"\nabs d1<{match_threshold:g}: {abs_text} | "
+              f"Lowe gate: {ratio_gate_text} | mutual gate: {mutual_text}"
+            + f"\nd2-d1={gap_text} | Top1↔Top2={spatial_text}"
+            + f"\n{geometry_role}: epi={epi_text} | seedΔ={seed_text}"
+            + guided_detail
+            + f"\nfinal interpolation support: {support_text}"
+            + "\nlime circle=Top1, red square=Top2, magenta x=local seed; "
+              "guided fallback is separate")
+
+        if announce:
+            print(
+                f"   [Descriptor Audit select] "
+                f"#{record['audit_index']:03d} {record['group_label']} "
+                f"L=({p_left[0]:.1f},{p_left[1]:.1f}) "
+                f"Top1=({p_top1[0]:.1f},{p_top1[1]:.1f}) "
+                f"d1={record['d1']:.3f}, d2={d2_text}, "
+                f"d1/d2={ratio_text} (limit < {ratio_limit:.2f}), "
+                f"abs={abs_text}, Lowe={ratio_gate_text}, "
+                f"mutual={mutual_text}, decision={record['decision']}, "
+                f"support={support_source}")
+            if record.get('guided_rescue') and accepted_pR is not None:
+                guided_top1 = record.get('guided_top1')
+                guided_top2 = record.get('guided_top2')
+                guided_d1 = record.get('guided_d1')
+                guided_d2 = record.get('guided_d2')
+                guided_ratio = record.get('guided_ratio')
+                guided_top1_text = (
+                    'N/A' if guided_top1 is None
+                    else f"({guided_top1[0]:.1f},{guided_top1[1]:.1f})")
+                guided_top2_text = (
+                    'N/A(single)' if guided_top2 is None
+                    else f"({guided_top2[0]:.1f},{guided_top2[1]:.1f})")
+                guided_d1_text = (
+                    'N/A' if guided_d1 is None else f'{guided_d1:.3f}')
+                guided_d2_text = (
+                    'N/A(single)' if guided_d2 is None
+                    else f'{guided_d2:.3f}')
+                if guided_ratio is None:
+                    guided_ratio_text = 'N/A(single)'
+                elif np.isnan(guided_ratio):
+                    guided_ratio_text = 'undefined(0/0)'
+                elif np.isinf(guided_ratio):
+                    guided_ratio_text = 'inf'
+                else:
+                    guided_ratio_text = f'{guided_ratio:.4f}'
+                print(
+                    f"   [Descriptor Audit GUIDED_RESCUE] "
+                    f"#{record['audit_index']:03d} {record['group_label']} "
+                    f"L=({p_left[0]:.1f},{p_left[1]:.1f}) "
+                    f"global={record['decision']} but final_support=YES, "
+                    f"guided_R=({accepted_pR[0]:.1f},"
+                    f"{accepted_pR[1]:.1f}); "
+                    "this point participated in Grad-SIFT interpolation")
+                print(
+                    f"   [Descriptor Audit GUIDED subset] "
+                    f"radius_candidates="
+                    f"{record.get('guided_radius_candidate_count', 0)}, "
+                    f"after_epi={record.get('guided_candidate_count', 0)}, "
+                    f"Top1={guided_top1_text}, Top2={guided_top2_text}, "
+                    f"d1={guided_d1_text}, d2={guided_d2_text}, "
+                    f"d1/d2={guided_ratio_text} "
+                    f"(limit < {float(record.get('guided_ratio_limit', 0.95)):.2f}), "
+                    f"decision={record.get('guided_decision', 'N/A')}, "
+                    f"Top1==final_R={record.get('guided_matches_final')}")
+        if refresh:
+            request_blit_refresh()
+        return True
+
+    def update_grad_match_debug_views(res, u, v):
+        """Update the lower zoomed views without changing any matching decision."""
+        empty = np.empty((0, 2), dtype=np.float32)
+
+        def as_points(value):
+            if value is None:
+                return empty
+            arr = np.asarray(value, dtype=np.float32)
+            if arr.size == 0:
+                return empty
+            return arr.reshape(-1, 2)
+
+        def split_groups(points, labels):
+            if len(points) == 0:
+                return empty, empty
+            if labels is None:
+                return points, empty
+            labels_arr = np.asarray(labels, dtype=object).reshape(-1)
+            if len(labels_arr) != len(points):
+                return points, empty
+            mid_mask = labels_arr == "mid"
+            return points[~mid_mask], points[mid_mask]
+
+        debug_left_gray = res.get('debug_left_gray')
+        debug_right_gray = res.get('debug_right_gray')
+        if debug_left_gray is not None:
+            debug_left_gray = np.asarray(debug_left_gray)
+            if debug_left_gray.ndim == 2 and debug_left_gray.size:
+                im_debug_A.set_data(
+                    cv2.cvtColor(debug_left_gray, cv2.COLOR_GRAY2RGB))
+        if debug_right_gray is not None:
+            debug_right_gray = np.asarray(debug_right_gray)
+            if debug_right_gray.ndim == 2 and debug_right_gray.size:
+                im_debug_B.set_data(
+                    cv2.cvtColor(debug_right_gray, cv2.COLOR_GRAY2RGB))
+
+        # Remove click-specific ConnectionPatch/text/residual artists from the
+        # previous measurement.  Persistent scatters are updated in place below.
+        for artist in debug_pair_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_pair_artists.clear()
+
+        ref_a = as_points(res.get('g_refA'))
+        ref_b = as_points(res.get('g_refB'))
+        ref_a_high, ref_a_mid = split_groups(ref_a, res.get('g_refA_groups'))
+        ref_b_high, ref_b_mid = split_groups(ref_b, res.get('g_refB_groups'))
+        dbg_ref_high_A.set_offsets(ref_a_high)
+        dbg_ref_mid_A.set_offsets(ref_a_mid)
+        dbg_ref_high_B.set_offsets(ref_b_high)
+        dbg_ref_mid_B.set_offsets(ref_b_mid)
+
+        pts_a = as_points(res.get('g_ptsA'))
+        pts_b = as_points(res.get('g_ptsB'))
+        pair_count = min(len(pts_a), len(pts_b))
+        pts_a = pts_a[:pair_count]
+        pts_b = pts_b[:pair_count]
+        pair_groups = res.get('g_groups')
+        if pair_groups is None or len(np.asarray(pair_groups).reshape(-1)) != pair_count:
+            pair_groups = np.array(["high"] * pair_count, dtype=object)
+        else:
+            pair_groups = np.asarray(pair_groups, dtype=object).reshape(-1)[:pair_count]
+        in_a_high, in_a_mid = split_groups(pts_a, pair_groups)
+        in_b_high, in_b_mid = split_groups(pts_b, pair_groups)
+        dbg_inlier_high_A.set_offsets(in_a_high)
+        dbg_inlier_mid_A.set_offsets(in_a_mid)
+        dbg_inlier_high_B.set_offsets(in_b_high)
+        dbg_inlier_mid_B.set_offsets(in_b_mid)
+
+        click_pt = np.array([float(u), float(v)], dtype=np.float32)
+        dbg_click_A.set_offsets([click_pt])
+
+        seed_pt = None
+        seed_method = "N/A"
+        try:
+            seed_value, seed_method = predict_right_seed_from_geometry(
+                (float(u), float(v)), current_cand, KL)
+            seed_pt = np.asarray(seed_value, dtype=np.float32).reshape(2)
+        except Exception:
+            seed_pt = None
+        dbg_seed_B.set_offsets([seed_pt] if seed_pt is not None else empty)
+
+        raw_pt = res.get('pt_raw')
+        raw_pt = (None if raw_pt is None else
+                  np.asarray(raw_pt, dtype=np.float32).reshape(2))
+        final_pt = res.get('pt')
+        final_pt = (None if final_pt is None else
+                    np.asarray(final_pt, dtype=np.float32).reshape(2))
+        dbg_raw_B.set_offsets([raw_pt] if raw_pt is not None else empty)
+        dbg_final_B.set_offsets([final_pt] if final_pt is not None else empty)
+
+        if current_cand.get('F') is not None:
+            try:
+                p0_dbg, p1_dbg = epipolar_line(
+                    current_cand['F'], (float(u), float(v)), w)
+                dbg_epi_line.set_data(
+                    [p0_dbg[0], p1_dbg[0]], [p0_dbg[1], p1_dbg[1]])
+            except Exception:
+                dbg_epi_line.set_data([], [])
+        else:
+            dbg_epi_line.set_data([], [])
+
+        rect = res.get('g_rect')
+        if rect is not None:
+            rx, ry, rw, rh = [float(value) for value in rect]
+            dbg_search_rect.set_bounds(rx, ry, rw, rh)
+            dbg_search_rect.set_visible(True)
+        else:
+            rx = ry = rw = rh = None
+            dbg_search_rect.set_visible(False)
+
+        # Show where the plane homography predicts every accepted left support
+        # point.  The short magenta residual segment ends at the actual match.
+        predicted_b = empty
+        if pair_count > 0:
+            try:
+                plane_n = current_cand.get('plane_n')
+                plane_c = current_cand.get('plane_c')
+                if plane_n is not None and plane_c is not None:
+                    plane_n = np.asarray(plane_n, dtype=np.float64).reshape(3)
+                    plane_c = np.asarray(plane_c, dtype=np.float64).reshape(3)
+                    d_plane = float(np.dot(plane_n, plane_c))
+                    if abs(d_plane) > 1e-8:
+                        H_ab = (
+                            np.asarray(current_cand['K_R'], dtype=np.float64)
+                            @ (
+                                np.asarray(current_cand['R_rel'], dtype=np.float64).reshape(3, 3)
+                                + np.asarray(current_cand['t_rel'], dtype=np.float64).reshape(3, 1)
+                                @ plane_n.reshape(1, 3) / d_plane
+                            )
+                            @ np.linalg.inv(np.asarray(KL, dtype=np.float64))
+                        )
+                        pts_h = np.column_stack(
+                            [pts_a.astype(np.float64), np.ones(pair_count)])
+                        pred_h = (H_ab @ pts_h.T).T
+                        valid_h = np.abs(pred_h[:, 2]) > 1e-9
+                        predicted_b = np.full((pair_count, 2), np.nan, dtype=np.float32)
+                        predicted_b[valid_h] = (
+                            pred_h[valid_h, :2] / pred_h[valid_h, 2:3]
+                        ).astype(np.float32)
+            except Exception:
+                predicted_b = empty
+        valid_pred = (
+            np.all(np.isfinite(predicted_b), axis=1)
+            if len(predicted_b) == pair_count and pair_count > 0
+            else np.zeros(pair_count, dtype=bool)
+        )
+        dbg_pred_B.set_offsets(
+            predicted_b[valid_pred] if np.any(valid_pred) else empty)
+
+        # Accepted correspondences are numbered consistently in both zoomed
+        # panels.  Only the nearest 30 labels are drawn to prevent text clutter.
+        label_ids = set()
+        if pair_count:
+            nearest_order = np.argsort(np.linalg.norm(pts_a - click_pt, axis=1))
+            label_ids = set(int(index) for index in nearest_order[:30])
+        for index, (point_a, point_b) in enumerate(zip(pts_a, pts_b)):
+            is_mid = pair_groups[index] == "mid"
+            color = '#FF8C00' if is_mid else '#00BFFF'
+            connection = ConnectionPatch(
+                xyA=point_a, xyB=point_b,
+                coordsA="data", coordsB="data",
+                axesA=ax_debug_A, axesB=ax_debug_B,
+                color=color, lw=0.85, alpha=0.55, zorder=5)
+            ax_debug_B.add_artist(connection)
+            debug_pair_artists.append(connection)
+            if index < len(valid_pred) and valid_pred[index]:
+                residual_line, = ax_debug_B.plot(
+                    [predicted_b[index, 0], point_b[0]],
+                    [predicted_b[index, 1], point_b[1]],
+                    color='#FF00FF', lw=0.75, alpha=0.65, zorder=5)
+                debug_pair_artists.append(residual_line)
+            if index in label_ids:
+                label_a = ax_debug_A.text(
+                    point_a[0] + 1.2, point_a[1] - 1.2, str(index),
+                    color=color, fontsize=7, fontweight='bold', zorder=8)
+                label_b = ax_debug_B.text(
+                    point_b[0] + 1.2, point_b[1] - 1.2, str(index),
+                    color=color, fontsize=7, fontweight='bold', zorder=8)
+                debug_pair_artists.extend([label_a, label_b])
+
+        hull_state = "N/A"
+        hull_area = 0.0
+        if pair_count >= 3:
+            try:
+                # Keep the left-hull vertex indices so the lower-right panel
+                # connects the exact corresponding matches in the same order.
+                # An independent right convex hull could hide a crossed or
+                # distorted correspondence polygon, which is useful evidence
+                # when diagnosing a bad match.
+                hull_indices = cv2.convexHull(
+                    pts_a.astype(np.float32), returnPoints=False).reshape(-1)
+                hull = pts_a[hull_indices].astype(np.float32)
+                hull_area = float(cv2.contourArea(hull.astype(np.float32)))
+                if len(hull) >= 3 and hull_area > 1e-6:
+                    hull_closed = np.vstack([hull, hull[0]])
+                    dbg_hull_line.set_data(hull_closed[:, 0], hull_closed[:, 1])
+                    right_hull = pts_b[hull_indices].astype(np.float32)
+                    right_hull_closed = np.vstack([right_hull, right_hull[0]])
+                    dbg_hull_line_B.set_data(
+                        right_hull_closed[:, 0], right_hull_closed[:, 1])
+                    inside = cv2.pointPolygonTest(
+                        hull.astype(np.float32), (float(u), float(v)), False) >= 0
+                    hull_state = "inside" if inside else "OUTSIDE"
+                else:
+                    dbg_hull_line.set_data([], [])
+                    dbg_hull_line_B.set_data([], [])
+                    hull_state = "degenerate"
+            except Exception:
+                dbg_hull_line.set_data([], [])
+                dbg_hull_line_B.set_data([], [])
+                hull_state = "error"
+        else:
+            dbg_hull_line.set_data([], [])
+            dbg_hull_line_B.set_data([], [])
+
+        left_radius = max(float(LEFT_PATCH_SEARCH_RADIUS) + 7.0, 30.0)
+        left_x0 = max(-0.5, float(u) - left_radius)
+        left_x1 = min(float(w) - 0.5, float(u) + left_radius)
+        left_y0 = max(-0.5, float(v) - left_radius)
+        left_y1 = min(float(h) - 0.5, float(v) + left_radius)
+        ax_debug_A.set_xlim(left_x0, left_x1)
+        ax_debug_A.set_ylim(left_y1, left_y0)
+        debug_zoom_home['A'] = (
+            (left_x0, left_x1), (left_y1, left_y0))
+
+        right_points = [point for point in (seed_pt, raw_pt, final_pt) if point is not None]
+        if rect is not None:
+            right_x0, right_x1 = rx, rx + rw
+            right_y0, right_y1 = ry, ry + rh
+        elif seed_pt is not None:
+            right_x0 = float(seed_pt[0]) - RIGHT_PATCH_SEARCH_RADIUS
+            right_x1 = float(seed_pt[0]) + RIGHT_PATCH_SEARCH_RADIUS
+            right_y0 = float(seed_pt[1]) - RIGHT_PATCH_SEARCH_RADIUS
+            right_y1 = float(seed_pt[1]) + RIGHT_PATCH_SEARCH_RADIUS
+        elif final_pt is not None:
+            right_x0 = float(final_pt[0]) - RIGHT_PATCH_SEARCH_RADIUS
+            right_x1 = float(final_pt[0]) + RIGHT_PATCH_SEARCH_RADIUS
+            right_y0 = float(final_pt[1]) - RIGHT_PATCH_SEARCH_RADIUS
+            right_y1 = float(final_pt[1]) + RIGHT_PATCH_SEARCH_RADIUS
+        else:
+            right_x0, right_x1 = 0.0, float(w)
+            right_y0, right_y1 = 0.0, float(h)
+        if right_points:
+            right_arr = np.asarray(right_points, dtype=np.float32).reshape(-1, 2)
+            right_x0 = min(right_x0, float(np.min(right_arr[:, 0])) - 8.0)
+            right_x1 = max(right_x1, float(np.max(right_arr[:, 0])) + 8.0)
+            right_y0 = min(right_y0, float(np.min(right_arr[:, 1])) - 8.0)
+            right_y1 = max(right_y1, float(np.max(right_arr[:, 1])) + 8.0)
+        right_x0 = max(-0.5, right_x0)
+        right_x1 = min(float(w) - 0.5, right_x1)
+        right_y0 = max(-0.5, right_y0)
+        right_y1 = min(float(h) - 0.5, right_y1)
+        if right_x1 <= right_x0:
+            right_x0, right_x1 = 0.0, float(w)
+        if right_y1 <= right_y0:
+            right_y0, right_y1 = 0.0, float(h)
+        ax_debug_B.set_xlim(right_x0, right_x1)
+        ax_debug_B.set_ylim(right_y1, right_y0)
+        debug_zoom_home['B'] = (
+            (right_x0, right_x1), (right_y1, right_y0))
+
+        audit = res.get('grad_descriptor_audit')
+        descriptor_name = (
+            audit.get('descriptor_name')
+            if isinstance(audit, dict) and audit.get('descriptor_name')
+            else ("ORB/Hamming" if view_state.get('use_hamming', False)
+                  else "Gray-SIFT/L2")
+        )
+        if (not isinstance(audit, dict)
+                and not view_state.get('use_hamming', False)):
+            if view_state.get('use_rgb_sift', False):
+                descriptor_name = "RGB-SIFT/L2"
+            elif view_state.get('use_opponent_sift', False):
+                descriptor_name = "Opponent-SIFT/L2"
+        raw_final_shift = (
+            float(np.linalg.norm(final_pt - raw_pt))
+            if raw_pt is not None and final_pt is not None else float('nan'))
+        high_count = int(np.count_nonzero(pair_groups != "mid"))
+        mid_count = int(np.count_nonzero(pair_groups == "mid"))
+        base_left_text = (
+            f"{descriptor_name} | refs H/M={len(ref_a_high)}/{len(ref_a_mid)} | "
+            f"accepted H/M={high_count}/{mid_count}\n"
+            f"support hull={hull_state}, area={hull_area:.1f}px² | "
+            "cyan=High, orange=Mid")
+        if isinstance(audit, dict):
+            ratio_limit = float(audit.get('ratio_limit', 0.78))
+            group_bits = []
+            for group_key, short_name in (('high', 'H'), ('mid', 'M')):
+                group_summary = audit.get('groups', {}).get(group_key, {})
+                count = int(group_summary.get('record_count', 0))
+                ratio_reached = int(group_summary.get(
+                    'ratio_stage_reached', count))
+                ratio_pass = int(group_summary.get(
+                    'ratio_stage_pass',
+                    group_summary.get('ratio_pass', 0)))
+                median = group_summary.get('ratio_median')
+                median_text = 'N/A' if median is None else f"{median:.3f}"
+                d2_zero = int(group_summary.get('d2_zero', 0))
+                support_count = int(group_summary.get(
+                    'final_support_count', 0))
+                guided_count = int(group_summary.get(
+                    'guided_rescue_count', 0))
+                group_bits.append(
+                    f"{short_name} Lowe-stage<{ratio_limit:.2f}:"
+                    f"{ratio_pass}/{ratio_reached}, med={median_text}, "
+                    f"d2=0:{d2_zero}, support={support_count}"
+                    f"(guided={guided_count})")
+            if group_bits:
+                base_left_text += "\n" + "\n".join(group_bits)
+        raw_text = "None" if raw_pt is None else f"({raw_pt[0]:.1f},{raw_pt[1]:.1f})"
+        final_text = "None" if final_pt is None else f"({final_pt[0]:.1f},{final_pt[1]:.1f})"
+        shift_text = "N/A" if not np.isfinite(raw_final_shift) else f"{raw_final_shift:.2f}px"
+        base_right_text = (
+            f"seed={seed_method} | raw={raw_text} | final={final_text} | "
+            f"raw→final={shift_text}\n"
+            "purple +=seed/circles=H(pL), white diamond=raw, green x=final, "
+            "green dashed=matched left hull")
+        debug_audit_state['audit'] = audit
+        debug_audit_state['records'] = (
+            list(audit.get('records', []))
+            if isinstance(audit, dict) else [])
+        debug_audit_state['selected_index'] = None
+        debug_audit_state['descriptor_name'] = descriptor_name
+        debug_audit_state['base_left_text'] = base_left_text
+        debug_audit_state['base_right_text'] = base_right_text
+        default_index = (
+            audit.get('default_index')
+            if isinstance(audit, dict) else None)
+        select_grad_descriptor_audit(index=default_index)
+
     
     def update_display(avg, summary):
         res = measure_results.get(current_cand['idx'], {'pt': None, 'neighbors': [], 'p3d': None, 'g_ptsA': None, 'g_groups': None})
@@ -3415,12 +4696,32 @@ def main():
                     "Custom plane mode\n"
                     "Invalid point. Try another location."
                 )
+        update_grad_match_debug_views(res, u, v)
         depth_text.set_text(main_text)
         request_blit_refresh()
 
 
     pan_state = {'pressing': False, 'x': None, 'y': None, 'ax': None, 'dragged': False, 'dragging_hud': False}
+
+    def reset_debug_zoom(ax):
+        """Restore the click-specific home ROI for one lower debug view."""
+        key = 'A' if ax is ax_debug_A else 'B'
+        home = debug_zoom_home.get(key)
+        if home is None:
+            return False
+        ax.set_xlim(*home[0])
+        ax.set_ylim(*home[1])
+        request_blit_refresh()
+        return True
+
     def on_press(event):
+        # Lower debug views: double-left-click or right-click resets the view.
+        # Handle this before the left-button-only interaction below.
+        if event.inaxes in (ax_debug_A, ax_debug_B):
+            if event.button == 3 or (
+                    event.button == 1 and getattr(event, 'dblclick', False)):
+                reset_debug_zoom(event.inaxes)
+                return
         if event.button != 1: return
         
         # 檢查是否點擊在深度數值 HUD 區域內
@@ -3438,7 +4739,17 @@ def main():
                 return
         except Exception:
             pass
-            
+
+        # 下方左圖只用來挑選 descriptor audit 參考點；不會重新量測，
+        # 也不會改變正式 matcher 的結果。以螢幕像素找最近點，避免縮放
+        # 程度影響 12 px 的點選容許範圍。
+        if event.inaxes == ax_debug_A:
+            if event.x is not None and event.y is not None:
+                select_grad_descriptor_audit(
+                    screen_xy=(event.x, event.y),
+                    announce=True, refresh=True)
+            return
+
         if event.inaxes not in (ax_A, ax_B): return
         pan_state.update({'pressing': True, 'dragged': False, 'x': event.x, 'y': event.y, 'ax': event.inaxes})
  
@@ -3516,11 +4827,44 @@ def main():
         request_blit_refresh()
 
     def on_scroll(event):
-        if event.inaxes not in (ax_A, ax_B): return
-        ax, f = event.inaxes, 1.2 if event.button == 'down' else 1/1.2
+        if event.inaxes not in (ax_A, ax_B, ax_debug_A, ax_debug_B):
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        ax = event.inaxes
+        f = 1.2 if event.button == 'down' else 1/1.2
         xl, yl = ax.get_xlim(), ax.get_ylim()
         x, y = event.xdata, event.ydata
-        ax.set_xlim([x - (x-xl[0])*f, x + (xl[1]-x)*f]); ax.set_ylim([y - (y-yl[0])*f, y + (yl[1]-y)*f])
+
+        if ax in (ax_debug_A, ax_debug_B):
+            # Keep a useful minimum window and do not zoom outside the image.
+            # Preserve reversed image y-limits while clamping the visible span.
+            def scaled_limits(limits, center, bound_low, bound_high):
+                first, second = map(float, limits)
+                reversed_axis = second < first
+                low, high = min(first, second), max(first, second)
+                old_span = max(high - low, 1e-9)
+                max_span = float(bound_high - bound_low)
+                new_span = float(np.clip(old_span * f, 6.0, max_span))
+                anchor = float(np.clip((center - low) / old_span, 0.0, 1.0))
+                new_low = float(center) - anchor * new_span
+                new_high = new_low + new_span
+                if new_low < bound_low:
+                    new_high += bound_low - new_low
+                    new_low = float(bound_low)
+                if new_high > bound_high:
+                    new_low -= new_high - bound_high
+                    new_high = float(bound_high)
+                result = (new_low, new_high)
+                return result[::-1] if reversed_axis else result
+
+            new_xl = scaled_limits(xl, x, -0.5, float(w) - 0.5)
+            new_yl = scaled_limits(yl, y, -0.5, float(h) - 0.5)
+            ax.set_xlim(*new_xl)
+            ax.set_ylim(*new_yl)
+        else:
+            ax.set_xlim([x - (x-xl[0])*f, x + (xl[1]-x)*f])
+            ax.set_ylim([y - (y-yl[0])*f, y + (yl[1]-y)*f])
         request_blit_refresh()
 
     fig.canvas.mpl_connect('scroll_event', on_scroll)
@@ -3566,60 +4910,61 @@ def main():
     # 使用更深邃的背景色 (#1A1A1A)，與主背景形成對比
     btn_style = dict(color='#1A1A1A', hovercolor='#333333')
     
-    ax_btn_lock_L = fig.add_axes([0.58, 0.92, 0.08, 0.04])
+    ax_btn_lock_L = fig.add_axes([0.58, control_row_y[0], 0.08, control_h])
     btn_lock_L = Button(ax_btn_lock_L, "鎖定左圖", **btn_style)
     
-    ax_btn_lock_R = fig.add_axes([0.68, 0.92, 0.08, 0.04])
+    ax_btn_lock_R = fig.add_axes([0.68, control_row_y[0], 0.08, control_h])
     btn_lock_R = Button(ax_btn_lock_R, "鎖定右圖", **btn_style)
     
-    ax_btn_hide_R = fig.add_axes([0.78, 0.92, 0.08, 0.04])
+    ax_btn_hide_R = fig.add_axes([0.78, control_row_y[0], 0.08, control_h])
     btn_hide_R = Button(ax_btn_hide_R, "顯示右圖", **btn_style)
     
-    ax_btn_norm = fig.add_axes([0.88, 0.92, 0.08, 0.04])
-    btn_norm_toggle = Button(ax_btn_norm, '使用 HAMMING', **btn_style)
+    ax_btn_norm = fig.add_axes([0.88, control_row_y[0], 0.08, control_h])
+    btn_norm_toggle = Button(ax_btn_norm, '使用 L2', **btn_style)
     
-    ax_btn_calc = fig.add_axes([0.58, 0.86, 0.08, 0.04])
+    ax_btn_calc = fig.add_axes([0.58, control_row_y[1], 0.08, control_h])
     btn_calc = Button(ax_btn_calc, "單次計算深度", **btn_style)
     
-    ax_btn_auto_calc = fig.add_axes([0.68, 0.86, 0.08, 0.04])
+    ax_btn_auto_calc = fig.add_axes([0.68, control_row_y[1], 0.08, control_h])
     btn_auto_calc = Button(ax_btn_auto_calc, "連續計算: 關", **btn_style)
     
-    ax_btn_grad = fig.add_axes([0.78, 0.86, 0.08, 0.04])
+    ax_btn_grad = fig.add_axes([0.78, control_row_y[1], 0.08, control_h])
     btn_grad_toggle = Button(ax_btn_grad, '顯示梯度 SIFT 連線', **btn_style)
     
-    ax_btn_custom_plane = fig.add_axes([0.88, 0.86, 0.08, 0.04])
+    ax_btn_custom_plane = fig.add_axes([0.88, control_row_y[1], 0.08, control_h])
     btn_custom_plane = Button(ax_btn_custom_plane, "Custom Plane", **btn_style)
     
-    ax_btn_high_grad_pts = fig.add_axes([0.58, 0.80, 0.08, 0.04])
+    ax_btn_high_grad_pts = fig.add_axes([0.58, control_row_y[2], 0.08, control_h])
     btn_high_grad_pts = Button(ax_btn_high_grad_pts, "HighPts: Off", **btn_style)
     
-    ax_btn_mid_grad_pts = fig.add_axes([0.68, 0.80, 0.08, 0.04])
+    ax_btn_mid_grad_pts = fig.add_axes([0.68, control_row_y[2], 0.08, control_h])
     btn_mid_grad_pts = Button(ax_btn_mid_grad_pts, "MidPts: Off", **btn_style)
     
-    ax_btn_rt_diff = fig.add_axes([0.78, 0.80, 0.08, 0.04])
+    ax_btn_rt_diff = fig.add_axes([0.78, control_row_y[2], 0.08, control_h])
     btn_rt_diff = Button(ax_btn_rt_diff, "RT Diff", **btn_style)
     
-    ax_btn_return_menu = fig.add_axes([0.88, 0.80, 0.08, 0.04])
+    ax_btn_return_menu = fig.add_axes([0.88, control_row_y[2], 0.08, control_h])
     btn_return_menu = Button(ax_btn_return_menu, "Back to Menu", **btn_style)
     
     # 建立 TextBox 用於傷口高度補償
-    ax_btn_wound = fig.add_axes([0.58, 0.74, 0.08, 0.04])
+    ax_btn_wound = fig.add_axes([0.58, control_row_y[3], 0.08, control_h])
     btn_wound_toggle = Button(ax_btn_wound, "Wound: Off", **btn_style)
 
-    ax_btn_wound_pts = fig.add_axes([0.68, 0.74, 0.08, 0.04])
+    ax_btn_wound_pts = fig.add_axes([0.68, control_row_y[3], 0.08, control_h])
     btn_wound_pts_toggle = Button(ax_btn_wound_pts, "Pts: Rect", **btn_style)
 
-    ax_btn_aruco_overlay = fig.add_axes([0.78, 0.74, 0.08, 0.04])
+    ax_btn_aruco_overlay = fig.add_axes([0.78, control_row_y[3], 0.08, control_h])
     btn_aruco_overlay = Button(ax_btn_aruco_overlay, "ArUco標記: Off", **btn_style)
 
-    ax_btn_rt_sift = fig.add_axes([0.88, 0.74, 0.08, 0.04])
+    ax_btn_rt_sift = fig.add_axes([0.88, control_row_y[3], 0.08, control_h])
     btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
 
-    ax_btn_height_plane = fig.add_axes([0.58, 0.68, 0.18, 0.04])
+    ax_btn_height_plane = fig.add_axes([0.58, control_row_y[4], 0.18, control_h])
     btn_height_plane = Button(ax_btn_height_plane, "Height Plane: Legacy", **btn_style)
 
     wound_z_offset = 0.0
-    ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
+    # 原本位於左下角，會壓到新的 Debug 資訊列；移入右側控制區空位。
+    ax_box = fig.add_axes([0.78, control_row_y[4], 0.08, control_h])
     text_box = TextBox(ax_box, "", initial="0.0", color='#1A1A1A', hovercolor='#333333')#傷口高度補償(mm): 
     text_box.label.set_color('#E0E0E0')
     text_box.label.set_fontsize(8)
@@ -3643,7 +4988,7 @@ def main():
     # 統一設定字型、文字顏色與邊框寬度
     for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane]:
         b.label.set_color('#E0E0E0') # 質感白
-        b.label.set_fontsize(8)
+        b.label.set_fontsize(7)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
         
     # 依功能進行邊框分色（專業軟體常見的語意化色彩）
@@ -3765,11 +5110,12 @@ def main():
     def on_hide_R(event):
         visible = ax_B.get_visible()
         ax_B.set_visible(not visible)
+        ax_debug_B.set_visible(not visible)
+        ax_debug_info_B.set_visible(not visible)
         btn_hide_R.label.set_text("顯示右圖" if visible else "隱藏右圖")
-        if visible:
-            depth_text.set_position((0.53, 0.35))
-        else:
-            depth_text.set_position((0.53, 0.02))
+        # Debug 版下方已有 ROI 圖，HUD 固定留在上方主圖區，
+        # 避免右圖隱藏時掉到最下方蓋住 Debug 圖。
+        depth_text.set_position((0.53, 0.50))
         request_blit_refresh()
     
     auto_calc_active = False

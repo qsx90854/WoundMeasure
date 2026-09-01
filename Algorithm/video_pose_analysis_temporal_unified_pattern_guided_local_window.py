@@ -83,7 +83,7 @@ FEATURE_MIN_MATCHES = 11            # 低紋理影片仍須有分散且可保留
 FEATURE_E_RANSAC_THRESH_PX = 0.75   # findEssentialMat RANSAC 極線距離閾值 (px)
 FEATURE_ROT_DIFF_MAX_DEG = 10.0     # 特徵解與 ArUco 解允許的最大旋轉差 (超過視為異常，保留 ArUco)
 FEATURE_MAX_KEYPOINTS = 800         # 特徵精修用 SIFT keypoint 上限 (控制匹配耗時)
-FEATURE_IMAGE_SCALE = 0.5
+FEATURE_IMAGE_SCALE = 1
 FEATURE_MARKER_MASK_MARGIN_PX = 8.0 # Do not let marker texture dominate the independent feature check
 FEATURE_GRID_COLS = 6
 FEATURE_GRID_ROWS = 4
@@ -169,7 +169,7 @@ PATTERN_GUIDED_DEFAULT_CONFIG = {
     'adaptive_extra_probes': True,
     'max_total_aruco_probes': 9,
     'max_extra_probes': 4,
-    'extra_probe_deadline_s': 1.20,
+    'extra_probe_deadline_s': 999.0,#1.20,
     'fallback_nominal_depth_mm': 200.0,
     'depth_sigma_target_mm': 0.75,
     'distance_full_mm': (180.0, 220.0),
@@ -210,17 +210,229 @@ PATTERN_GUIDED_DEFAULT_CONFIG = {
     },
 }
 
+# ---- optional angle-targeted endpoint proposal ----
+# The optimizer uses chronological start/end endpoints.  In auto reverse mode,
+# final outputs are normalized so Frame A remains Zebra-right (target A) and
+# Frame B remains Zebra-left (target B), regardless of recording direction.
+# This front end only proposes ArUco candidates.  Metric RT, SIFT validation and
+# final endpoint refinement remain unchanged and the original sampler is the
+# explicit fallback whenever the requested angles are not observable.
+ANGLE_GUIDED_DEFAULT_CONFIG = {
+    'enabled': False,
+    # auto evaluates both start=right/end=left and start=left/end=right.
+    # The expensive ArUco detections are shared by the two hypotheses.
+    'direction_mode': 'auto',
+    'normalize_output_roles': True,
+    'target_frame_A_deg': 15.0,
+    'target_frame_B_deg': 35.0,
+    'target_tolerance_deg': 6.0,
+    'coarse_samples_per_segment': 12,
+    'max_scan_frames_per_segment': 18,
+    'candidates_per_side': 3,
+    'min_candidate_separation_frames': 2,
+    'pair_score_weight': 0.35,
+}
+
+
+def _angle_guided_resolve_config(overrides=None):
+    config = dict(ANGLE_GUIDED_DEFAULT_CONFIG)
+    if overrides:
+        config.update(dict(overrides))
+    config['enabled'] = bool(config.get('enabled', False))
+    direction_mode = str(config.get('direction_mode', 'auto')).strip().lower()
+    direction_aliases = {
+        '15_to_35': 'forward',
+        '35_to_15': 'reverse',
+    }
+    direction_mode = direction_aliases.get(direction_mode, direction_mode)
+    if direction_mode not in ('auto', 'forward', 'reverse'):
+        raise ValueError(
+            "angle-guided direction_mode must be 'auto', 'forward', "
+            "'reverse', '15_to_35' or '35_to_15'")
+    config['direction_mode'] = direction_mode
+    config['normalize_output_roles'] = bool(
+        config.get('normalize_output_roles', True))
+    config['target_frame_A_deg'] = float(config['target_frame_A_deg'])
+    config['target_frame_B_deg'] = float(config['target_frame_B_deg'])
+    config['target_tolerance_deg'] = max(
+        0.1, float(config['target_tolerance_deg']))
+    config['coarse_samples_per_segment'] = max(
+        3, int(config['coarse_samples_per_segment']))
+    config['max_scan_frames_per_segment'] = max(
+        config['coarse_samples_per_segment'],
+        int(config['max_scan_frames_per_segment']))
+    config['candidates_per_side'] = max(
+        1, int(config['candidates_per_side']))
+    config['min_candidate_separation_frames'] = max(
+        0, int(config['min_candidate_separation_frames']))
+    config['pair_score_weight'] = max(
+        0.0, float(config['pair_score_weight']))
+    return config
+
+
+def _angle_guided_marker_measurement(
+        corners_dict, marker_id, camera_matrix, distortion, marker_size_mm):
+    """Return a cheap single-marker distance/incidence estimate for scanning."""
+    marker_id = int(marker_id)
+    if marker_id not in corners_dict:
+        return None
+    branches = _temporal_marker_pose_branches(
+        corners_dict[marker_id], camera_matrix, distortion, marker_size_mm)
+    if not branches:
+        return None
+    pose = min(branches, key=lambda entry: (
+        float(entry.get('reprojection_rms_px', float('inf'))),
+        int(entry.get('branch', 0))))
+    rotation = np.asarray(pose['R'], np.float64).reshape(3, 3)
+    translation = np.asarray(pose['t'], np.float64).reshape(3)
+    range_mm = float(np.linalg.norm(translation))
+    if range_mm <= 1e-12:
+        return None
+    marker_normal_camera = rotation[:, 2]
+    marker_to_camera = -translation / range_mm
+    cosine = abs(float(np.dot(marker_normal_camera, marker_to_camera)))
+    incidence_deg = float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
+    points = np.asarray(corners_dict[marker_id], np.float64).reshape(4, 2)
+    return {
+        'marker_id': marker_id,
+        'incidence_deg': incidence_deg,
+        'range_mm': range_mm,
+        'reprojection_rms_px': float(
+            pose.get('reprojection_rms_px', float('inf'))),
+        'area_px2': abs(float(cv2.contourArea(points.astype(np.float32)))),
+        'branch': int(pose.get('branch', 0)),
+    }
+
+
+def _angle_guided_rank_measurements(measurements, target_deg, config):
+    """Select separated frames nearest an incidence target, best first."""
+    cfg = _angle_guided_resolve_config(config)
+    target = float(target_deg)
+    ranked = sorted(
+        [dict(entry) for entry in measurements
+         if (entry is not None
+             and np.isfinite(entry.get('incidence_deg', np.nan))
+             and abs(float(entry['incidence_deg']) - target)
+                 <= float(cfg['target_tolerance_deg']))],
+        key=lambda entry: (
+            abs(float(entry['incidence_deg']) - target),
+            float(entry.get('reprojection_rms_px', float('inf'))),
+            -float(entry.get('area_px2', 0.0)),
+            int(entry['idx'])))
+    selected = []
+    separation = int(cfg['min_candidate_separation_frames'])
+    for entry in ranked:
+        if any(abs(int(entry['idx']) - int(old['idx'])) < separation
+               for old in selected):
+            continue
+        selected.append(entry)
+        if len(selected) >= int(cfg['candidates_per_side']):
+            break
+    return selected
+
+
+def _angle_guided_normalize_reversed_output(result):
+    """Keep UI right=A(target A), left=B(target B) after a reverse scan.
+
+    The temporal solver always operates in chronological order.  Its relative
+    pose maps the later/end (UI-left) camera into the earlier/start (UI-right)
+    camera.  When the target angles occur in the opposite temporal order, swap
+    all view-labelled outputs and invert the pose only after optimization.
+    """
+    diagnostics = result.get('angle_guided_diagnostics') or {}
+    if not diagnostics.get('output_roles_swapped', False):
+        return result
+
+    old_R = np.asarray(result['R_rel'], np.float64).reshape(3, 3).copy()
+    old_t_shape = np.asarray(result['t_rel']).shape
+    old_t = np.asarray(result['t_rel'], np.float64).reshape(3).copy()
+    new_R = old_R.T
+    new_t = -new_R @ old_t
+
+    for key_A, key_B in (
+            ('frame_A', 'frame_B'), ('idx_A', 'idx_B'),
+            ('cornersA', 'cornersB'),
+            ('rt_sift_points_right', 'rt_sift_points_left')):
+        result[key_A], result[key_B] = result.get(key_B), result.get(key_A)
+    result['R_rel'] = new_R
+    result['t_rel'] = new_t.reshape(old_t_shape)
+
+    plane_n = result.get('global_plane_n')
+    plane_c = result.get('global_plane_c')
+    if plane_n is not None and plane_c is not None:
+        result['global_plane_n'] = (
+            old_R @ np.asarray(plane_n, np.float64).reshape(3))
+        result['global_plane_c'] = (
+            old_R @ np.asarray(plane_c, np.float64).reshape(3) + old_t)
+
+    for role_key in (
+            'detection_roi_bounds_by_role',
+            'feature_roi_bounds_by_role',
+            'pair_geometry_roi_bounds_by_role'):
+        roles = result.get(role_key)
+        if isinstance(roles, dict):
+            roles['frame_A'], roles['frame_B'] = (
+                roles.get('frame_B'), roles.get('frame_A'))
+    detection_roles = result.get('detection_roi_bounds_by_role')
+    if isinstance(detection_roles, dict):
+        result['detection_roi_bounds'] = detection_roles.get('frame_A')
+
+    def swap_angle_measurement(measurement):
+        if not isinstance(measurement, dict):
+            return measurement
+        swapped = dict(measurement)
+        for stem in ('incidence', 'target', 'error'):
+            key_A = f'{stem}_A_deg'
+            key_B = f'{stem}_B_deg'
+            if key_A in swapped or key_B in swapped:
+                swapped[key_A], swapped[key_B] = (
+                    swapped.get(key_B), swapped.get(key_A))
+        return swapped
+
+    quality = result.get('rt_quality')
+    if isinstance(quality, dict) and quality.get('angle_guided') is not None:
+        quality['angle_guided'] = swap_angle_measurement(
+            quality.get('angle_guided'))
+    final_pair = diagnostics.get('final_selected_pair')
+    if isinstance(final_pair, dict):
+        final_pair['idx_A'], final_pair['idx_B'] = (
+            result.get('idx_A'), result.get('idx_B'))
+        final_pair['pair_measurement'] = (
+            quality.get('angle_guided') if isinstance(quality, dict)
+            else swap_angle_measurement(final_pair.get('pair_measurement')))
+    diagnostics['output_idx_A'] = int(result['idx_A'])
+    diagnostics['output_idx_B'] = int(result['idx_B'])
+    diagnostics['output_role_normalized'] = True
+
+    pattern_diag = result.get('pattern_guided_diagnostics')
+    if isinstance(pattern_diag, dict):
+        selected_pair = pattern_diag.get('selected_pair')
+        if isinstance(selected_pair, dict):
+            selected_pair['idx_A'] = int(result['idx_A'])
+            selected_pair['idx_B'] = int(result['idx_B'])
+
+    # Extra candidates were produced by varying the chronological start while
+    # holding the end fixed.  After swapping roles they are not valid alternate
+    # right images, so do not expose them with incorrect RT semantics.
+    if result.get('extra_candidates'):
+        diagnostics['reversed_extra_candidates_suppressed'] = int(
+            len(result['extra_candidates']))
+        result['extra_candidates'] = []
+
+    result['angle_guided_diagnostics'] = diagnostics
+    return result
+
 # ---- bounded selected-endpoint local window ----
 # The local stage runs only after a provisional cheap-geometry pair is known.
 # It never performs local SIFT and never rebuilds the fixed marker map.
 LOCAL_WINDOW_DEFAULT_CONFIG = {
-    'enabled': True,
+    'enabled': False,
     'radius': 2,
     'stride': 1,
     'max_unique_new_frames': 8,
     'max_endpoint_candidates': 3,
-    'local_stage_budget_s': 0.65,
-    'analysis_elapsed_deadline_s': 2.05,
+    'local_stage_budget_s': 999.0,#0.65,
+    'analysis_elapsed_deadline_s': 999.0,#2.05,
     'aruco_roi_expand': 2.8,
     'allow_full_detection_fallback': True,
     'klt_scale': 0.5,
@@ -2090,6 +2302,8 @@ def _local_klt_track_pair(gray_prev, gray_curr, camera_matrix, marker_corners=No
         'fb_median_px': None, 'fb_p90_px': None, 'grid_coverage': 0.0,
         'rotation_deg': None, 'R_curr_from_prev': None,
         'essential_inlier_ratio': None, 'homography_inlier_ratio': None,
+        'recoverpose_inlier_count': 0,
+        'recoverpose_min_required': max(8, int(cfg['klt_min_tracks']) // 2),
         'planar_degenerate': False, 'reason': 'NO_FEATURES',
     }
     if pts0 is None or len(pts0) < int(cfg['klt_min_tracks']):
@@ -2159,11 +2373,17 @@ def _local_klt_track_pair(gray_prev, gray_curr, camera_matrix, marker_corners=No
             result['essential_inlier_ratio'] = inlier_ratio
             count, R, _t, _mask = cv2.recoverPose(
                 E, p0f, p1f, np.asarray(camera_matrix, np.float64), mask=em)
-            if int(count) >= max(8, int(cfg['klt_min_tracks']) // 2):
+            required_count = int(result['recoverpose_min_required'])
+            result['recoverpose_inlier_count'] = int(count)
+            if int(count) >= required_count:
                 result['R_curr_from_prev'] = np.asarray(R, np.float64)
                 result['rotation_deg'] = _temporal_rotation_distance_deg(R, np.eye(3))
                 result['available'] = True
                 result['reason'] = 'OK'
+            else:
+                result['reason'] = 'RECOVERPOSE_TOO_FEW_CHEIRALITY_INLIERS'
+        else:
+            result['reason'] = 'ESSENTIAL_NOT_FOUND'
     except cv2.error:
         result['reason'] = 'ESSENTIAL_FAILED'
     hratio = result.get('homography_inlier_ratio')
@@ -2681,12 +2901,14 @@ def analyze_video_frames(
     progress_callback=None,
     frames_override=None,
     detection_roi_ratio=None,
+    feature_roi_ratio=None,
     marker_corners_override=None,
     pattern_guided=True,
     pattern_guided_config=None,
     pair_geometry_roi_ratio=None,
     local_window=True,
     local_window_config=None,
+    angle_guided_config=None,
 ):
     timer = StageTimer("影片分析明細")
     analysis_wall_start = time.perf_counter()
@@ -2694,6 +2916,30 @@ def analyze_video_frames(
     pattern_guided_enabled = bool(pattern_guided and pg_cfg.get('enabled', True))
     lw_cfg = _local_window_resolve_config(local_window_config)
     local_window_enabled = bool(local_window and lw_cfg.get('enabled', True))
+    angle_cfg = _angle_guided_resolve_config(angle_guided_config)
+    angle_guided_enabled = bool(angle_cfg.get('enabled', False))
+    angle_guided_diagnostics = {
+        'enabled': angle_guided_enabled,
+        'config': dict(angle_cfg),
+        'status': 'DISABLED' if not angle_guided_enabled else 'NOT_RUN',
+        'fallback_reason': None,
+        'reference_marker_id': None,
+        'coarse_indices_A': [],
+        'coarse_indices_B': [],
+        'scanned_indices_A': [],
+        'scanned_indices_B': [],
+        'selected_indices_A': [],
+        'selected_indices_B': [],
+        'selected_measurements_A': [],
+        'selected_measurements_B': [],
+        'direction': None,
+        'forward_coarse_error_deg': None,
+        'reverse_coarse_error_deg': None,
+        'chronological_target_A_deg': None,
+        'chronological_target_B_deg': None,
+        'output_roles_swapped': False,
+        'elapsed_s': 0.0,
+    }
     local_window_diagnostics = {
         'enabled': local_window_enabled,
         'config': dict(lw_cfg),
@@ -2815,6 +3061,25 @@ def analyze_video_frames(
     detection_roi_bounds_start = roi_bounds_from_ratio(start_roi_ratio)
     detection_roi_bounds_end = roi_bounds_from_ratio(end_roi_ratio)
 
+    # SIFT ROI is independent from ArUco detection.  For backward
+    # compatibility, callers that only supplied detection_roi_ratio retain the
+    # historical shared ArUco/SIFT ROI behaviour.  New callers can leave
+    # detection_roi_ratio=None and set feature_roi_ratio to restrict SIFT only.
+    if isinstance(feature_roi_ratio, dict):
+        feature_start_ratio = feature_roi_ratio.get("frame_A")
+        feature_end_ratio = feature_roi_ratio.get("frame_B")
+        if feature_start_ratio is None or feature_end_ratio is None:
+            raise ValueError(
+                "Independent SIFT feature ROIs require frame_A and frame_B")
+        feature_roi_bounds_start = roi_bounds_from_ratio(feature_start_ratio)
+        feature_roi_bounds_end = roi_bounds_from_ratio(feature_end_ratio)
+    elif feature_roi_ratio is not None:
+        feature_roi_bounds_start = roi_bounds_from_ratio(feature_roi_ratio)
+        feature_roi_bounds_end = roi_bounds_from_ratio(feature_roi_ratio)
+    else:
+        feature_roi_bounds_start = detection_roi_bounds_start
+        feature_roi_bounds_end = detection_roi_bounds_end
+
     # Pair-geometry ROI is independent from detection/SIFT ROI.  If omitted,
     # reuse the detection ROI when available, otherwise fall back to full frame.
     if isinstance(pair_geometry_roi_ratio, dict):
@@ -2838,24 +3103,76 @@ def analyze_video_frames(
         return geometry_roi_bounds_start
 
     def roi_bounds_for_frame(frame_index):
+        """ArUco-only detection bounds (legacy name retained internally)."""
         if frame_index in end_range:
             return detection_roi_bounds_end
         return detection_roi_bounds_start
 
-    def log_roi_bounds(label, bounds):
+    def feature_roi_bounds_for_frame(frame_index):
+        if frame_index in end_range:
+            return feature_roi_bounds_end
+        return feature_roi_bounds_start
+
+    def scaled_feature_roi_bounds(full_resolution_bounds, scaled_width, scaled_height):
+        """Map full-resolution ROI bounds into the resized SIFT image."""
+        if full_resolution_bounds is None:
+            return 0, 0, int(scaled_width), int(scaled_height)
+        scale_x = float(scaled_width) / max(float(frame_width), 1.0)
+        scale_y = float(scaled_height) / max(float(frame_height), 1.0)
+        x0, y0, x1, y1 = full_resolution_bounds
+        sx0 = max(0, min(int(scaled_width), int(round(float(x0) * scale_x))))
+        sy0 = max(0, min(int(scaled_height), int(round(float(y0) * scale_y))))
+        sx1 = max(0, min(int(scaled_width), int(round(float(x1) * scale_x))))
+        sy1 = max(0, min(int(scaled_height), int(round(float(y1) * scale_y))))
+        if sx1 <= sx0 or sy1 <= sy0:
+            raise ValueError(
+                "SIFT ROI becomes empty after FEATURE_IMAGE_SCALE resize: "
+                f"full={full_resolution_bounds}, scaled={(sx0, sy0, sx1, sy1)}")
+        return sx0, sy0, sx1, sy1
+
+    def log_roi_bounds(prefix, label, bounds):
         if bounds is None:
             return
         roi_x0, roi_y0, roi_x1, roi_y1 = bounds
         log_and_print(
-            f"🎯 [RT ROI-{label}] ArUco pattern 與 SIFT 僅使用: "
+            f"🎯 [{prefix}-{label}] "
             f"x={roi_x0}:{roi_x1}, y={roi_y0}:{roi_y1} "
             f"({roi_x1 - roi_x0}x{roi_y1 - roi_y0})")
 
     if detection_roi_bounds_start == detection_roi_bounds_end:
-        log_roi_bounds("共用", detection_roi_bounds_start)
+        log_roi_bounds("RT ArUco ROI", "共用", detection_roi_bounds_start)
     else:
-        log_roi_bounds("Frame A/右圖", detection_roi_bounds_start)
-        log_roi_bounds("Frame B/左圖", detection_roi_bounds_end)
+        log_roi_bounds("RT ArUco ROI", "Frame A/右圖", detection_roi_bounds_start)
+        log_roi_bounds("RT ArUco ROI", "Frame B/左圖", detection_roi_bounds_end)
+    if feature_roi_bounds_start == feature_roi_bounds_end:
+        log_roi_bounds("RT SIFT ROI", "共用", feature_roi_bounds_start)
+    else:
+        log_roi_bounds("RT SIFT ROI", "Frame A/右圖", feature_roi_bounds_start)
+        log_roi_bounds("RT SIFT ROI", "Frame B/左圖", feature_roi_bounds_end)
+    if feature_roi_bounds_start is not None or feature_roi_bounds_end is not None:
+        feature_scale_for_log = float(FEATURE_IMAGE_SCALE)
+        if feature_scale_for_log <= 0.0:
+            raise ValueError("FEATURE_IMAGE_SCALE must be greater than zero")
+        scaled_width_for_log = max(1, int(round(frame_width * feature_scale_for_log)))
+        scaled_height_for_log = max(1, int(round(frame_height * feature_scale_for_log)))
+        scaled_start_for_log = scaled_feature_roi_bounds(
+            feature_roi_bounds_start, scaled_width_for_log, scaled_height_for_log)
+        scaled_end_for_log = scaled_feature_roi_bounds(
+            feature_roi_bounds_end, scaled_width_for_log, scaled_height_for_log)
+        if scaled_start_for_log == scaled_end_for_log:
+            log_and_print(
+                f"   ↳ [RT SIFT scaled crop] scale={feature_scale_for_log:.3f} | "
+                f"image={scaled_width_for_log}x{scaled_height_for_log} | "
+                f"crop={scaled_start_for_log}")
+        else:
+            log_and_print(
+                f"   ↳ [RT SIFT scaled crop-A] scale={feature_scale_for_log:.3f} | "
+                f"image={scaled_width_for_log}x{scaled_height_for_log} | "
+                f"crop={scaled_start_for_log}")
+            log_and_print(
+                f"   ↳ [RT SIFT scaled crop-B] scale={feature_scale_for_log:.3f} | "
+                f"image={scaled_width_for_log}x{scaled_height_for_log} | "
+                f"crop={scaled_end_for_log}")
     
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
     if hasattr(cv2.aruco, 'ArucoDetector'):
@@ -2875,7 +3192,7 @@ def analyze_video_frames(
             gray = clahe.apply(gray)
         return gray
 
-    def detect_markers_in_gray(gray, detection_roi_bounds=None):
+    def detect_marker_candidates_in_gray(gray, detection_roi_bounds=None):
         detect_gray = gray
         offset_x = 0
         offset_y = 0
@@ -2889,6 +3206,10 @@ def analyze_video_frames(
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(
                 detect_gray, dict_4x4, parameters=params)
+        return detect_gray, corners, ids, offset_x, offset_y
+
+    def refine_detected_marker_corners(
+            detect_gray, corners, ids, offset_x=0, offset_y=0):
         if ids is not None and len(ids) > 0:
             ids_list = [i[0] for i in ids]
             term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
@@ -2898,6 +3219,10 @@ def analyze_video_frames(
             raw_corners = [c.reshape(4, 2) + offset for c in corners]
             return dict(zip(ids_list, raw_corners))
         return {}
+
+    def detect_markers_in_gray(gray, detection_roi_bounds=None):
+        return refine_detected_marker_corners(
+            *detect_marker_candidates_in_gray(gray, detection_roi_bounds))
 
     def detect_frame_markers(frame_index):
         if marker_corners_override is not None:
@@ -2912,6 +3237,80 @@ def analyze_video_frames(
             prepare_marker_gray(frames[frame_index]),
             roi_bounds_for_frame(frame_index),
         )
+
+    def ensure_profiled_probe_markers(frame_indices):
+        """Populate the marker cache in non-overlapping timed image phases."""
+        missing = sorted({
+            int(index) for index in frame_indices
+            if int(index) not in detected_cache
+        })
+        if not missing:
+            return
+
+        if marker_corners_override is not None:
+            phase_start = time.perf_counter()
+            detected_cache.update({
+                index: detect_frame_markers(index) for index in missing
+            })
+            add_pair_detail(
+                'marker_probe_cache_overhead', time.perf_counter() - phase_start)
+            return
+
+        phase_start = time.perf_counter()
+        if hasattr(frames, 'preload'):
+            frames.preload(missing)
+        decoded_frames = {index: frames[index] for index in missing}
+        add_pair_detail(
+            'marker_probe_video_decode', time.perf_counter() - phase_start)
+
+        def convert_to_gray(index):
+            return index, cv2.cvtColor(decoded_frames[index], cv2.COLOR_BGR2GRAY)
+
+        phase_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            gray_by_index = dict(executor.map(convert_to_gray, missing))
+        add_pair_detail(
+            'marker_probe_gray_convert', time.perf_counter() - phase_start)
+
+        if ARUCO_USE_CLAHE:
+            def apply_clahe(index):
+                clahe = getattr(marker_preprocess_state, 'clahe', None)
+                if clahe is None:
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    marker_preprocess_state.clahe = clahe
+                return index, clahe.apply(gray_by_index[index])
+
+            phase_start = time.perf_counter()
+            with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+                prepared_by_index = dict(executor.map(apply_clahe, missing))
+            add_pair_detail(
+                'marker_probe_clahe', time.perf_counter() - phase_start)
+        else:
+            prepared_by_index = gray_by_index
+
+        def detect_candidates(index):
+            return index, detect_marker_candidates_in_gray(
+                prepared_by_index[index], roi_bounds_for_frame(index))
+
+        phase_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            raw_by_index = dict(executor.map(detect_candidates, missing))
+        add_pair_detail(
+            'marker_probe_aruco_detect', time.perf_counter() - phase_start)
+
+        def refine_corners(index):
+            return index, refine_detected_marker_corners(*raw_by_index[index])
+
+        phase_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+            refined_by_index = dict(executor.map(refine_corners, missing))
+        add_pair_detail(
+            'marker_probe_corner_subpix', time.perf_counter() - phase_start)
+
+        phase_start = time.perf_counter()
+        detected_cache.update(refined_by_index)
+        add_pair_detail(
+            'marker_probe_cache_overhead', time.perf_counter() - phase_start)
 
     # 定義輔助工具
     def undistort_corners_dict(corners_dict):
@@ -2992,7 +3391,7 @@ def analyze_video_frames(
         return info
 
     def select_adaptive_candidate_frames(first_range, second_range):
-        """Sample five frames spanning the useful middle-to-late video region."""
+        """Use the original five probes or angle-targeted ArUco proposals."""
         def select_fractions(frame_range, fractions):
             values = list(frame_range)
             if not values:
@@ -3003,10 +3402,210 @@ def analyze_video_frames(
             ]
             return list(dict.fromkeys(selected))
 
-        return (
-            select_fractions(first_range, ADAPTIVE_START_RANGE_FRACTIONS),
-            select_fractions(second_range, ADAPTIVE_END_RANGE_FRACTIONS),
-        )
+        def original_selection():
+            return (
+                select_fractions(first_range, ADAPTIVE_START_RANGE_FRACTIONS),
+                select_fractions(second_range, ADAPTIVE_END_RANGE_FRACTIONS),
+            )
+
+        if not angle_guided_enabled:
+            return original_selection()
+
+        scan_start = time.perf_counter()
+
+        def uniform_indices(frame_range, count):
+            values = list(frame_range)
+            if not values:
+                return []
+            positions = np.linspace(
+                0, len(values) - 1, min(int(count), len(values)))
+            return list(dict.fromkeys(
+                values[int(round(position))] for position in positions))
+
+        def ensure_detected(indices):
+            missing = [int(index) for index in indices
+                       if int(index) not in detected_cache]
+            if not missing:
+                return
+            detection_start = time.perf_counter()
+            if hasattr(frames, 'preload'):
+                frames.preload(missing)
+            with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
+                detected_cache.update(zip(
+                    missing, executor.map(detect_frame_markers, missing)))
+            angle_guided_diagnostics['frame_decode_aruco_s'] = (
+                float(angle_guided_diagnostics.get('frame_decode_aruco_s', 0.0))
+                + time.perf_counter() - detection_start)
+
+        def choose_common_marker(indices_A, indices_B):
+            counts_A = {}
+            counts_B = {}
+            areas = {}
+            for indices, counts in (
+                    (indices_A, counts_A), (indices_B, counts_B)):
+                for index in indices:
+                    for marker_id, points in detected_cache.get(int(index), {}).items():
+                        marker_id = int(marker_id)
+                        counts[marker_id] = counts.get(marker_id, 0) + 1
+                        area = abs(float(cv2.contourArea(
+                            np.asarray(points, np.float32).reshape(4, 2))))
+                        areas.setdefault(marker_id, []).append(area)
+            common = set(counts_A) & set(counts_B)
+            if not common:
+                return None
+            return max(common, key=lambda marker_id: (
+                min(counts_A.get(marker_id, 0), counts_B.get(marker_id, 0)),
+                counts_A.get(marker_id, 0) + counts_B.get(marker_id, 0),
+                float(np.median(areas.get(marker_id, [0.0]))),
+                -int(marker_id)))
+
+        def measurements(indices, marker_id):
+            output = []
+            for index in indices:
+                measurement = _angle_guided_marker_measurement(
+                    detected_cache.get(int(index), {}), marker_id,
+                    mtx_L, dist_L, marker_size_mm)
+                if measurement is not None:
+                    measurement = dict(measurement)
+                    measurement['idx'] = int(index)
+                    output.append(measurement)
+            return output
+
+        def refined_indices(frame_range, coarse, coarse_measurements, target):
+            values = list(frame_range)
+            if not values or not coarse_measurements:
+                return list(coarse)
+            allowed = set(values)
+            maximum = min(int(angle_cfg['max_scan_frames_per_segment']), len(values))
+            selected = set(int(index) for index in coarse)
+            seeds = sorted(coarse_measurements, key=lambda entry: (
+                abs(float(entry['incidence_deg']) - float(target)),
+                float(entry.get('reprojection_rms_px', float('inf')))))[:2]
+            max_offset = max(2, len(values))
+            for offset in range(1, max_offset + 1):
+                for seed in seeds:
+                    center = int(seed['idx'])
+                    for candidate in (center - offset, center + offset):
+                        if candidate in allowed:
+                            selected.add(candidate)
+                        if len(selected) >= maximum:
+                            return sorted(selected)
+            return sorted(selected)
+
+        def fallback(reason):
+            angle_guided_diagnostics['status'] = 'FALLBACK_ORIGINAL'
+            angle_guided_diagnostics['fallback_reason'] = str(reason)
+            angle_guided_diagnostics['elapsed_s'] = float(
+                time.perf_counter() - scan_start)
+            log_and_print(
+                f"⚠️ [角度導向選幀] {reason}，退回原本 5-frame 取樣 "
+                f"({angle_guided_diagnostics['elapsed_s']:.3f}s)")
+            return original_selection()
+
+        if progress_callback:
+            progress_callback(13, "階段 2/6：掃描 Pattern 角度...")
+        coarse_A = uniform_indices(
+            first_range, angle_cfg['coarse_samples_per_segment'])
+        coarse_B = uniform_indices(
+            second_range, angle_cfg['coarse_samples_per_segment'])
+        angle_guided_diagnostics['coarse_indices_A'] = [int(x) for x in coarse_A]
+        angle_guided_diagnostics['coarse_indices_B'] = [int(x) for x in coarse_B]
+        ensure_detected([*coarse_A, *coarse_B])
+        reference_marker_id = choose_common_marker(coarse_A, coarse_B)
+        if reference_marker_id is None:
+            return fallback('NO_COMMON_MARKER_IN_COARSE_SCAN')
+        angle_guided_diagnostics['reference_marker_id'] = int(reference_marker_id)
+
+        coarse_measurements_A = measurements(coarse_A, reference_marker_id)
+        coarse_measurements_B = measurements(coarse_B, reference_marker_id)
+        if not coarse_measurements_A or not coarse_measurements_B:
+            return fallback('INSUFFICIENT_COARSE_POSES')
+
+        target_right = float(angle_cfg['target_frame_A_deg'])
+        target_left = float(angle_cfg['target_frame_B_deg'])
+
+        def nearest_error(entries, target):
+            return min(
+                abs(float(entry['incidence_deg']) - float(target))
+                for entry in entries)
+
+        forward_error = (
+            nearest_error(coarse_measurements_A, target_right)
+            + nearest_error(coarse_measurements_B, target_left))
+        reverse_error = (
+            nearest_error(coarse_measurements_A, target_left)
+            + nearest_error(coarse_measurements_B, target_right))
+        direction_mode = str(angle_cfg.get('direction_mode', 'auto'))
+        if direction_mode == 'forward':
+            direction = 'forward'
+        elif direction_mode == 'reverse':
+            direction = 'reverse'
+        else:
+            direction = 'forward' if forward_error <= reverse_error else 'reverse'
+        if direction == 'forward':
+            chronological_target_A = target_right
+            chronological_target_B = target_left
+        else:
+            chronological_target_A = target_left
+            chronological_target_B = target_right
+        angle_guided_diagnostics['direction'] = direction
+        angle_guided_diagnostics['forward_coarse_error_deg'] = float(forward_error)
+        angle_guided_diagnostics['reverse_coarse_error_deg'] = float(reverse_error)
+        angle_guided_diagnostics['chronological_target_A_deg'] = float(
+            chronological_target_A)
+        angle_guided_diagnostics['chronological_target_B_deg'] = float(
+            chronological_target_B)
+        angle_guided_diagnostics['output_roles_swapped'] = bool(
+            direction == 'reverse'
+            and angle_cfg.get('normalize_output_roles', True))
+        log_and_print(
+            f"🧭 [角度掃描方向] mode={direction_mode} -> {direction} | "
+            f"forward_error={forward_error:.2f}deg | "
+            f"reverse_error={reverse_error:.2f}deg")
+        scan_A = refined_indices(
+            first_range, coarse_A, coarse_measurements_A,
+            chronological_target_A)
+        scan_B = refined_indices(
+            second_range, coarse_B, coarse_measurements_B,
+            chronological_target_B)
+        ensure_detected([*scan_A, *scan_B])
+        final_measurements_A = measurements(scan_A, reference_marker_id)
+        final_measurements_B = measurements(scan_B, reference_marker_id)
+        selected_A = _angle_guided_rank_measurements(
+            final_measurements_A, chronological_target_A, angle_cfg)
+        selected_B = _angle_guided_rank_measurements(
+            final_measurements_B, chronological_target_B, angle_cfg)
+        angle_guided_diagnostics['scanned_indices_A'] = [int(x) for x in scan_A]
+        angle_guided_diagnostics['scanned_indices_B'] = [int(x) for x in scan_B]
+        if not selected_A or not selected_B:
+            return fallback('NO_VALID_TARGET_POSE')
+        error_A = abs(float(selected_A[0]['incidence_deg'])
+                      - chronological_target_A)
+        error_B = abs(float(selected_B[0]['incidence_deg'])
+                      - chronological_target_B)
+        if max(error_A, error_B) > float(angle_cfg['target_tolerance_deg']):
+            return fallback(
+                f"TARGET_OUT_OF_TOLERANCE(A={error_A:.2f}deg,B={error_B:.2f}deg)")
+
+        selected_indices_A = sorted(int(entry['idx']) for entry in selected_A)
+        selected_indices_B = sorted(int(entry['idx']) for entry in selected_B)
+        angle_guided_diagnostics['status'] = 'OK_ANGLE_GUIDED'
+        angle_guided_diagnostics['selected_indices_A'] = selected_indices_A
+        angle_guided_diagnostics['selected_indices_B'] = selected_indices_B
+        angle_guided_diagnostics['selected_measurements_A'] = selected_A
+        angle_guided_diagnostics['selected_measurements_B'] = selected_B
+        angle_guided_diagnostics['elapsed_s'] = float(
+            time.perf_counter() - scan_start)
+        log_and_print(
+            f"🎯 [角度導向選幀] marker ID={reference_marker_id} | "
+            f"前段 F{selected_A[0]['idx']}="
+            f"{selected_A[0]['incidence_deg']:.2f}deg "
+            f"(target {chronological_target_A:.1f}) | "
+            f"後段 F{selected_B[0]['idx']}="
+            f"{selected_B[0]['incidence_deg']:.2f}deg "
+            f"(target {chronological_target_B:.1f}) | "
+            f"scan {angle_guided_diagnostics['elapsed_s']:.3f}s")
+        return selected_indices_A, selected_indices_B
 
     def save_debug_pair_images(item_s, item_e, suffix):
         img_A = frames[item_s['idx']].copy()
@@ -3101,23 +3700,26 @@ def analyze_video_frames(
         if idx not in feat_cache:
             gray = cv2.cvtColor(frames[idx], cv2.COLOR_BGR2GRAY)
             scale = float(FEATURE_IMAGE_SCALE)
+            if scale <= 0.0:
+                raise ValueError("FEATURE_IMAGE_SCALE must be greater than zero")
             if scale != 1.0:
                 gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
             if idx not in detected_cache:
                 detected_cache[idx] = detect_frame_markers(idx)
-            frame_roi_bounds = roi_bounds_for_frame(idx)
-            if frame_roi_bounds is None:
-                feature_mask = np.full(gray.shape, 255, dtype=np.uint8)
-            else:
-                feature_mask = np.zeros(gray.shape, dtype=np.uint8)
-                roi_x0, roi_y0, roi_x1, roi_y1 = frame_roi_bounds
-                scaled_x0 = max(0, min(gray.shape[1], int(round(roi_x0 * scale))))
-                scaled_y0 = max(0, min(gray.shape[0], int(round(roi_y0 * scale))))
-                scaled_x1 = max(0, min(gray.shape[1], int(round(roi_x1 * scale))))
-                scaled_y1 = max(0, min(gray.shape[0], int(round(roi_y1 * scale))))
-                feature_mask[scaled_y0:scaled_y1, scaled_x0:scaled_x1] = 255
+            frame_feature_bounds = feature_roi_bounds_for_frame(idx)
+            scaled_x0, scaled_y0, scaled_x1, scaled_y1 = scaled_feature_roi_bounds(
+                frame_feature_bounds, gray.shape[1], gray.shape[0])
+            # Crop after resizing so the ROI both limits accepted features and
+            # avoids building a SIFT pyramid for pixels outside the requested
+            # region.  Keypoints are shifted back into the resized full-frame
+            # coordinate system before the existing /scale conversion.
+            feature_gray = gray[scaled_y0:scaled_y1, scaled_x0:scaled_x1]
+            feature_mask = np.full(feature_gray.shape, 255, dtype=np.uint8)
+            crop_origin = np.array([scaled_x0, scaled_y0], dtype=np.float32)
             for pts in detected_cache[idx].values():
-                quad = np.asarray(pts, dtype=np.float32).reshape(4, 2) * scale
+                quad = (
+                    np.asarray(pts, dtype=np.float32).reshape(4, 2) * scale
+                    - crop_origin)
                 center = quad.mean(axis=0)
                 radius = max(float(np.mean(np.linalg.norm(quad - center, axis=1))), 1.0)
                 margin = FEATURE_MARKER_MASK_MARGIN_PX * scale
@@ -3125,7 +3727,19 @@ def analyze_video_frames(
                 cv2.fillConvexPoly(feature_mask, np.round(expanded).astype(np.int32), 0)
             extractor = cv2.SIFT_create(
                 nfeatures=FEATURE_MAX_KEYPOINTS, contrastThreshold=0.01)
-            feat_cache[idx] = extractor.detectAndCompute(gray, feature_mask)
+            keypoints, descriptors = extractor.detectAndCompute(
+                feature_gray, feature_mask)
+            if keypoints and (scaled_x0 != 0 or scaled_y0 != 0):
+                keypoints = [
+                    cv2.KeyPoint(
+                        float(keypoint.pt[0] + scaled_x0),
+                        float(keypoint.pt[1] + scaled_y0),
+                        float(keypoint.size), float(keypoint.angle),
+                        float(keypoint.response), int(keypoint.octave),
+                        int(keypoint.class_id))
+                    for keypoint in keypoints
+                ]
+            feat_cache[idx] = (keypoints, descriptors)
         return feat_cache[idx]
 
     def feature_cell(pt):
@@ -4011,6 +4625,48 @@ def analyze_video_frames(
         cand_e = branch_candidate_e or {}
         pg_s = cand_s.get('pattern_observability') or {}
         pg_e = cand_e.get('pattern_observability') or {}
+        angle_pair_diag = None
+        angle_score_penalty = 0.0
+        angle_pair_ok = True
+        if angle_guided_diagnostics.get('status') == 'OK_ANGLE_GUIDED':
+            angle_pair_ok = False
+            target_marker_id = angle_guided_diagnostics.get('reference_marker_id')
+
+            def incidence_for_target(observability):
+                for entry in observability.get('per_marker', []) or []:
+                    if int(entry.get('marker_id', -1)) == int(target_marker_id):
+                        return entry.get('incidence_deg')
+                return observability.get('incidence_deg')
+
+            incidence_A = incidence_for_target(pg_s)
+            incidence_B = incidence_for_target(pg_e)
+            target_A = float(angle_guided_diagnostics.get(
+                'chronological_target_A_deg', angle_cfg['target_frame_A_deg']))
+            target_B = float(angle_guided_diagnostics.get(
+                'chronological_target_B_deg', angle_cfg['target_frame_B_deg']))
+            tolerance = float(angle_cfg['target_tolerance_deg'])
+            if (incidence_A is not None and incidence_B is not None
+                    and np.isfinite(incidence_A) and np.isfinite(incidence_B)):
+                error_A = abs(float(incidence_A) - target_A)
+                error_B = abs(float(incidence_B) - target_B)
+                normalized_error = min(
+                    3.0, 0.5 * (error_A + error_B) / max(tolerance, 1e-9))
+                angle_score_penalty = (
+                    float(angle_cfg['pair_score_weight']) * normalized_error)
+                angle_pair_ok = bool(
+                    error_A <= tolerance and error_B <= tolerance)
+                angle_pair_diag = {
+                    'marker_id': int(target_marker_id),
+                    'incidence_A_deg': float(incidence_A),
+                    'incidence_B_deg': float(incidence_B),
+                    'target_A_deg': target_A,
+                    'target_B_deg': target_B,
+                    'error_A_deg': float(error_A),
+                    'error_B_deg': float(error_B),
+                    'normalized_error': float(normalized_error),
+                    'score_penalty': float(angle_score_penalty),
+                    'within_tolerance': bool(angle_pair_ok),
+                }
         if pattern_guided_enabled:
             nominal_depth = pg_e.get('axial_depth_mm')
             nominal_depth_source = 'marker_axial_depth_B'
@@ -4055,6 +4711,7 @@ def analyze_video_frames(
             + PAIR_SCORE_BLUR_W * blur_penalty
             + PAIR_SCORE_COVER_W * coverage_penalty
             + PAIR_SCORE_MEASUREMENT_W * measurement_penalty
+            + angle_score_penalty
         )
         shared_count = len(set(item_s['corners']) & set(item_e['corners']))
         metrics = {
@@ -4082,6 +4739,8 @@ def analyze_video_frames(
             'pattern_observability_start': pg_s,
             'pattern_observability_end': pg_e,
             'pattern_guided': pg_pair_diag,
+            'angle_guided': angle_pair_diag,
+            'angle_guided_ok': bool(angle_pair_ok),
         }
         return float(score), metrics
 
@@ -4102,6 +4761,57 @@ def analyze_video_frames(
     
     # Five cheap ArUco probes span the useful motion interval; only two pairs reach SIFT.
     stages = [1]
+    pair_search_timing = {
+        'endpoint_proposal': 0.0,
+        'marker_map_temporal': 0.0,
+        'pattern_guided_expansion': 0.0,
+        'local_window_klt': 0.0,
+        'candidate_enumeration': 0.0,
+        'sift_essential_rerank': 0.0,
+    }
+    # These children are intentionally measured as non-overlapping wall-clock
+    # blocks.  In particular, ThreadPoolExecutor waits are timed outside worker
+    # functions so parallel SIFT/ArUco work is not double-counted.
+    pair_search_detail_timing = {
+        'endpoint_frame_decode_aruco': 0.0,
+        'endpoint_pose_direction_rank': 0.0,
+        'marker_probe_decode_detect': 0.0,
+        'marker_probe_video_decode': 0.0,
+        'marker_probe_gray_convert': 0.0,
+        'marker_probe_clahe': 0.0,
+        'marker_probe_aruco_detect': 0.0,
+        'marker_probe_corner_subpix': 0.0,
+        'marker_probe_cache_overhead': 0.0,
+        'marker_map_graph': 0.0,
+        'temporal_pose_hypotheses': 0.0,
+        'temporal_path_dp': 0.0,
+        'marker_temporal_overhead': 0.0,
+        'pattern_core_geometry': 0.0,
+        'pattern_extra_probe_rebuild': 0.0,
+        'pattern_overhead': 0.0,
+        'local_provisional_pair': 0.0,
+        'local_frame_decode_detect': 0.0,
+        'local_pose_hypotheses': 0.0,
+        'local_klt_tracking': 0.0,
+        'local_path_rerank': 0.0,
+        'local_global_dp_rebuild': 0.0,
+        'local_diagnostic_logging': 0.0,
+        'local_overhead': 0.0,
+        'candidate_branch_pack': 0.0,
+        'candidate_pair_branch_score': 0.0,
+        'candidate_topk_budget': 0.0,
+        'candidate_overhead': 0.0,
+        'sift_feature_extract': 0.0,
+        'sift_descriptor_match': 0.0,
+        'sift_essential_geometry': 0.0,
+        'sift_rerank_and_select': 0.0,
+        'sift_overhead': 0.0,
+    }
+
+    def add_pair_detail(key, elapsed_s):
+        pair_search_detail_timing[key] = (
+            float(pair_search_detail_timing.get(key, 0.0))
+            + max(0.0, float(elapsed_s)))
     stage_success = False
     best_branch = None
     half = marker_size_mm / 2.0
@@ -4110,16 +4820,46 @@ def analyze_video_frames(
     for stage_idx, num_samples in enumerate(stages):
         log_and_print("🔄 評估自適應跨段候選幀對...")
 
+        _phase_start = time.perf_counter()
         sampled_start, sampled_end = select_adaptive_candidate_frames(
             start_range, end_range)
-        temporal_start_indices = _expand_temporal_probe_indices(
-            sampled_start, start_range,
-            radius=TEMPORAL_NEIGHBOR_RADIUS if ENABLE_TEMPORAL_NEIGHBOR_PROBES else 0)
-        temporal_end_indices = _expand_temporal_probe_indices(
-            sampled_end, end_range,
-            radius=TEMPORAL_NEIGHBOR_RADIUS if ENABLE_TEMPORAL_NEIGHBOR_PROBES else 0)
-        if hasattr(frames, "preload"):
-            frames.preload([*temporal_start_indices, *temporal_end_indices])
+        endpoint_elapsed = time.perf_counter() - _phase_start
+        pair_search_timing['endpoint_proposal'] += endpoint_elapsed
+        endpoint_detect_elapsed = min(
+            endpoint_elapsed,
+            float(angle_guided_diagnostics.get('frame_decode_aruco_s', 0.0)))
+        add_pair_detail('endpoint_frame_decode_aruco', endpoint_detect_elapsed)
+        add_pair_detail(
+            'endpoint_pose_direction_rank', endpoint_elapsed - endpoint_detect_elapsed)
+        _phase_start = time.perf_counter()
+        if angle_guided_diagnostics.get('status') == 'OK_ANGLE_GUIDED':
+            # Reuse every already-detected scan pose for marker-map/temporal
+            # branch continuity, while only the target-nearest frames enter
+            # expensive cross-segment pair enumeration and SIFT.
+            temporal_start_indices = list(
+                angle_guided_diagnostics['scanned_indices_A'])
+            temporal_end_indices = list(
+                angle_guided_diagnostics['scanned_indices_B'])
+        else:
+            temporal_start_indices = _expand_temporal_probe_indices(
+                sampled_start, start_range,
+                radius=TEMPORAL_NEIGHBOR_RADIUS if ENABLE_TEMPORAL_NEIGHBOR_PROBES else 0)
+            temporal_end_indices = _expand_temporal_probe_indices(
+                sampled_end, end_range,
+                radius=TEMPORAL_NEIGHBOR_RADIUS if ENABLE_TEMPORAL_NEIGHBOR_PROBES else 0)
+        _detail_start = time.perf_counter()
+        marker_probe_child_keys = (
+            'marker_probe_video_decode',
+            'marker_probe_gray_convert',
+            'marker_probe_clahe',
+            'marker_probe_aruco_detect',
+            'marker_probe_corner_subpix',
+            'marker_probe_cache_overhead',
+        )
+        marker_probe_children_before = sum(
+            pair_search_detail_timing[key] for key in marker_probe_child_keys)
+        ensure_profiled_probe_markers(
+            [*temporal_start_indices, *temporal_end_indices])
 
         start_info = get_frame_info(sampled_start, stage_idx, is_start_segment=True)
         end_info = get_frame_info(sampled_end, stage_idx, is_start_segment=False)
@@ -4127,6 +4867,14 @@ def analyze_video_frames(
             temporal_start_indices, stage_idx, is_start_segment=True)
         temporal_end_info = get_frame_info(
             temporal_end_indices, stage_idx, is_start_segment=False)
+        marker_probe_elapsed = time.perf_counter() - _detail_start
+        marker_probe_children_added = (
+            sum(pair_search_detail_timing[key] for key in marker_probe_child_keys)
+            - marker_probe_children_before)
+        add_pair_detail(
+            'marker_probe_cache_overhead',
+            max(0.0, marker_probe_elapsed - marker_probe_children_added))
+        add_pair_detail('marker_probe_decode_detect', marker_probe_elapsed)
 
         if not start_info or not end_info:
             log_and_print(f"⚠️ 第 {stage_idx + 1} 階段：開頭段或結尾段無有效 ArUco 標籤")
@@ -4152,9 +4900,11 @@ def analyze_video_frames(
         temporal_marker_ids = set()
         for item in temporal_info:
             temporal_marker_ids.update(item['corners'])
+        _detail_start = time.perf_counter()
         marker_map, marker_map_diagnostics, ref_id = _build_temporal_marker_map_graph(
             temporal_info, temporal_marker_ids, mtx_L, dist_L, marker_size_mm,
             start_marker_ids=start_ids, end_marker_ids=end_ids)
+        add_pair_detail('marker_map_graph', time.perf_counter() - _detail_start)
         if ref_id is None:
             graph_diag = marker_map_diagnostics.get('_graph', {})
             log_and_print(
@@ -4175,21 +4925,26 @@ def analyze_video_frames(
         # Keep per-frame hypotheses until the complete sparse trajectory is
         # available.  All hypotheses are first converted to T_camera<-reference,
         # so a switch from one visible marker ID to another does not change frame.
+        _detail_start = time.perf_counter()
         frame_candidates = {}
         for item in temporal_info:
             candidates = _build_temporal_frame_candidates(
                 item, marker_map, mtx_L, dist_L, marker_size_mm,
                 marker_map_diagnostics=marker_map_diagnostics)
             if candidates:
-                if pattern_guided_enabled:
+                if pattern_guided_enabled or angle_guided_enabled:
                     for candidate in candidates:
                         candidate['pattern_observability'] = _pattern_guided_marker_observability(
                             candidate, item['corners'], marker_map, marker_size_mm,
                             marker_map_diagnostics=marker_map_diagnostics)
                 frame_candidates[int(item['idx'])] = candidates
+        add_pair_detail(
+            'temporal_pose_hypotheses', time.perf_counter() - _detail_start)
+        _detail_start = time.perf_counter()
         selected_temporal_path, path_diagnostics = _select_temporal_pose_path(
             frame_candidates,
             nominal_probe_indices=[*temporal_start_indices, *temporal_end_indices])
+        add_pair_detail('temporal_path_dp', time.perf_counter() - _detail_start)
         temporal_dp_model = path_diagnostics.get('_dp_model', {
             'segments': [], 'frame_to_segment': {}})
         core_probe_indices = {
@@ -4229,13 +4984,24 @@ def analyze_video_frames(
             f"🧭 [時序姿態] observations={len(selected_temporal_path)}, "
             f"segments={len(path_diagnostics.get('segments', []))}, "
             f"map_ids={sorted(marker_map)}")
+        marker_temporal_elapsed = time.perf_counter() - _phase_start
+        pair_search_timing['marker_map_temporal'] += marker_temporal_elapsed
+        marker_children = (
+            pair_search_detail_timing['marker_probe_decode_detect']
+            + pair_search_detail_timing['marker_map_graph']
+            + pair_search_detail_timing['temporal_pose_hypotheses']
+            + pair_search_detail_timing['temporal_path_dp'])
+        pair_search_detail_timing['marker_temporal_overhead'] = max(
+            0.0, pair_search_timing['marker_map_temporal'] - marker_children)
 
         # Pattern-guided expansion is intentionally bounded: first evaluate the
         # existing five probes.  Only if no selected-path core pair has basic
         # depth geometry do we use camera-centre trends to propose ArUco-only
         # endpoint probes.  These frames are merged into start/end core lists,
         # so they are genuine frame-pair candidates, not temporal-only neighbours.
+        _phase_start = time.perf_counter()
         if pattern_guided_enabled and pg_cfg.get('adaptive_extra_probes', True):
+            _detail_start = time.perf_counter()
             core_geometry_ok = False
             core_geometry_best = None
             for idx_s in sampled_start:
@@ -4279,6 +5045,8 @@ def analyze_video_frames(
                     'nominal_depth_mm': core_geometry_best[5],
                     **core_geometry_best[3],
                 }
+            add_pair_detail(
+                'pattern_core_geometry', time.perf_counter() - _detail_start)
             elapsed = time.perf_counter() - analysis_wall_start
             cap_left = max(0, int(pg_cfg['max_total_aruco_probes']) - len(set(sampled_start + sampled_end)))
             extra_limit = min(int(pg_cfg['max_extra_probes']), cap_left)
@@ -4290,6 +5058,7 @@ def analyze_video_frames(
             elif extra_limit <= 0:
                 pattern_guided_diagnostics['adaptive_status'] = 'PROBE_CAP_REACHED'
             else:
+                _detail_start = time.perf_counter()
                 proposal_cfg = dict(pg_cfg)
                 proposal_cfg['max_extra_probes'] = int(extra_limit)
                 proposal_depth = (
@@ -4347,6 +5116,9 @@ def analyze_video_frames(
                     pattern_guided_diagnostics['proposal'] = proposal
                 else:
                     pattern_guided_diagnostics['adaptive_status'] = proposal.get('status', 'NO_PROPOSAL')
+                add_pair_detail(
+                    'pattern_extra_probe_rebuild',
+                    time.perf_counter() - _detail_start)
             pattern_guided_diagnostics['total_aruco_probe_count'] = int(len(set(sampled_start + sampled_end)))
             temporal_diagnostics['pattern_guided'] = pattern_guided_diagnostics
             temporal_diagnostics['core_start_indices'] = [int(index) for index in sampled_start]
@@ -4364,9 +5136,17 @@ def analyze_video_frames(
                 and candidate.get('measurement_mode') in ('SINGLE', 'SINGLE_FALLBACK'))
         else:
             temporal_diagnostics['pattern_guided'] = pattern_guided_diagnostics
+        pattern_elapsed = time.perf_counter() - _phase_start
+        pair_search_timing['pattern_guided_expansion'] += pattern_elapsed
+        pattern_children = (
+            pair_search_detail_timing['pattern_core_geometry']
+            + pair_search_detail_timing['pattern_extra_probe_rebuild'])
+        pair_search_detail_timing['pattern_overhead'] = max(
+            0.0, pair_search_timing['pattern_guided_expansion'] - pattern_children)
 
         # Selected-endpoint local window: only after the provisional sparse/pattern-guided pair exists.
         # No local SIFT is performed; the fixed marker map is frozen throughout this stage.
+        _phase_start = time.perf_counter()
         if local_window_enabled:
             local_stage_start = time.perf_counter()
             local_stage_deadline = min(
@@ -4382,6 +5162,7 @@ def analyze_video_frames(
                     'measurement_confidence': candidate.get('measurement_confidence', 0.75),
                 }
 
+            _detail_start = time.perf_counter()
             provisional_pairs = []
             info_start_by_idx = {int(x['idx']): x for x in start_info}
             info_end_by_idx = {int(x['idx']): x for x in end_info}
@@ -4415,8 +5196,12 @@ def analyze_video_frames(
                         reproj, item_s, item_e, R_ab, t_ab, bsl,
                         branch_candidate_s=cand_s, branch_candidate_e=cand_e,
                         reprojection_stats=stats)
+                    if not metrics.get('angle_guided_ok', True):
+                        continue
                     provisional_pairs.append((float(score), idx_s, idx_e, cand_s, cand_e, metrics))
             provisional_pairs.sort(key=lambda x: x[0])
+            add_pair_detail(
+                'local_provisional_pair', time.perf_counter() - _detail_start)
             if not provisional_pairs:
                 local_window_diagnostics['status'] = 'FALLBACK_NO_PROVISIONAL_PAIR'
                 local_window_diagnostics['fallback_reason'] = 'NO_PROVISIONAL_PAIR'
@@ -4427,6 +5212,11 @@ def analyze_video_frames(
                 _, provisional_A, provisional_B, anchor_A, anchor_B, _ = provisional_pairs[0]
                 local_window_diagnostics['provisional_pair'] = {
                     'idx_A': int(provisional_A), 'idx_B': int(provisional_B)}
+                log_and_print(
+                    f"🔍 [Local window輸入] provisional A=F{provisional_A}, "
+                    f"B=F{provisional_B} | radius={int(lw_cfg['radius'])}, "
+                    f"stride={int(lw_cfg['stride'])}, "
+                    f"max_candidates/side={int(lw_cfg['max_endpoint_candidates'])}")
                 requested = {
                     'A': _local_window_indices(
                         provisional_A, start_range, len(frames), lw_cfg['radius'], lw_cfg['stride']),
@@ -4458,6 +5248,7 @@ def analyze_video_frames(
                     if center_idx not in allowed_indices:
                         allowed_indices.append(center_idx)
                     allowed_indices = sorted(set(allowed_indices))
+                    _detail_start = time.perf_counter()
                     if hasattr(frames, 'preload') and allowed_indices:
                         frames.preload(allowed_indices)
                     for idx in allowed_indices:
@@ -4467,7 +5258,11 @@ def analyze_video_frames(
                         {'idx': int(idx), 'corners': detected_cache[int(idx)]}
                         for idx in allowed_indices if detected_cache.get(int(idx))
                     ]
+                    add_pair_detail(
+                        'local_frame_decode_detect',
+                        time.perf_counter() - _detail_start)
                     # Build raw local hypotheses in the frozen marker map.
+                    _detail_start = time.perf_counter()
                     for item in info:
                         idx = int(item['idx'])
                         if idx not in frame_candidates:
@@ -4476,15 +5271,19 @@ def analyze_video_frames(
                                 marker_map_diagnostics=marker_map_diagnostics)
                             if cands:
                                 for cand in cands:
-                                    if pattern_guided_enabled:
+                                    if pattern_guided_enabled or angle_guided_enabled:
                                         cand['pattern_observability'] = _pattern_guided_marker_observability(
                                             cand, item['corners'], marker_map, marker_size_mm,
                                             marker_map_diagnostics=marker_map_diagnostics)
                                 frame_candidates[idx] = cands
+                    add_pair_detail(
+                        'local_pose_hypotheses',
+                        time.perf_counter() - _detail_start)
                     local_obs = [(int(item['idx']), frame_candidates[int(item['idx'])])
                                  for item in info if int(item['idx']) in frame_candidates]
                     local_obs.sort(key=lambda x: x[0])
                     # Adjacent KLT only. Cache is global to both windows so shared pairs are never repeated.
+                    _detail_start = time.perf_counter()
                     for (i0, _), (i1, _) in zip(local_obs, local_obs[1:]):
                         key = (int(i0), int(i1))
                         if key not in local_klt_cache:
@@ -4494,6 +5293,9 @@ def analyze_video_frames(
                                 local_klt_cache[key] = _local_klt_track_pair(
                                     get_local_raw_gray(i0), get_local_raw_gray(i1), K_L,
                                     marker_corners=detected_cache.get(i0), config=lw_cfg)
+                    add_pair_detail(
+                        'local_klt_tracking', time.perf_counter() - _detail_start)
+                    _detail_start = time.perf_counter()
                     sharpness = {int(f): get_frame_sharpness(int(f)) for f, _ in local_obs}
                     local_path_adjusted, local_path_diag = _local_window_path(
                         local_obs, center_idx, anchors[side], sharpness, local_klt_cache, lw_cfg)
@@ -4509,6 +5311,7 @@ def analyze_video_frames(
                     local_selected_paths[side] = local_path
                     # Score real frames, not filtered virtual states. Center offset is deliberately weak.
                     ranked_frames = []
+                    ranking_diagnostics = []
                     max_sharp = max(list(sharpness.values()) + [1.0])
                     for idx, cand in local_path.items():
                         reproj = float(cand.get('reprojection_rms_px', float('inf')))
@@ -4521,14 +5324,38 @@ def analyze_video_frames(
                                 min(float(v.get('fb_median_px') or 0.0) / max(float(lw_cfg['klt_fb_gate_px']), 1e-9), 2.0)
                                 + (1.0 - float(v.get('grid_coverage', 0.0)))
                                 for v in valid_klt]))
+                        emission_cost = float(cand.get('emission_cost', 0.0))
+                        temporal_component = 0.35 * emission_cost
+                        sharpness_component = float(lw_cfg['sharpness_weight']) * sharp_pen
+                        klt_component = 0.05 * klt_pen
+                        offset = int(idx - center_idx)
+                        offset_component = (
+                            float(lw_cfg['frame_offset_tie_weight']) * abs(offset))
                         score = (
-                            reproj
-                            + 0.35 * float(cand.get('emission_cost', 0.0))
-                            + float(lw_cfg['sharpness_weight']) * sharp_pen
-                            + 0.05 * klt_pen
-                            + float(lw_cfg['frame_offset_tie_weight']) * abs(idx - center_idx))
+                            reproj + temporal_component + sharpness_component
+                            + klt_component + offset_component)
                         ranked_frames.append((float(score), int(idx), cand))
+                        ranking_diagnostics.append({
+                            'idx': int(idx),
+                            'total_score': float(score),
+                            'reprojection_component': float(reproj),
+                            'temporal_emission_raw': float(emission_cost),
+                            'temporal_component': float(temporal_component),
+                            'sharpness_raw': float(sharpness.get(idx, 0.0)),
+                            'sharpness_penalty': float(sharp_pen),
+                            'sharpness_component': float(sharpness_component),
+                            'valid_klt_neighbor_count': int(len(valid_klt)),
+                            'klt_penalty': float(klt_pen),
+                            'klt_component': float(klt_component),
+                            'center_offset': int(offset),
+                            'offset_component': float(offset_component),
+                            'measurement_mode': cand.get('measurement_mode', 'UNKNOWN'),
+                            'branch_label': cand.get('label'),
+                        })
                     ranked_frames.sort(key=lambda x: x[0])
+                    ranking_diagnostics.sort(key=lambda entry: entry['total_score'])
+                    for rank, entry in enumerate(ranking_diagnostics, start=1):
+                        entry['rank'] = int(rank)
                     protected = []
                     if ranked_frames:
                         protected.append(ranked_frames[0][1])
@@ -4540,6 +5367,19 @@ def analyze_video_frames(
                         if len(protected) >= int(lw_cfg['max_endpoint_candidates']):
                             break
                     protected = protected[:int(lw_cfg['max_endpoint_candidates'])]
+                    for entry in ranking_diagnostics:
+                        idx = int(entry['idx'])
+                        entry['protected'] = bool(idx in protected)
+                        if idx == protected[0] and idx == center_idx:
+                            entry['protection_reason'] = 'LOCAL_BEST_AND_CENTER'
+                        elif idx == protected[0]:
+                            entry['protection_reason'] = 'LOCAL_BEST'
+                        elif idx == center_idx and idx in protected:
+                            entry['protection_reason'] = 'CENTER_SAFETY_KEEP'
+                        elif idx in protected:
+                            entry['protection_reason'] = 'RUNNER_UP'
+                        else:
+                            entry['protection_reason'] = 'NOT_PROTECTED'
                     # Optional tiny pose-prior blend; every accepted result must pass marker reprojection again.
                     smooth_diag = {}
                     for idx in list(protected):
@@ -4575,14 +5415,116 @@ def analyze_video_frames(
                         'chosen_offset': int(best_idx - center_idx),
                         'protected_indices': [int(x) for x in protected],
                         'valid_aruco_frames': [int(x['idx']) for x in info],
+                        'candidate_ranking': ranking_diagnostics,
                         'branch_sequence': local_path_diag.get('branch_sequence', []),
                         'klt': endpoint_klt, 'smooth': smooth_diag,
                     }
+                    add_pair_detail(
+                        'local_path_rerank', time.perf_counter() - _detail_start)
+                    _local_log_start = time.perf_counter()
+                    log_and_print(
+                        f"🔎 [Local {side}候選排名] center=F{center_idx} | "
+                        f"requested={requested[side]} | used={allowed_indices}")
+                    for entry in ranking_diagnostics:
+                        log_and_print(
+                            f"   #{entry['rank']} F{entry['idx']} "
+                            f"total={entry['total_score']:.4f} | "
+                            f"reproj={entry['reprojection_component']:.4f} + "
+                            f"temporal={entry['temporal_component']:.4f} "
+                            f"(raw {entry['temporal_emission_raw']:.4f}) + "
+                            f"sharp={entry['sharpness_component']:.4f} "
+                            f"(raw {entry['sharpness_raw']:.1f}, pen {entry['sharpness_penalty']:.3f}) + "
+                            f"KLT={entry['klt_component']:.4f} "
+                            f"(valid-neighbors {entry['valid_klt_neighbor_count']}) + "
+                            f"offset={entry['offset_component']:.4f} "
+                            f"(ΔF {entry['center_offset']:+d}) | "
+                            f"pose={entry['measurement_mode']}/{entry['branch_label']} | "
+                            f"keep={entry['protection_reason']}")
+                    if endpoint_klt:
+                        for pair_name, klt_info in endpoint_klt.items():
+                            fb_value = klt_info.get('fb_median_px')
+                            fb_text = (
+                                f"{float(fb_value):.3f}px"
+                                if fb_value is not None and np.isfinite(fb_value)
+                                else 'N/A')
+                            rotation_value = klt_info.get('rotation_deg')
+                            rotation_text = (
+                                f"{float(rotation_value):.3f}deg"
+                                if rotation_value is not None and np.isfinite(rotation_value)
+                                else 'N/A')
+                            essential_ratio = klt_info.get('essential_inlier_ratio')
+                            essential_text = (
+                                f"{float(essential_ratio):.3f}"
+                                if essential_ratio is not None and np.isfinite(essential_ratio)
+                                else 'N/A')
+                            homography_ratio = klt_info.get('homography_inlier_ratio')
+                            homography_text = (
+                                f"{float(homography_ratio):.3f}"
+                                if homography_ratio is not None and np.isfinite(homography_ratio)
+                                else 'N/A')
+                            log_and_print(
+                                f"   [KLT {pair_name}] available={bool(klt_info.get('available'))} | "
+                                f"reason={klt_info.get('reason')} | "
+                                f"tracks={int(klt_info.get('valid_count', 0))}/"
+                                f"{int(klt_info.get('initial_count', 0))} | "
+                                f"FB median={fb_text} | "
+                                f"grid={float(klt_info.get('grid_coverage', 0.0)):.2f} | "
+                                f"rotation={rotation_text} | "
+                                f"E-inlier={essential_text} | "
+                                f"recoverPose={int(klt_info.get('recoverpose_inlier_count', 0))}/"
+                                f"{int(klt_info.get('recoverpose_min_required', 0))} | "
+                                f"H-inlier={homography_text}")
+                    chosen_entry = next((
+                        entry for entry in ranking_diagnostics
+                        if int(entry['idx']) == int(best_idx)), None)
+                    center_entry = next((
+                        entry for entry in ranking_diagnostics
+                        if int(entry['idx']) == int(center_idx)), None)
+                    changed = bool(best_idx != center_idx)
+                    log_and_print(
+                        f"🎯 [Local {side}選擇] F{center_idx} → F{best_idx} | "
+                        f"changed={changed} | protected={protected}")
+                    if changed and chosen_entry is not None and center_entry is not None:
+                        component_labels = (
+                            ('reprojection_component', '重投影'),
+                            ('temporal_component', '時序emission'),
+                            ('sharpness_component', '清晰度'),
+                            ('klt_component', 'KLT'),
+                            ('offset_component', '中心距離'),
+                        )
+                        advantages = []
+                        for key, label in component_labels:
+                            improvement = float(center_entry[key] - chosen_entry[key])
+                            advantages.append((improvement, label))
+                        advantages.sort(reverse=True)
+                        positive = [
+                            f"{label}改善 {improvement:.4f}"
+                            for improvement, label in advantages if improvement > 1e-9]
+                        disadvantages = [
+                            f"{label}變差 {abs(improvement):.4f}"
+                            for improvement, label in advantages if improvement < -1e-9]
+                        log_and_print(
+                            f"   [換幀原因] total改善 "
+                            f"{center_entry['total_score'] - chosen_entry['total_score']:.4f} | "
+                            f"優勢: {', '.join(positive) if positive else '無單項正改善'} | "
+                            f"代價: {', '.join(disadvantages) if disadvantages else '無'}")
+                    elif changed and center_entry is None:
+                        log_and_print(
+                            f"   [換幀原因] 中心F{center_idx}沒有有效的ArUco/IPPE時序姿態，"
+                            f"因此改用有效候選F{best_idx}。")
+                    else:
+                        log_and_print(
+                            "   [不換幀原因] 中心Frame仍是Local綜合成本最低；"
+                            "鄰幀只保留為後續Pair/IPPE與SIFT備選。")
+                    add_pair_detail(
+                        'local_diagnostic_logging',
+                        time.perf_counter() - _local_log_start)
                 # Rebuild a standard DP model including local observations so exact joint min-marginal
                 # remains available whenever both endpoints lie in the same connected temporal segment.
                 local_nominal = sorted(set([
                     *temporal_start_indices, *temporal_end_indices, *local_all_indices]))
                 if local_all_indices:
+                    _detail_start = time.perf_counter()
                     dp_selected, dp_diag = _select_temporal_pose_path(
                         frame_candidates, nominal_probe_indices=local_nominal)
                     temporal_dp_model = dp_diag.get('_dp_model', temporal_dp_model)
@@ -4596,6 +5538,9 @@ def analyze_video_frames(
                             np.asarray(candidate['t'], np.float64).reshape(3, 1))
                         for frame_index, candidate in selected_temporal_path.items()
                     }
+                    add_pair_detail(
+                        'local_global_dp_rebuild',
+                        time.perf_counter() - _detail_start)
                 if chosen_items_by_side.get('A') and chosen_items_by_side.get('B'):
                     start_info = chosen_items_by_side['A']
                     end_info = chosen_items_by_side['B']
@@ -4612,6 +5557,16 @@ def analyze_video_frames(
         else:
             local_window_diagnostics['status'] = 'DISABLED'
         temporal_diagnostics['local_window'] = local_window_diagnostics
+        local_elapsed = time.perf_counter() - _phase_start
+        pair_search_timing['local_window_klt'] += local_elapsed
+        local_children = sum(pair_search_detail_timing[key] for key in (
+            'local_provisional_pair', 'local_frame_decode_detect',
+            'local_pose_hypotheses', 'local_klt_tracking',
+            'local_path_rerank', 'local_global_dp_rebuild',
+            'local_diagnostic_logging'))
+        pair_search_detail_timing['local_overhead'] = max(
+            0.0, pair_search_timing['local_window_klt'] - local_children)
+        _phase_start = time.perf_counter()
 
         def build_temporal_valid(core_items):
             valid = []
@@ -4652,8 +5607,11 @@ def analyze_video_frames(
                 })
             return valid
 
+        _detail_start = time.perf_counter()
         valid_start = build_temporal_valid(start_info)
         valid_end = build_temporal_valid(end_info)
+        add_pair_detail(
+            'candidate_branch_pack', time.perf_counter() - _detail_start)
 
         if not valid_start or not valid_end:
             log_and_print(f"⚠️ 第 {stage_idx + 1} 階段：無法計算有效的起點或終點 Joint Pose")
@@ -4661,6 +5619,7 @@ def analyze_video_frames(
 
         # 計算候選對的重投影誤差與 baseline (單標籤模式對每幀的 IPPE 雙解分支展開組合;
         # 注意單標籤時 reproj err 是自我擬合殘差、對分支無鑑別力，真正的裁決在特徵極線重排)
+        _detail_start = time.perf_counter()
         sharpness_indices = [item['idx'] for item in valid_start + valid_end]
         with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
             list(executor.map(get_frame_sharpness, sharpness_indices))
@@ -4692,6 +5651,8 @@ def analyze_video_frames(
                             err_pair, item_s, item_e, R_rel_cand, t_rel_cand, bsl,
                             branch_candidate_s=cand_s, branch_candidate_e=cand_e,
                             reprojection_stats=direct_stats)
+                        if not pair_metrics.get('angle_guided_ok', True):
+                            continue
                         pair_metrics['marker_direct_ok'] = bool(
                             direct_stats['rms_px'] <= MARKER_CANDIDATE_RMS_MAX_PX
                             and direct_stats['max_px'] <= MARKER_CANDIDATE_MAX_MAX_PX)
@@ -4713,11 +5674,14 @@ def analyze_video_frames(
                         pair_metrics['temporal_joint_min_marginal'] = None
                         pair_metrics['temporal_branch_prior_cost'] = 0.0
                         pairs.append((pair_score, err_pair, item_s, item_e, R_rel_cand, t_rel_cand, bsl, pair_metrics))
+        add_pair_detail(
+            'candidate_pair_branch_score', time.perf_counter() - _detail_start)
 
         if not pairs:
             log_and_print(f"⚠️ 第 {stage_idx + 1} 階段：無合格的匹配對 (Baseline gate: {runtime_pair_candidate_min_baseline:.2f}~{MAX_BASELINE_MM} mm)")
             continue
             
+        _detail_start = time.perf_counter()
         # 依誤差由小到大排序
         pairs.sort(key=lambda x: x[0])
 
@@ -4779,11 +5743,30 @@ def analyze_video_frames(
         topk_pair_keys = list(dict.fromkeys(
             (item[3]['idx'], item[2]['idx']) for item in topk))
         primary_pair_key = topk_pair_keys[0]
+        add_pair_detail(
+            'candidate_topk_budget', time.perf_counter() - _detail_start)
+        candidate_elapsed = time.perf_counter() - _phase_start
+        pair_search_timing['candidate_enumeration'] += candidate_elapsed
+        candidate_children = sum(pair_search_detail_timing[key] for key in (
+            'candidate_branch_pack', 'candidate_pair_branch_score',
+            'candidate_topk_budget'))
+        pair_search_detail_timing['candidate_overhead'] = max(
+            0.0, pair_search_timing['candidate_enumeration'] - candidate_children)
+        _phase_start = time.perf_counter()
         primary_feature_indices = list(dict.fromkeys(primary_pair_key))
+        _detail_start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
             list(executor.map(get_frame_features, primary_feature_indices))
+        add_pair_detail(
+            'sift_feature_extract', time.perf_counter() - _detail_start)
+        _detail_start = time.perf_counter()
         primary_matches = get_pair_matches(*primary_pair_key)
+        add_pair_detail(
+            'sift_descriptor_match', time.perf_counter() - _detail_start)
+        _detail_start = time.perf_counter()
         primary_geometry = estimate_feature_geometry(*primary_pair_key)
+        add_pair_detail(
+            'sift_essential_geometry', time.perf_counter() - _detail_start)
 
         use_second_pair = primary_geometry is None or not primary_geometry['quality_ok']
         primary_marker_epi = float('inf')
@@ -4824,16 +5807,28 @@ def analyze_video_frames(
             ]
         topk_feature_indices = list(dict.fromkeys(
             idx for key in topk_pair_keys for idx in key))
+        _detail_start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
             list(executor.map(get_frame_features, topk_feature_indices))
+        add_pair_detail(
+            'sift_feature_extract', time.perf_counter() - _detail_start)
+        _detail_start = time.perf_counter()
         with ThreadPoolExecutor(max_workers=ANALYSIS_WORKERS) as executor:
             list(executor.map(lambda key: get_pair_matches(*key), topk_pair_keys))
+        add_pair_detail(
+            'sift_descriptor_match', time.perf_counter() - _detail_start)
 
+        _rerank_start = time.perf_counter()
+        _rerank_essential_elapsed = 0.0
         reranked = []
         for cand_tuple in topk:
             pair_score, err, item_s, item_e, R_rel_c, t_rel_c, bsl, pair_metrics = cand_tuple
             matches_lr = get_pair_matches(item_e['idx'], item_s['idx'])
+            _detail_start = time.perf_counter()
             geometry = estimate_feature_geometry(item_e['idx'], item_s['idx'])
+            _essential_elapsed = time.perf_counter() - _detail_start
+            _rerank_essential_elapsed += _essential_elapsed
+            add_pair_detail('sift_essential_geometry', _essential_elapsed)
             corners_left_u = undistort_corners_dict(item_e['corners'])
             corners_right_u = undistort_corners_dict(item_s['corners'])
             marker_ok = bool(pair_metrics.get('marker_direct_ok', False))
@@ -5019,8 +6014,19 @@ def analyze_video_frames(
                 candidates_scores.append((pair_score, err, item_s, R_rel_c, t_rel_c, bsl, pair_metrics))
 
             selected_extras = candidates_scores[:5]
+            rerank_elapsed = time.perf_counter() - _rerank_start
+            add_pair_detail(
+                'sift_rerank_and_select',
+                max(0.0, rerank_elapsed - _rerank_essential_elapsed))
+            sift_elapsed = time.perf_counter() - _phase_start
+            pair_search_timing['sift_essential_rerank'] += sift_elapsed
+            sift_children = sum(pair_search_detail_timing[key] for key in (
+                'sift_feature_extract', 'sift_descriptor_match',
+                'sift_essential_geometry', 'sift_rerank_and_select'))
+            pair_search_detail_timing['sift_overhead'] = max(
+                0.0, pair_search_timing['sift_essential_rerank'] - sift_children)
             break
-            
+
     timer.stage("ArUco偵測+配對搜尋(含極線重排)")
     if best_start is None or best_end is None:
         log_and_print("❌ [漸進式匹配] 無法在該影片中計算出任何影像對，分析失敗。")
@@ -5216,8 +6222,15 @@ def analyze_video_frames(
 
     timer.stage("混合RT精修+次佳打包")
     log_and_print(f"✅ 挑選結果：")
-    log_and_print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
-    log_and_print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
+    if angle_guided_diagnostics.get('output_roles_swapped', False):
+        log_and_print(f"  - 右圖 (Frame A/15deg) 索引: {best_end['idx']}")
+        log_and_print(f"  - 左圖 (Frame B/35deg) 索引: {best_start['idx']}")
+        log_and_print(
+            f"  - 時序精修順序: F{best_start['idx']} → F{best_end['idx']} "
+            "(輸出 RT 將自動反轉)")
+    else:
+        log_and_print(f"  - 右圖 (Frame A) 索引: {best_start['idx']}")
+        log_and_print(f"  - 左圖 (Frame B) 索引: {best_end['idx']}")
     log_and_print(f"  - 計算 Baseline: {baseline:.2f} mm")
     
     # Return the complete temporally selected sparse trajectory, not only the two
@@ -5313,6 +6326,7 @@ def analyze_video_frames(
         'observation_count': (
             temporal_diagnostics.get('path', {}).get('observation_count', 0)),
     }
+    timer.stage("最終RT閉環+品質驗證")
 
     def _diagnostic_grid(points):
         grid = np.zeros((FEATURE_GRID_ROWS, FEATURE_GRID_COLS), dtype=np.int32)
@@ -5337,8 +6351,12 @@ def analyze_video_frames(
             raise RuntimeError("RT SIFT diagnostics disabled")
         kp_diag_left, _des_diag_left = get_frame_features(best_end['idx'])
         kp_diag_right, _des_diag_right = get_frame_features(best_start['idx'])
-        raw_keypoints_left = np.asarray([kp.pt for kp in kp_diag_left], dtype=np.float64).reshape(-1, 2)
-        raw_keypoints_right = np.asarray([kp.pt for kp in kp_diag_right], dtype=np.float64).reshape(-1, 2)
+        raw_keypoints_left = np.asarray(
+            [feature_point_fullres(kp) for kp in kp_diag_left],
+            dtype=np.float64).reshape(-1, 2)
+        raw_keypoints_right = np.asarray(
+            [feature_point_fullres(kp) for kp in kp_diag_right],
+            dtype=np.float64).reshape(-1, 2)
         if best_feature_matches is None:
             candidate_points_left = np.empty((0, 2), dtype=np.float64)
             candidate_points_right = np.empty((0, 2), dtype=np.float64)
@@ -5498,12 +6516,159 @@ def analyze_video_frames(
         if rt_sift_diagnostics_path is not None:
             log_and_print(f"⚠️ [RT SIFT診斷] 輸出失敗: {diag_error}")
         rt_sift_diagnostics_path = None
+    timer.stage("RT SIFT診斷檔輸出")
 
     local_window_diagnostics['final_selected_pair'] = {
         'idx_A': int(best_start['idx']), 'idx_B': int(best_end['idx']),
         'offset_A': None if local_window_diagnostics.get('provisional_pair') is None else int(best_start['idx']) - int(local_window_diagnostics['provisional_pair']['idx_A']),
         'offset_B': None if local_window_diagnostics.get('provisional_pair') is None else int(best_end['idx']) - int(local_window_diagnostics['provisional_pair']['idx_B']),
     }
+    provisional_pair = local_window_diagnostics.get('provisional_pair') or {}
+    endpoint_A_diag = local_window_diagnostics.get('endpoints', {}).get('A', {})
+    endpoint_B_diag = local_window_diagnostics.get('endpoints', {}).get('B', {})
+    local_best_pair = {
+        'idx_A': endpoint_A_diag.get('chosen_index'),
+        'idx_B': endpoint_B_diag.get('chosen_index'),
+    }
+    final_pair = local_window_diagnostics['final_selected_pair']
+    local_changed_A = (
+        provisional_pair.get('idx_A') is not None
+        and local_best_pair['idx_A'] is not None
+        and int(provisional_pair['idx_A']) != int(local_best_pair['idx_A']))
+    local_changed_B = (
+        provisional_pair.get('idx_B') is not None
+        and local_best_pair['idx_B'] is not None
+        and int(provisional_pair['idx_B']) != int(local_best_pair['idx_B']))
+    final_changed_from_local_A = (
+        local_best_pair['idx_A'] is not None
+        and int(local_best_pair['idx_A']) != int(final_pair['idx_A']))
+    final_changed_from_local_B = (
+        local_best_pair['idx_B'] is not None
+        and int(local_best_pair['idx_B']) != int(final_pair['idx_B']))
+
+    def _local_pair_candidate_summary(idx_A, idx_B):
+        if idx_A is None or idx_B is None:
+            return None
+        matching = [
+            candidate for candidate in pairs
+            if int(candidate[2]['idx']) == int(idx_A)
+            and int(candidate[3]['idx']) == int(idx_B)
+        ]
+        if not matching:
+            return None
+
+        def candidate_rank(candidate):
+            metrics = candidate[7]
+            combined = metrics.get('combined_score')
+            return (
+                0 if combined is not None and np.isfinite(combined) else 1,
+                float(combined) if combined is not None and np.isfinite(combined)
+                else float(candidate[0]))
+
+        candidate = min(matching, key=candidate_rank)
+        metrics = candidate[7]
+        return {
+            'idx_A': int(idx_A), 'idx_B': int(idx_B),
+            'aruco_pair_score': float(candidate[0]),
+            'combined_score': metrics.get('combined_score'),
+            'marker_rms_px': metrics.get('marker_bidir_rms_px'),
+            'feature_marker_epi_px': metrics.get('feat_epi_px'),
+            'feature_model_epi_px': metrics.get('feature_model_epi_px'),
+            'feature_quality_ok': bool(metrics.get('feature_quality_ok', False)),
+            'feature_inliers': int(metrics.get('feature_inliers', 0)),
+            'feature_matches': int(metrics.get('feature_matches', 0)),
+            'feature_grid_coverage': metrics.get('feature_grid_coverage'),
+            'feature_parallax_deg': metrics.get('feature_parallax_deg'),
+            'marker_parallax_deg': metrics.get('marker_parallax_deg'),
+            'predicted_depth_sigma_mm': metrics.get('predicted_depth_sigma_mm'),
+            'baseline_mm': float(candidate[6]),
+            'branch': metrics.get('branch'),
+            'sift_evaluated': bool(metrics.get('feature_model_epi_px') is not None),
+        }
+
+    local_pair_summary = _local_pair_candidate_summary(
+        local_best_pair['idx_A'], local_best_pair['idx_B'])
+    final_pair_summary = _local_pair_candidate_summary(
+        final_pair['idx_A'], final_pair['idx_B'])
+    local_window_diagnostics['selection_comparison'] = {
+        'provisional_pair': dict(provisional_pair),
+        'local_best_pair': dict(local_best_pair),
+        'final_pair': dict(final_pair),
+        'local_changed_A': bool(local_changed_A),
+        'local_changed_B': bool(local_changed_B),
+        'final_changed_from_local_A': bool(final_changed_from_local_A),
+        'final_changed_from_local_B': bool(final_changed_from_local_B),
+        'local_pair_metrics': local_pair_summary,
+        'final_pair_metrics': final_pair_summary,
+    }
+    if provisional_pair:
+        log_and_print(
+            f"🔁 [Local window前後比較] "
+            f"input=(A:F{provisional_pair.get('idx_A')}, B:F{provisional_pair.get('idx_B')}) | "
+            f"local_best=(A:F{local_best_pair['idx_A']}, B:F{local_best_pair['idx_B']}) | "
+            f"final=(A:F{final_pair['idx_A']}, B:F{final_pair['idx_B']})")
+        log_and_print(
+            f"   Local換幀: A={bool(local_changed_A)}, B={bool(local_changed_B)} | "
+            f"Local後續又換幀: A={bool(final_changed_from_local_A)}, "
+            f"B={bool(final_changed_from_local_B)} | "
+            f"final offset vs input=({final_pair['offset_A']:+d}, {final_pair['offset_B']:+d})")
+
+    def _format_pair_summary(summary):
+        if summary is None:
+            return '候選未進入Pair枚舉或已被硬門檻排除'
+
+        def value(name, digits=3, suffix=''):
+            raw = summary.get(name)
+            if raw is None or not np.isfinite(raw):
+                return 'N/A'
+            return f"{float(raw):.{digits}f}{suffix}"
+
+        return (
+            f"pair_score={value('aruco_pair_score')} | "
+            f"combined={value('combined_score')} | "
+            f"marker_rms={value('marker_rms_px', suffix='px')} | "
+            f"markerRT_epi={value('feature_marker_epi_px', suffix='px')} | "
+            f"E_epi={value('feature_model_epi_px', suffix='px')} | "
+            f"feature={summary['feature_inliers']}/{summary['feature_matches']} "
+            f"quality_ok={summary['feature_quality_ok']} | "
+            f"grid={value('feature_grid_coverage', 2)} | "
+            f"feature_parallax={value('feature_parallax_deg', suffix='deg')} | "
+            f"depth_sigma={value('predicted_depth_sigma_mm', suffix='mm')} | "
+            f"baseline={value('baseline_mm', 2, 'mm')} | branch={summary['branch']}")
+
+    if provisional_pair:
+        log_and_print(
+            f"   [Local最佳pair指標] {_format_pair_summary(local_pair_summary)}")
+        log_and_print(
+            f"   [最終勝出pair指標] {_format_pair_summary(final_pair_summary)}")
+        if final_changed_from_local_A or final_changed_from_local_B:
+            observable_reasons = []
+            if final_pair_summary is not None:
+                if final_pair_summary.get('feature_quality_ok'):
+                    observable_reasons.append('最終pair通過Feature幾何品質門檻')
+                if local_pair_summary is not None:
+                    comparisons = (
+                        ('combined_score', 'combined score'),
+                        ('marker_rms_px', 'Marker RMS'),
+                        ('feature_marker_epi_px', 'Marker-RT極線'),
+                        ('feature_model_epi_px', 'Essential極線'),
+                        ('predicted_depth_sigma_mm', '預估深度sigma'),
+                    )
+                    for key, label in comparisons:
+                        final_value = final_pair_summary.get(key)
+                        local_value = local_pair_summary.get(key)
+                        if (final_value is not None and local_value is not None
+                                and np.isfinite(final_value) and np.isfinite(local_value)
+                                and float(final_value) + 1e-9 < float(local_value)):
+                            observable_reasons.append(
+                                f"{label}較低({float(local_value):.3f}→{float(final_value):.3f})")
+            log_and_print(
+                f"   [後續換幀依據] "
+                f"{'; '.join(observable_reasons) if observable_reasons else '由後續Pair/IPPE、SIFT與聯合RT有效性排序勝出'}。"
+                "未進Top-K的pair不會為了Log額外計算SIFT，因此不虛構不可比較的Feature差值。")
+        else:
+            log_and_print(
+                "   [最終不再換幀] Local最佳pair在後續Pair/IPPE、SIFT與聯合RT檢查後仍勝出。")
     local_window_diagnostics['sift_pair_count'] = int(len(match_cache))
     local_window_diagnostics['elapsed_before_ui_prep_s'] = float(time.perf_counter() - analysis_wall_start)
 
@@ -5515,6 +6680,13 @@ def analyze_video_frames(
     }
     pattern_guided_diagnostics['elapsed_before_ui_prep_s'] = float(
         time.perf_counter() - analysis_wall_start)
+    angle_guided_diagnostics['final_selected_pair'] = {
+        'idx_A': int(best_start['idx']),
+        'idx_B': int(best_end['idx']),
+        'pair_measurement': (
+            best_pair_metrics.get('angle_guided') if best_pair_metrics else None),
+    }
+    timer.stage("診斷狀態封裝")
 
     if progress_callback:
         progress_callback(92, "階段 3/6：影像校正...")
@@ -5537,6 +6709,7 @@ def analyze_video_frames(
         
     imgA_bgr = local_process_view(frames[best_end['idx']])  # 結尾最優影格作為左圖 (B)
     imgB_bgr = local_process_view(frames[best_start['idx']])  # 開頭最優影格作為右圖 (A)
+    timer.stage("影像去畸變+輸出幀準備")
     
     if progress_callback:
         progress_callback(94, "階段 4/6：基準計算...")
@@ -5568,7 +6741,7 @@ def analyze_video_frames(
     if global_plane_n is None:
         log_and_print("⚠️ [參考平面] marker-map 平面建立失敗，退回 legacy PnP 平面")
         global_plane_n, global_plane_c = compute_global_plane(imgA_gray, K_L, marker_size_mm)
-    timer.stage("去畸變+全域平面擬合")
+    timer.stage("基準平面建立")
     
     if progress_callback:
         progress_callback(96, "階段 5/6：資料準備...")
@@ -5576,11 +6749,117 @@ def analyze_video_frames(
     # full-frame caches, so keep UI startup independent from an unused SIFT pass.
     kb, db = [], None
     timer.stage("深度匹配特徵延後計算")
+    analysis_total_elapsed_s = float(time.perf_counter() - analysis_wall_start)
+    log_and_print(
+        f"⏱️ [選幀/RT耗時] angle_scan="
+        f"{float(angle_guided_diagnostics.get('elapsed_s', 0.0)):.3f}s | "
+        f"total={analysis_total_elapsed_s:.3f}s | "
+        f"mode={'angle_guided' if angle_guided_enabled else 'original'} | "
+        f"status={angle_guided_diagnostics.get('status')}")
     timer.report(print_fn=log_and_print)
+    pair_stage_elapsed_s = next((
+        float(elapsed) for name, elapsed in reversed(timer.stages)
+        if name == "ArUco偵測+配對搜尋(含極線重排)"), 0.0)
+    accounted_pair_s = float(sum(pair_search_timing.values()))
+    pair_search_timing['other_overhead'] = max(
+        0.0, pair_stage_elapsed_s - accounted_pair_s)
+    # Keep both parent and child rows in the exact data-flow order.  This makes
+    # successive runs directly comparable without mentally reordering stages.
+    pair_timing_tree = (
+        ('endpoint_proposal', '1. 角度掃描/端點提案', (
+            ('endpoint_frame_decode_aruco', '1.1 影格解碼+ArUco偵測'),
+            ('endpoint_pose_direction_rank', '1.2 PnP角度+方向判斷+候選排序'),
+        )),
+        ('marker_map_temporal', '2. Marker map+時序姿態DP', (
+            ('marker_probe_decode_detect', '2.1 稀疏probe解碼+ArUco偵測', (
+                ('marker_probe_video_decode', '2.1.1 影片seek/grab+目標幀解碼'),
+                ('marker_probe_gray_convert', '2.1.2 BGR轉灰階'),
+                ('marker_probe_clahe', '2.1.3 CLAHE對比增強'),
+                ('marker_probe_aruco_detect', '2.1.4 ArUco候選偵測'),
+                ('marker_probe_corner_subpix', '2.1.5 cornerSubPix角點精修'),
+                ('marker_probe_cache_overhead', '2.1.6 Cache+資料整理'),
+            )),
+            ('marker_map_graph', '2.2 共視圖建圖+剛體Marker map'),
+            ('temporal_pose_hypotheses', '2.3 IPPE逐幀姿態假設'),
+            ('temporal_path_dp', '2.4 時序DP最佳路徑'),
+            ('marker_temporal_overhead', '2.5 資料整理+診斷輸出'),
+        )),
+        ('pattern_guided_expansion', '3. Pattern-guided候選擴充', (
+            ('pattern_core_geometry', '3.1 Core pair幾何可用性評估'),
+            ('pattern_extra_probe_rebuild', '3.2 額外probe+時序路徑重建'),
+            ('pattern_overhead', '3.3 狀態更新+控制開銷'),
+        )),
+        ('local_window_klt', '4. Local window+KLT重排', (
+            ('local_provisional_pair', '4.1 暫定端點pair評分'),
+            ('local_frame_decode_detect', '4.2 鄰幀解碼+ArUco偵測'),
+            ('local_pose_hypotheses', '4.3 鄰幀IPPE姿態假設'),
+            ('local_klt_tracking', '4.4 相鄰幀KLT追蹤'),
+            ('local_path_rerank', '4.5 Local DP+清晰度/KLT重排'),
+            ('local_global_dp_rebuild', '4.6 合併鄰幀後重建全域DP'),
+            ('local_diagnostic_logging', '4.7 詳細選幀原因Log輸出'),
+            ('local_overhead', '4.8 Window建立+資料整理'),
+        )),
+        ('candidate_enumeration', '5. Pair/IPPE分支枚舉評分', (
+            ('candidate_branch_pack', '5.1 端點時序分支封裝'),
+            ('candidate_pair_branch_score', '5.2 Pair×IPPE組合幾何評分'),
+            ('candidate_topk_budget', '5.3 排序+Top-K預算配置'),
+            ('candidate_overhead', '5.4 控制開銷'),
+        )),
+        ('sift_essential_rerank', '6. SIFT+Essential極線重排', (
+            ('sift_feature_extract', '6.1 SIFT特徵提取'),
+            ('sift_descriptor_match', '6.2 ratio+mutual+網格匹配'),
+            ('sift_essential_geometry', '6.3 Essential RANSAC+recoverPose'),
+            ('sift_rerank_and_select', '6.4 極線/視差評分+最終重排'),
+            ('sift_overhead', '6.5 候選控制+快取開銷'),
+        )),
+    )
+    log_and_print(
+        "      ↳ [ArUco+配對搜尋細分；依算法執行順序] "
+        f"parent={pair_stage_elapsed_s * 1000.0:.1f} ms")
+    for parent_key, parent_label, children in pair_timing_tree:
+        parent_elapsed = float(pair_search_timing.get(parent_key, 0.0))
+        parent_percentage = (
+            parent_elapsed / pair_stage_elapsed_s * 100.0
+            if pair_stage_elapsed_s > 1e-9 else 0.0)
+        log_and_print(
+            f"         {parent_label:<34s}{parent_elapsed * 1000.0:9.1f} ms "
+            f"({parent_percentage:5.1f}% of search)")
+        for child_entry in children:
+            child_key, child_label = child_entry[:2]
+            grandchildren = child_entry[2] if len(child_entry) >= 3 else ()
+            child_elapsed = float(pair_search_detail_timing.get(child_key, 0.0))
+            child_percentage = (
+                child_elapsed / parent_elapsed * 100.0
+                if parent_elapsed > 1e-9 else 0.0)
+            log_and_print(
+                f"             - {child_label:<31s}{child_elapsed * 1000.0:9.1f} ms "
+                f"({child_percentage:5.1f}% of stage)")
+            for grandchild_key, grandchild_label in grandchildren:
+                grandchild_elapsed = float(
+                    pair_search_detail_timing.get(grandchild_key, 0.0))
+                grandchild_percentage = (
+                    grandchild_elapsed / child_elapsed * 100.0
+                    if child_elapsed > 1e-9 else 0.0)
+                log_and_print(
+                    f"                 · {grandchild_label:<27s}"
+                    f"{grandchild_elapsed * 1000.0:9.1f} ms "
+                    f"({grandchild_percentage:5.1f}% of 2.1)")
+    other_elapsed = float(pair_search_timing.get('other_overhead', 0.0))
+    other_percentage = (
+        other_elapsed / pair_stage_elapsed_s * 100.0
+        if pair_stage_elapsed_s > 1e-9 else 0.0)
+    log_and_print(
+        f"         7. 其餘跨階段控制與日誌開銷{'':<16s}"
+        f"{other_elapsed * 1000.0:9.1f} ms "
+        f"({other_percentage:5.1f}% of search)")
     if progress_callback:
         progress_callback(100, "階段 6/6：完成")
-        
-    return {
+    analysis_stage_timing = [
+        {'stage': str(name), 'elapsed_s': float(elapsed)}
+        for name, elapsed in timer.stages
+    ]
+
+    result = {
         'frame_A': frames[best_start['idx']],
         'frame_B': frames[best_end['idx']],
         'idx_A': best_start['idx'],
@@ -5596,6 +6875,11 @@ def analyze_video_frames(
         'temporal_diagnostics': temporal_diagnostics,
         'pattern_guided_diagnostics': pattern_guided_diagnostics,
         'local_window_diagnostics': local_window_diagnostics,
+        'angle_guided_diagnostics': angle_guided_diagnostics,
+        'pair_search_timing_s': dict(pair_search_timing),
+        'pair_search_detail_timing_s': dict(pair_search_detail_timing),
+        'analysis_stage_timing_s': analysis_stage_timing,
+        'analysis_total_elapsed_s': analysis_total_elapsed_s,
         'extra_candidates': extra_candidates_info,
         'min_reproj_err': best_reproj_err,
         'marker_reproj_err': marker_reproj_err,
@@ -5614,6 +6898,11 @@ def analyze_video_frames(
             'frame_A': detection_roi_bounds_start,
             'frame_B': detection_roi_bounds_end,
         },
+        'feature_roi_bounds_by_role': {
+            'frame_A': feature_roi_bounds_start,
+            'frame_B': feature_roi_bounds_end,
+        },
+        'feature_image_scale': float(FEATURE_IMAGE_SCALE),
         'pair_geometry_roi_bounds_by_role': {
             'frame_A': geometry_roi_bounds_start,
             'frame_B': geometry_roi_bounds_end,
@@ -5623,3 +6912,10 @@ def analyze_video_frames(
         'best_kpB': kb,
         'best_desB': db
     }
+    if (angle_guided_diagnostics.get('status') == 'OK_ANGLE_GUIDED'
+            and angle_guided_diagnostics.get('output_roles_swapped', False)):
+        log_and_print(
+            "🔄 [角度掃描方向] 反向影片：保留早→晚時序精修，"
+            "輸出時交換左右圖並反轉 RT")
+        result = _angle_guided_normalize_reversed_output(result)
+    return result

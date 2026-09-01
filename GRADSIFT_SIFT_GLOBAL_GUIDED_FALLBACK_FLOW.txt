@@ -1,0 +1,225 @@
+Grad-SIFT（目前預設 Gray-SIFT/L2）Global KNN 與 Guided Fallback 完整流程
+=====================================================================
+
+更新日期：2026-09-01
+適用程式：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_GradSIFTDebug.py
+正式流程實作：Algorithm/stereo_matching.py / run_grad_sift_matching_flow()
+
+
+一、目前 Debug 版本的重要設定
+--------------------------------
+
+Descriptor 模式：Gray-SIFT / L2（use_hamming=False）
+
+候選點數上限：
+- 左圖 High：80
+- 左圖 Mid：80
+- 右圖 High：300
+- 右圖 Mid：300
+
+匹配門檻：
+- Gray-SIFT absolute distance：d1 < 450
+- Global Lowe ratio：d1/d2 < 0.78
+- Global mutual nearest-neighbor：必須左右互為最近鄰
+- 每一群最少接受點數：3
+- Guided 左點範圍：距點擊 A 嚴格小於 50 px
+- Guided 右候選搜尋半徑：距 local seed 小於等於 10 px
+- Epipolar tolerance：小於等於 3 px
+- Guided Lowe ratio：d1/d2 < 0.95
+- Offset median tolerance：偏離群組中位 offset 嚴格小於 8 px
+- Local affine RANSAC threshold：2.5 px
+- RT／plane seed 最大偏離：小於等於 75 px
+
+
+二、High 與 Mid 是兩條彼此獨立的流程
+--------------------------------------
+
+High 與 Mid 各自執行一次以下完整流程：
+
+1. 建立該群左右候選點。
+2. 計算 Gray-SIFT descriptor。
+3. 執行 Global KNN 三道門檻。
+4. 檢查該群 Global good 數是否少於 3。
+5. 必要時執行 Guided Fallback。
+6. 對 Global 與 Guided 合併後的點執行後段幾何過濾。
+7. 至少保留 3 點且通過 RANSAC，該群才會輸出映射結果。
+
+High 成功不代表 Mid 一定成功，反之亦然。
+
+
+三、Global KNN 的三道門檻
+-------------------------
+
+對每一個左候選點，在同群右候選點中找 Top-1（d1）與 Top-2（d2），
+並建立右到左的反向最近鄰表。每個點依序通過：
+
+Gate 1：Absolute distance
+- Gray-SIFT 要求 d1 < 450。
+- 若 d1 >= 450，記為 DIST，該點立即停止，不再檢查後面兩關。
+
+Gate 2：Lowe ratio
+- 有 Top-2 時要求 d1 < 0.78 * d2，也就是 d1/d2 < 0.78。
+- 若不成立，記為 RATIO，該點立即停止，不再檢查 mutual。
+- 若只有一個右鄰居，Global 程式不做 ratio 拒絕。
+
+Gate 3：Mutual nearest-neighbor
+- 左點的 Top-1 右點，其反向 Top-1 必須也是原左點。
+- 若不是互為最近鄰，記為 MUTUAL。
+
+三關都通過才加入 Global good。
+
+重要釐清：
+- fallback 不是要求「每個點同時被三個門檻攔住」。
+- 每個點會停在它遇到的第一個失敗門檻。
+- 真正觸發條件是該群所有點跑完 Global 三關後，len(good) < 3。
+- 因此 Global good 為 0、1 或 2 時會觸發；good >= 3 時完全不觸發。
+
+
+四、Guided Fallback 的流程
+---------------------------
+
+只有在該群 Global good < 3 時才執行，而且 High／Mid 分別判斷。
+
+對尚未成為 Global good 的左候選點逐一處理：
+
+1. 點擊距離限制
+   - 左候選 pL 距點擊 A 必須嚴格小於 50 px。
+
+2. 建立每個左點自己的 local seed
+   - local_seed = 點擊 A 的 RT／plane seed + (pL - A)
+
+3. Guided spatial restriction
+   - 只保留距 local_seed 小於等於 10 px 的同群右候選點。
+
+4. Guided epipolar restriction
+   - 若有 F，右候選還必須距 pL 的極線小於等於 3 px。
+
+5. 在縮小後的右候選子集合重新計算 descriptor 距離排序
+   - 重新取得 guided Top-1、Top-2、guided d1、guided d2。
+   - 這組 d1/d2 與 Global KNN 的 d1/d2 不是同一候選集合，不能混用。
+
+6. Guided absolute distance
+   - Gray-SIFT 同樣要求 guided d1 < 450。
+
+7. Guided Lowe ratio
+   - 有兩個以上候選時，要求 guided d1/d2 < 0.95。
+   - 若子集合只剩一個候選，second distance 視為無限大，不執行 ratio 拒絕；
+     只要 absolute distance 通過，即可成為 guided candidate pass。
+
+8. Guided 不執行 mutual nearest-neighbor
+   - 這是 Global 與 Guided 的重要差異。
+
+9. 右點唯一性／搶點處理
+   - 多個左點指向同一右點時，只保留 descriptor distance 較小者。
+   - Global good 也先放在相同的 right-index 表中；guided 點若搶同一右點且
+     distance 更小，可能取代原本佔用該右點的 match。
+
+Guided 完成後，Global good 與 Guided 保留點合併成新的 good 集合。
+注意：Guided candidate pass 還不等於最終支撐點，後面仍有多道過濾。
+
+
+五、Fallback 後仍需通過的共同後段過濾
+----------------------------------------
+
+Global 與 Guided 合併後的每一個 good match 都要再通過：
+
+1. 左點距點擊 A < 50 px
+2. Epipolar distance <= 3 px（若有 F）
+3. 右點距該左點的 local seed <= 75 px
+4. Optional color histogram（目前預設關閉）
+5. Offset median consistency
+   - 若暫存點數 >= 3，計算所有 disparity offset（pR-pL）的中位數。
+   - 每點偏離中位 offset 必須嚴格小於 8 px。
+6. 經上述處理後，點數仍必須 >= 3；否則整個 High 或 Mid 群組失敗。
+7. Local affine RANSAC
+   - estimateAffinePartial2D，threshold=2.5 px。
+   - RANSAC inlier 必須 >= 3；若只剩 0～2，整個群組失敗。
+8. 建立該群映射點
+   - 優先採 affine 映射；異常時退回距離加權 disparity。
+9. Final RT bound
+   - 該群映射點距點擊 A 的 RT／plane seed必須 <= 75 px。
+
+全部通過後，該群才會印出：
+[Grad-SIFT HIGH/MID] accepted: inliers=..., guided_add=..., spread=..., score=...
+
+
+六、High／Mid 群組結果的最後融合
+----------------------------------
+
+- High 成功、Mid 失敗：使用 High 映射結果（+HighGrad）。
+- Mid 成功、High 失敗：使用 Mid 映射結果（+MidGrad）。
+- High、Mid 都成功：依各群 score 加權融合（+MidGradInterp）。
+- High、Mid 都失敗：Grad-SIFT 不產生匹配點。
+- 融合後的最終點還會再做一次相對 RT／plane seed 的 75 px bound。
+
+
+七、簡化文字流程圖
+--------------------
+
+反光遮罩排除後選取 High／Mid 候選
+              |
+              v
+       計算 Gray-SIFT descriptor
+              |
+              v
+    Global Gate 1：d1 < 450？
+              |
+              v
+ Global Gate 2：d1/d2 < 0.78？
+              |
+              v
+ Global Gate 3：mutual nearest？
+              |
+              v
+       統計該群 Global good
+              |
+        +-----+-----+
+        |           |
+     good >= 3   good < 3
+        |           |
+        |           v
+        |     Guided Fallback
+        |     - pL 距 A < 50
+        |     - seed 半徑 <= 10
+        |     - epi <= 3
+        |     - d1 < 450
+        |     - ratio < 0.95
+        |     - 不做 mutual
+        |     - 同一右點保留較小 distance
+        |           |
+        +-----+-----+
+              |
+              v
+   Global + Guided good 共同後處理
+   epi -> seed -> optional color
+   -> offset median -> 至少 3 點
+   -> affine RANSAC 至少 3 inliers
+   -> final RT bound
+              |
+              v
+       該 High／Mid 群接受或拒絕
+              |
+              v
+       High／Mid score 加權融合
+
+
+八、Descriptor Audit log 的讀法
+--------------------------------
+
+- DIST／RATIO／MUTUAL：該點在 Global 階段停止的位置。
+- KNN_PASS：通過 Global 三關，但不保證能通過後段幾何與 RANSAC。
+- GUIDED_RESCUE：Global 未通過，但 guided 救回，而且最後確實成為內插支撐點。
+- GUIDED candidate_pass：只代表 guided 子集合的 absolute／ratio 通過；
+  仍可能在右點搶點、epi、seed、offset median 或 RANSAC 被淘汰。
+- support=NOT_USED：沒有成為最終內插支撐點。
+
+
+九、原始碼核對位置
+--------------------
+
+- Global 三關與 fallback 觸發：Algorithm/stereo_matching.py 約 973～1004 行
+- Guided spatial／epi／distance／ratio：同檔約 1005～1049 行
+- 後段 epi／seed／color／offset：同檔約 1051～1088 行
+- Affine RANSAC 與 final RT bound：同檔約 1090～1130 行
+- High／Mid 融合：同檔約 1132 行之後
+

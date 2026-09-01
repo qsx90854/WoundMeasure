@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 import depth_measure_multi_aruco_sbs_camera_v7_demo_zebra as zebra
+import zebra_0825v2 as zebra_v2
 
 
 class _FixedCornerDetector:
@@ -16,6 +17,30 @@ class _FixedCornerDetector:
 
 
 class LivePatternDistanceTests(unittest.TestCase):
+    def test_rt_sift_roi_preview_obeys_each_zebra_switch(self):
+        for module in (zebra, zebra_v2):
+            old_enabled = module.ENABLE_RT_SIFT_ROI
+            old_ratio = module.RT_SIFT_ROI_RATIO
+            old_scale = module.RT_SIFT_IMAGE_SCALE
+            try:
+                module.ENABLE_RT_SIFT_ROI = True
+                module.RT_SIFT_ROI_RATIO = (0.10, 0.10, 0.80, 0.80)
+                module.RT_SIFT_IMAGE_SCALE = 0.5
+                preview = np.zeros((100, 200, 3), dtype=np.uint8)
+                module.draw_rt_sift_roi_preview(preview)
+                self.assertTrue(np.any(preview), module.__name__)
+                self.assertTrue(
+                    np.any(preview[8:13, 18:23]), module.__name__)
+
+                module.ENABLE_RT_SIFT_ROI = False
+                disabled_preview = np.zeros((100, 200, 3), dtype=np.uint8)
+                module.draw_rt_sift_roi_preview(disabled_preview)
+                self.assertFalse(np.any(disabled_preview), module.__name__)
+            finally:
+                module.ENABLE_RT_SIFT_ROI = old_enabled
+                module.RT_SIFT_ROI_RATIO = old_ratio
+                module.RT_SIFT_IMAGE_SCALE = old_scale
+
     def test_tilted_marker_recovers_camera_center_distance(self):
         K = np.array([
             [1570.0, 0.0, 960.0],

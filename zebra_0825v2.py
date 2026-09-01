@@ -37,7 +37,7 @@ from Algorithm.specular_detection import (
     overlay_specular_mask_rgb,
 )
 from Algorithm import stereo_matching as stereo_algo
-from Algorithm.stereo_matching import (
+from Algorithm.stereo_matching_0825v2 import (
     get_patch, score_patch_match, score_zncc_patch_match,
     score_warped_patch_match, score_warped_zncc_patch_match,
     get_local_homography_warped_patch, project_point_to_line,
@@ -46,7 +46,7 @@ from Algorithm.stereo_matching import (
     enforce_point_on_epipolar, pyramid_ecc_refinement, find_precise_match,
     compute_rgb_sift_descriptors, compute_opponent_sift_descriptors,
     check_color_histogram_similarity, run_improved_matching_flow,
-    run_grad_sift_matching_flow,
+    run_grad_sift_matching_flow, run_localized_plane_sweep_matching_flow,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -84,9 +84,9 @@ ANGLE_GUIDED_CANDIDATES_PER_SIDE = 3
 ANGLE_GUIDED_PAIR_SCORE_WEIGHT = 0.35
 # RT SIFT-only ROI. ArUco detection and pair-geometry scoring remain full-frame.
 # Ratio format: (x, y, width, height), normalized to the original camera frame.
-ENABLE_RT_SIFT_ROI = True
-RT_SIFT_ROI_RATIO = (0.10, 0.10, 0.80, 0.80)
-RT_SIFT_IMAGE_SCALE = 0.5
+ENABLE_RT_SIFT_ROI = False
+RT_SIFT_ROI_RATIO = (0.25, 0.25, 0.5, 0.5)
+RT_SIFT_IMAGE_SCALE = 1
 POSE_SELECT_MODE      = "reproj_min"               # "reproj_min" (最小重投影誤差), "average" (平均姿態去噪) 或 "best_pair"
 MEASURE_MODE          = "dual_direct"              # "dual_direct", "multi_dedrift", "multi_pure"
 FLOW_FB_THRESHOLD     = 0.8                        # 雙向光流一致性誤差閾值 (pixels)
@@ -131,6 +131,26 @@ EPIPOLAR_SEARCH_ZNCC_OK = 0.15                      # Epi-band search: normal ZN
 EPIPOLAR_SEARCH_DESC_STRONG = 0.50                  # Epi-band search: descriptor can rescue a weak ZNCC
 EPIPOLAR_SEARCH_ZNCC_STRONG = 0.35                  # Epi-band search: ZNCC can rescue a weak descriptor
 EPIPOLAR_SEARCH_WEAK_FLOOR = 0.05                   # Epi-band search: weak score floor when the other score is strong
+
+# ----------------- Localized Plane-Sweep 單點匹配設定 -----------------
+ENABLE_LOCAL_PLANE_SWEEP_DEFAULT = True            # 新主匹配器：Depth + local normal sweep + geometry warp
+LOCAL_PS_DEPTH_RANGE_MM = 45.0                      # 以 marker plane ray-intersection 深度為中心的搜尋半徑
+LOCAL_PS_COARSE_SAMPLES = 31                        # inverse-depth coarse samples
+LOCAL_PS_FINE_SAMPLES = 13                          # coarse winner 周圍的 fine samples
+LOCAL_PS_PATCH_SIZE = 31                            # geometry-warped photometric patch
+LOCAL_PS_NORMAL_TILT_DEG = 12.0                     # coarse local-plane normal tilt hypotheses
+LOCAL_PS_FINE_NORMAL_TILT_DEG = 3.0                 # fine normal refinement
+LOCAL_PS_MIN_SCORE = 0.44                           # 低於此值才視為 catastrophic，退回 Grad-SIFT
+LOCAL_PS_MIN_VALID_RATIO = 0.50                     # 有效 warp pixel 比例
+LOCAL_PS_MIN_SUPPORT_RATIO = 0.35                   # robust photometric support 最低比例
+LOCAL_PS_MIN_UNIQUENESS = 0.035                     # 用於 confidence，不直接丟 frame
+LOCAL_PS_FB_RANGE_MM = 7.0                          # Right->Left reverse local search depth range
+LOCAL_PS_FB_SAMPLES = 11                            # reverse consistency samples
+LOCAL_PS_FB_SIGMA_PX = 1.5                          # FB error -> confidence 的尺度
+LOCAL_PS_MIN_DEPTH_MM = 50.0
+LOCAL_PS_MAX_DEPTH_MM = float(MAX_DEPTH_MM)
+LOCAL_PS_OCCLUSION_TRIM_FRACTION = 0.20             # 局部遮擋 robust trim；不等於丟整張圖
+LOCAL_PS_ENABLE_FB = True
 
 # ----------------- 交互特徵點匹配搜索設定 -----------------
 LEFT_PATCH_SEARCH_RADIUS      = 30#18                         # 左圖點選候選點周圍的搜索半徑 (pixels)
@@ -504,7 +524,12 @@ def fuse_candidate_results(res_list, best_idx=None):
         for r in items:
             b = float(r.get('baseline') or 0.0)
             z = max(float(r['p3d'][2]), 1e-6)
-            ws.append((b / (z * z)) ** 2 if b > 0 else 0.0)
+            geom_w = (b / (z * z)) ** 2 if b > 0 else 0.0
+            # Local visibility/confidence affects only this point's fusion weight;
+            # it never changes or discards the previously selected candidate frame.
+            q = float(r.get('match_confidence', r.get('confidence_score', 1.0)) or 0.0)
+            q = float(np.clip(q, 0.05, 1.0))
+            ws.append(geom_w * q * q)
         ws = np.array(ws, dtype=np.float64)
         if not np.all(np.isfinite(ws)) or ws.sum() <= 0:
             ws = np.ones(len(items), dtype=np.float64)
@@ -1875,6 +1900,15 @@ def main():
         f"{_angle_pair.get('incidence_B_deg', 'N/A')}deg | "
         f"angle_scan={float(_angle_diag.get('elapsed_s', 0.0)):.3f}s | "
         f"RT_total={float(video_data.get('analysis_total_elapsed_s', 0.0)):.3f}s")
+    final_rvec, _ = cv2.Rodrigues(
+        np.asarray(video_data['R_rel'], dtype=np.float64).reshape(3, 3))
+    final_rvec = final_rvec.reshape(3)
+    log_and_print(
+        "🧭 [Final relative rotation] Rodrigues rvec (3x1, rad): "
+        f"X={final_rvec[0]:+.8f}, "
+        f"Y={final_rvec[1]:+.8f}, "
+        f"Z={final_rvec[2]:+.8f}"
+    )
     startup_timer.stage("影片分析(ArUco配對+RT解算)")
 
     use_wound_adaptive_spatial_specular = True
@@ -2397,7 +2431,7 @@ def main():
     c4 = Button(ax_c4, "[X] 啟用 ECC 精修", **btn_opt_style)
     c5 = Button(ax_c5, "[ ] 手動匹配模式", **btn_opt_style)
     c6 = Button(ax_c6, "[X] 啟用 CLAHE 增強" if ENABLE_CLAHE_DEFAULT else "[ ] 啟用 CLAHE 增強", **btn_opt_style)
-    c7 = Button(ax_c7, "[X] 改良匹配流程" if ENABLE_IMPROVED_MATCHING_DEFAULT else "[ ] 改良匹配流程", **btn_opt_style)
+    c7 = Button(ax_c7, "[X] Local Plane Sweep" if ENABLE_LOCAL_PLANE_SWEEP_DEFAULT else "[ ] Local Plane Sweep", **btn_opt_style)
     c8 = Button(ax_c8, "[X] 顯示匹配分數" if SHOW_SCORE_DEFAULT else "[ ] 顯示匹配分數", **btn_opt_style)
     c9 = Button(ax_c9, "[ ] 色彩直方圖約束", **btn_opt_style)
     c10 = Button(ax_c10, "[ ] 啟用 RGB-SIFT", **btn_opt_style)
@@ -2412,7 +2446,8 @@ def main():
 
     view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True, 'ecc': True, 'manual': False,
                   'use_hamming': True, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
-                  'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
+                  'use_improved_matching': False,  # retained for legacy fallback only
+                  'local_plane_sweep': ENABLE_LOCAL_PLANE_SWEEP_DEFAULT,
                   'show_score': SHOW_SCORE_DEFAULT,
                   'use_color_hist': False,
                   'use_rgb_sift': False,
@@ -2491,7 +2526,7 @@ def main():
             
             if key in ('precise', 'grad_sift', 'enforce_epi', 'ecc',
                        'enable_clahe', 'use_improved_matching', 'use_color_hist',
-                       'filter_specular', 'filter_specular_hsv_mser', 'epipolar_band_search',
+                       'filter_specular', 'filter_specular_hsv_mser', 'epipolar_band_search', 'local_plane_sweep',
                        'reject_specular_candidates'):
                 mark_wound_size_dirty(key)
                 if last_click:
@@ -2504,7 +2539,7 @@ def main():
     c4.on_clicked(make_on_opt(c4, 'ecc', "啟用 ECC 精修"))
     c5.on_clicked(make_on_opt(c5, 'manual', "手動匹配模式"))
     c6.on_clicked(make_on_opt(c6, 'enable_clahe', "啟用 CLAHE 增強"))
-    c7.on_clicked(make_on_opt(c7, 'use_improved_matching', "改良匹配流程"))
+    c7.on_clicked(make_on_opt(c7, 'local_plane_sweep', "Local Plane Sweep"))
     c8.on_clicked(make_on_opt(c8, 'show_score', "顯示匹配分數"))
     c9.on_clicked(make_on_opt(c9, 'use_color_hist', "色彩直方圖約束"))
     c14.on_clicked(make_on_opt(c14, 'epipolar_band_search', "Epi-band Search"))
@@ -2613,6 +2648,7 @@ def main():
                         cand['spec_spatial_mask'] = right_spec_spatial_mask
                         cand['spec_temporal_mask'] = right_spec_temporal_mask
         m_pt, method, neighbors = None, "", []
+        match_meta = {}
         rt_bound_reject_reason = None
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
         trajectory_res = None
@@ -2646,39 +2682,48 @@ def main():
                         u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
                         m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
                         break
+                # V2 primary matcher: localized plane-sweep / PatchMatch-style single-point search.
+                # It uses marker plane only to center the depth range; the actual hypothesis may move
+                # away from that plane and carries its own local surface normal.
+                if m_pt is None and snap_view_state.get('local_plane_sweep', True):
+                    _t_blk = time.perf_counter()
+                    ps = run_localized_plane_sweep_matching_flow(
+                        snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                        left_spec_mask=left_spec_mask if snap_view_state.get('reject_specular_candidates', False) else None,
+                        right_spec_mask=right_spec_mask if snap_view_state.get('reject_specular_candidates', False) else None,
+                        enable_fb=LOCAL_PS_ENABLE_FB,
+                        left_cache=left_cache
+                    )
+                    match_meta = dict(ps)
+                    m_pt = ps.get('m_pt')
+                    if m_pt is not None:
+                        method = ps.get('method', 'LocalPlaneSweep')
+                    elif ps.get('reject_reason'):
+                        rt_bound_reject_reason = ps.get('reject_reason')
+                    t_prof['LocalPlaneSweep匹配'] = time.perf_counter() - _t_blk
+
+                # Existing Grad-SIFT remains a fallback for catastrophic plane-sweep failure, not the
+                # primary estimator.  This preserves the old route for difficult/legacy scenes.
                 if m_pt is None and snap_view_state['grad_sift']:
                     _t_blk = time.perf_counter()
-                    if snap_view_state.get('use_improved_matching', False):
-                        m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
-                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
-                            snap_view_state.get('use_hamming', False), orb, sift,
-                            snap_view_state.get('use_color_hist', False),
-                            snap_view_state.get('use_rgb_sift', False),
-                            snap_view_state.get('use_opponent_sift', False),
-                            left_spec_mask,
-                            right_spec_mask,
-                            snap_view_state.get('reject_specular_candidates', False),
-                            left_bgr=locked_L
-                        )
-                    else:
-                        gs = run_grad_sift_matching_flow(
-                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
-                            snap_view_state, orb, sift,
-                            locked_L, locked_R,
-                            left_spec_mask, right_spec_mask,
-                            is_best_cand=(cand['idx'] == current_cand['idx']),
-                            left_cache=left_cache
-                        )
-                        m_pt = gs['m_pt']
-                        if gs['method']:
-                            method = gs['method']
-                        g_ptsA, g_ptsB, g_groups = gs['g_ptsA'], gs['g_ptsB'], gs['g_groups']
-                        g_refA, g_refB = gs['g_refA'], gs['g_refB']
-                        g_refA_groups, g_refB_groups = gs['g_refA_groups'], gs['g_refB_groups']
-                        g_kptsB, g_rect = gs['g_kptsB'], gs['g_rect']
-                        if gs['reject_reason']:
-                            rt_bound_reject_reason = gs['reject_reason']
-                    t_prof['Grad/Improved匹配'] = time.perf_counter() - _t_blk
+                    gs = run_grad_sift_matching_flow(
+                        snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                        snap_view_state, orb, sift,
+                        locked_L, locked_R,
+                        left_spec_mask, right_spec_mask,
+                        is_best_cand=(cand['idx'] == current_cand['idx']),
+                        left_cache=left_cache
+                    )
+                    m_pt = gs['m_pt']
+                    if gs['method']:
+                        method = gs['method']
+                    g_ptsA, g_ptsB, g_groups = gs['g_ptsA'], gs['g_ptsB'], gs['g_groups']
+                    g_refA, g_refB = gs['g_refA'], gs['g_refB']
+                    g_refA_groups, g_refB_groups = gs['g_refA_groups'], gs['g_refB_groups']
+                    g_kptsB, g_rect = gs['g_kptsB'], gs['g_rect']
+                    if gs['reject_reason']:
+                        rt_bound_reject_reason = gs['reject_reason']
+                    t_prof['Grad-SIFT fallback'] = time.perf_counter() - _t_blk
                 if (m_pt is None and snap_view_state['precise']):
                     _t_blk = time.perf_counter()
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
@@ -2689,7 +2734,7 @@ def main():
             
             m_pt_raw = m_pt.copy() if m_pt is not None else None
 
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None
+            if (m_pt is not None and method != "ArUco" and not method.startswith('LocalPlaneSweep') and manual_match_pt is None
                     and snap_view_state.get('epipolar_band_search', False)):
                 _t_blk = time.perf_counter()
                 rt_seed_for_bound, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
@@ -2725,14 +2770,14 @@ def main():
                                       m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
                     method += "+極線對齊"
 
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+            if (m_pt is not None and method != "ArUco" and not method.startswith('LocalPlaneSweep') and manual_match_pt is None):
                 rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
                 rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
                 if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
                     print(f"❌ [RT邊界] 匹配點偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
                     rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
                     m_pt = None
-            if (m_pt is not None and snap_view_state['ecc']):
+            if (m_pt is not None and not method.startswith('LocalPlaneSweep') and snap_view_state['ecc']):
                 _t_blk = time.perf_counter()
                 if snap_view_state.get('use_improved_matching', False):
                     m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 45, 91)
@@ -2763,7 +2808,7 @@ def main():
         d_val, p3d_val, p3d_w_val, fail_reason = None, None, None, ""
         p3d = None
         
-        if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+        if (m_pt is not None and method != "ArUco" and not method.startswith('LocalPlaneSweep') and manual_match_pt is None):
             rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
             rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
             if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
@@ -2905,7 +2950,7 @@ def main():
         reproj_err = None
         if p3d_val is not None and m_pt is not None:
             rvec_rel, _ = cv2.Rodrigues(cand['R_rel'])
-            pt_reproj_B, _ = cv2.projectPoints(p3d_val.reshape(1, 1, 3), rvec_rel, cand['t_rel'], KL, np.zeros(5))
+            pt_reproj_B, _ = cv2.projectPoints(p3d_val.reshape(1, 1, 3), rvec_rel, cand['t_rel'], cand['K_R'], np.zeros(5))
             pt_reproj_B = pt_reproj_B.reshape(2)
             reproj_err = float(np.linalg.norm(m_pt - pt_reproj_B))
 
@@ -2929,11 +2974,23 @@ def main():
                 res_zncc = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
                 zncc_score = float(res_zncc[0, 0])
             masked_score = score_patch_match(snap_imgA_gray, cand['gray'], (u, v), m_pt, patch_size=31)
-            # 3. 綜合信心度分數 (幾何與外觀聯立)
-            sigma = 1.5
-            geom_factor = np.exp(-(d_epi**2) / (2.0 * sigma**2)) if d_epi != 999.0 else 0.0
-            confidence_score = float(max(0.0, zncc_score) * max(0.0, masked_score) * geom_factor)
-            print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | MaskedScore: {masked_score:.3f} | 信心度: {confidence_score:.3f}")
+            # 3. 綜合信心度。LocalPlaneSweep 使用 geometry-warped robust matcher 自己的
+            # visibility/uniqueness/FB confidence；舊 matcher 才沿用 raw fixed-patch ZNCC 指標。
+            if method.startswith('LocalPlaneSweep') and match_meta:
+                confidence_score = float(match_meta.get('confidence', 0.0))
+                print(
+                    f"📊 [PlaneSweep品質] score={match_meta.get('score', 0.0):.3f} | "
+                    f"unique={match_meta.get('uniqueness', 0.0):.3f} | "
+                    f"support={match_meta.get('support_ratio', 0.0):.2f} | "
+                    f"occ={match_meta.get('occlusion_ratio', 0.0):.2f} | "
+                    f"center={'Y' if match_meta.get('center_visible', False) else 'N'} | "
+                    f"FB={match_meta.get('fb_error', float('nan')):.2f}px | conf={confidence_score:.3f}"
+                )
+            else:
+                sigma = 1.5
+                geom_factor = np.exp(-(d_epi**2) / (2.0 * sigma**2)) if d_epi != 999.0 else 0.0
+                confidence_score = float(max(0.0, zncc_score) * max(0.0, masked_score) * geom_factor)
+                print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | MaskedScore: {masked_score:.3f} | 信心度: {confidence_score:.3f}")
 
         t_prof['品質評估'] = time.perf_counter() - _t_blk
         _detail = " | ".join(f"{k} {v * 1000.0:.0f}ms" for k, v in t_prof.items())
@@ -2944,7 +3001,17 @@ def main():
                 'g_refA_groups': g_refA_groups, 'g_refB_groups': g_refB_groups,
                 'g_kptsB': g_kptsB, 'g_rect': g_rect,
                 'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
-                'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score}
+                'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score,
+                'match_confidence': confidence_score, 'match_meta': match_meta,
+                'ps_depth': match_meta.get('depth') if match_meta else None,
+                'ps_normal': match_meta.get('normal') if match_meta else None,
+                'ps_score': match_meta.get('score') if match_meta else None,
+                'ps_uniqueness': match_meta.get('uniqueness') if match_meta else None,
+                'ps_valid_ratio': match_meta.get('valid_ratio') if match_meta else None,
+                'ps_support_ratio': match_meta.get('support_ratio') if match_meta else None,
+                'ps_occlusion_ratio': match_meta.get('occlusion_ratio') if match_meta else None,
+                'ps_center_visible': match_meta.get('center_visible') if match_meta else None,
+                'ps_fb_error': match_meta.get('fb_error') if match_meta else None}
 
     def compute_wound_size_with_current_v1():
         left_rect = extract_wound_rect(wound_state.get('left_pred'), locked_L_clean.shape)
@@ -3387,7 +3454,12 @@ def main():
                 #main_text = f"深度: {res['depth']:.1f}mm{p_dist_str}{h_diff_str}\n誤差: {res['error']:.3f}px\n配對: {res['method']}\n外參來源: {pose_info_str}"
                 score_str = ""
                 if view_state.get('show_score', False) and res.get('confidence_score') is not None:
-                    score_str = f"\nConfidence: {res['confidence_score']:.3f} (Epipolar:{res['d_epi']:.1f}px, ZNCC:{res['zncc_score']:.2f})"
+                    if res.get('ps_score') is not None:
+                        score_str = (f"\nConfidence: {res['confidence_score']:.3f} "
+                                     f"(PS:{res['ps_score']:.2f}, Occ:{res.get('ps_occlusion_ratio', 0.0):.2f}, "
+                                     f"FB:{res.get('ps_fb_error', float('nan')):.1f}px)")
+                    else:
+                        score_str = f"\nConfidence: {res['confidence_score']:.3f} (Epipolar:{res['d_epi']:.1f}px, ZNCC:{res['zncc_score']:.2f})"
                 main_text = f"Camera-to-Selected Position Distance: {res['depth']:.1f}mm{p_dist_str}{score_str}\n"
             
             

@@ -1,0 +1,212 @@
+Grad-SIFT 內插與 High／Mid Score 加權融合概念
+================================================
+
+更新日期：2026-09-01
+適用程式：depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_GradSIFTDebug.py
+實作位置：Algorithm/stereo_matching.py / map_from_gradient_group()
+
+
+一、先釐清：程式內其實有兩層「加權」
+------------------------------------------
+
+第一層：同一個 High 或 Mid 群組內，如何由多個支撐點推算點擊 A 的右圖位置。
+第二層：High 與 Mid 都成功時，如何依兩群各自的 score 融合兩個映射結果。
+
+「依 score 權重內插」主要指第二層 High／Mid 群組融合。
+同一群內的每個支撐點並不是直接依 group score 分配權重。
+
+
+二、第一層：同群支撐點如何推算點擊 A 的映射
+------------------------------------------------
+
+假設某一群通過所有 Global／Guided、epi、seed、offset median 過濾後，
+留下至少 3 組支撐點：
+
+  左圖：pL_1, pL_2, pL_3, ...
+  右圖：pR_1, pR_2, pR_3, ...
+
+每一組支撐點都有局部位移：
+
+  offset_i = pR_i - pL_i
+
+
+（A）先計算距離加權位移，作為保底結果
+
+每個支撐點的空間權重是：
+
+  w_i = 1 / (||pL_i - A||^2 + 1e-5)
+
+因此左圖中越靠近點擊 A 的支撐點，權重越大；距離越遠，影響越小。
+
+保底映射點為：
+
+  weighted_group
+    = A + Σ(offset_i * w_i) / Σ(w_i)
+
+物理概念：越靠近 A 的支撐點，越能代表 A 附近真正的局部視差／表面運動。
+
+
+（B）正常情況優先使用 RANSAC local affine
+
+程式用 estimateAffinePartial2D + RANSAC，從同群支撐點估計局部變換 M_local，
+threshold 為 2.5 px，且至少要有 3 個 RANSAC inlier。
+
+若 M_local 有效：
+
+  mapped_group = M_local * [A_x, A_y, 1]^T
+
+這代表不是單純平均位移，而是允許局部平移、旋轉與等向尺度變化，
+再把點擊 A 直接套入這個局部變換。
+
+
+（C）何時退回距離加權位移？
+
+下列情況改用 weighted_group：
+
+1. RANSAC 沒能建立有效的 M_local。
+2. affine 推出的 mapped_group 距右側支撐點群中心過遠：
+   超過右點群 90 百分位半徑的 1.25 倍。
+
+設計概念：affine 是主要模型；若 affine 外插到支撐點群之外、結果不可信，
+就退回較保守的「附近支撐點加權平均位移」。
+
+
+三、每一群的 score 如何計算
+----------------------------
+
+High 或 Mid 群完成 RANSAC 後，計算：
+
+  score = N / (1 + offset_spread + mean_dist / match_threshold)
+
+其中：
+
+1. N = 最終支撐點／RANSAC inlier 數量
+   - 點越多，score 越高。
+   - 物理意義：有越多局部點共同支持相同映射，可信度較高。
+
+2. offset_spread
+   - 先計算每點 offset = pR - pL。
+   - 再計算每個 offset 距群組中位 offset 的距離。
+   - offset_spread 是這些距離的中位數，單位為 px。
+   - spread 越小，score 越高。
+   - 物理意義：同一小塊表面的局部視差應該彼此接近。
+
+3. mean_dist
+   - 最終支撐點的平均 descriptor distance。
+   - Gray-SIFT 的 match_threshold 為 450。
+   - 以 mean_dist / 450 正規化後放入分母。
+   - descriptor distance 越小，score 越高。
+   - 物理意義：左右局部外觀越相似，匹配越可信。
+
+4. 分母中的常數 1
+   - 避免分母為零，也設定 score 的基本尺度。
+
+因此 score 的設計方向是：
+
+  支撐點越多          -> score 增加
+  offset 越一致       -> score 增加
+  descriptor 越相似   -> score 增加
+
+注意：此 score 是工程上的 heuristic quality score，不是機率，也不是 0～1 信心值；
+它可能大於 1，而且不同參數尺度會改變 score。
+
+
+四、第二層：High 與 Mid 如何依 score 融合
+------------------------------------------
+
+假設 High 與 Mid 都成功，分別輸出：
+
+  mapped_high, score_high
+  mapped_mid,  score_mid
+
+先將 score 正規化成權重：
+
+  weight_high = score_high / (score_high + score_mid)
+  weight_mid  = score_mid  / (score_high + score_mid)
+
+最後右圖匹配點：
+
+  mapped
+    = mapped_high * weight_high
+    + mapped_mid  * weight_mid
+
+
+範例：
+
+  mapped_high = (1122, 573), score_high = 2.0
+  mapped_mid  = (1125, 575), score_mid  = 1.0
+
+  weight_high = 2/3
+  weight_mid  = 1/3
+
+  mapped = (1122,573)*(2/3) + (1125,575)*(1/3)
+         = (1123, 573.67)
+
+也就是品質較高的 High 群結果，對最終位置影響較大。
+
+
+五、只有一群成功時
+--------------------
+
+- 只有 High 成功：最終點直接使用 mapped_high，相當於 High 權重 100%。
+- 只有 Mid 成功：最終點直接使用 mapped_mid，相當於 Mid 權重 100%。
+- High、Mid 都失敗：Grad-SIFT 不產生匹配結果。
+
+成功融合後，最終 mapped 還必須通過相對 RT／plane seed 的 75 px bound；
+超出時整個 Grad-SIFT 結果仍會被拒絕。
+
+
+六、用物理直覺理解整體設計
+----------------------------
+
+同群內：
+
+  多個附近支撐點
+      -> RANSAC 找共同局部表面運動
+      -> 用局部 affine 映射點擊 A
+      -> affine 不可靠時，退回近點權重較大的平均位移
+
+High／Mid 群之間：
+
+  每群各自產生一個 A 的右圖預測
+      -> 支撐點多、視差一致、外觀相似的群得到較高 score
+      -> 依 score 比例融合兩群預測
+
+
+七、最重要的避免誤解事項
+--------------------------
+
+1. group score 不是每一個支撐點自己的權重。
+2. 同群內正常情況優先使用 RANSAC affine，不是永遠做距離平均。
+3. 同群內的距離權重是 1 / 左支撐點到 A 的距離平方。
+4. High／Mid 兩群之間才使用 group score 作加權平均。
+5. score 不是機率；score=0.95 不代表 95% 正確。
+6. Debug 圖的 Convex Hull 顯示的是最終支撐點範圍，不直接表示各點權重大小。
+
+
+八、簡化流程
+------------
+
+High 支撐點                          Mid 支撐點
+     |                                   |
+     v                                   v
+offset median + RANSAC              offset median + RANSAC
+     |                                   |
+     v                                   v
+局部 affine 映射 A                  局部 affine 映射 A
+（異常則退回距離加權位移）          （異常則退回距離加權位移）
+     |                                   |
+     v                                   v
+mapped_high + score_high            mapped_mid + score_mid
+     |                                   |
+     +---------------+-------------------+
+                     |
+                     v
+      依 score/(score_high+score_mid) 加權融合
+                     |
+                     v
+              最終 mapped right point
+                     |
+                     v
+              final RT bound <= 75 px
+
