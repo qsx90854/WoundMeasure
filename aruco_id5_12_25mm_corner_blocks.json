@@ -2,7 +2,7 @@
   "schema_version": 1,
   "pattern_type": "aruco_with_corner_touching_blocks",
   "dictionary": "DICT_4X4_100",
-  "aruco_id": 5,
+  "aruco_id": 12,
   "border_bits": 1,
   "dpi": 1200,
   "image_size_px": [

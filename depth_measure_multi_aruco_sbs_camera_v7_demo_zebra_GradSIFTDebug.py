@@ -5,7 +5,7 @@ depth_measure_multi_aruco_sbs_camera.py
 
 特點：
 - 支援影片輸入，可指定左圖幀與多個右圖候選幀
-- 整合 JSON 標定參數，支援左右相機不對稱的內參與畸變修正
+- 整合 JSON 標定參數，支援左右相機不對稱的內參與畸
 - 雙內參精確幾何：三角測距、單應性映射與基本矩陣均使用獨立的 KL/KR
 - 多幀平均量測：點擊左圖後同時計算所有候選幀深度並平均
 - 採用 Grad-SIFT 匹配演算法
@@ -106,7 +106,7 @@ PARAMS_JSON_PATH      = "calibration_result_Zebra_1_monocular.json"  # 標定參
 ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
-DEFAULT_WOUND_HEIGHT_OFFSET_MM = 10.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
+DEFAULT_WOUND_HEIGHT_OFFSET_MM = 0.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
 MIN_BASELINE_MM       = 35.0#8.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
@@ -135,12 +135,12 @@ EPIPOLAR_SEARCH_WEAK_FLOOR = 0.05                   # Epi-band search: weak scor
 
 # ----------------- 交互特徵點匹配搜索設定 -----------------
 LEFT_PATCH_SEARCH_RADIUS      = 30#18                         # 左圖點選候選點周圍的搜索半徑 (pixels)
-RIGHT_PATCH_SEARCH_RADIUS     = 75#40#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
-GRAD_SIFT_MAX_RT_ADJUST_PX    = 75#40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
-LEFT_GRADIENT_POINTS_COUNT    = 80                         # 左圖周圍取梯度最高的特徵點數量
-RIGHT_GRADIENT_POINTS_COUNT   = 300                       # 右圖周圍取梯度最高的特徵點數量
-LEFT_MID_GRADIENT_POINTS_COUNT = 80                        # 左圖周圍取梯度中等的特徵點數量
-RIGHT_MID_GRADIENT_POINTS_COUNT = 300                      # 右圖周圍取梯度中等的特徵點數量
+RIGHT_PATCH_SEARCH_RADIUS     = 75#75#40#30                         # 右圖預測投影點周圍的搜索半徑 (pixels)
+GRAD_SIFT_MAX_RT_ADJUST_PX    = 75#75#40.0                       # v1 Grad-SIFT 允許相對 RT/平面預測 seed 的最大微調量 (pixels)
+LEFT_GRADIENT_POINTS_COUNT    = 150                         # 左圖周圍取梯度最高的特徵點數量
+RIGHT_GRADIENT_POINTS_COUNT   = 500                       # 右圖周圍取梯度最高的特徵點數量
+LEFT_MID_GRADIENT_POINTS_COUNT = 150                        # 左圖周圍取梯度中等的特徵點數量
+RIGHT_MID_GRADIENT_POINTS_COUNT = 500                      # 右圖周圍取梯度中等的特徵點數量
 
 GRAD_SIFT_RATIO_TEST          = 0.78                       # v1 Grad-SIFT KNN ratio test threshold
 GRAD_SIFT_EPIPOLAR_TOL_PX     = 3.0                        # max point-to-epipolar-line distance for local SIFT matches
@@ -149,6 +149,20 @@ GRAD_SIFT_RANSAC_REPROJ_PX    = 2.5                        # local affine RANSAC
 GRAD_SIFT_MIN_GROUP_INLIERS   = 3                          # minimum inliers for accepting one high/mid gradient group
 GRAD_SIFT_GUIDED_RADIUS_PX    = 10.0                       # guided fallback: search right refs near RT/plane-predicted location
 GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback uses geometry, so descriptor ambiguity can be looser
+# Debug-only alternative to the original guided fallback.  Ratio-rejected
+# points may select only their original Global Top-1/Top-2 using exact H(pL).
+TOP2_GEOMETRY_RESCUE_DEFAULT  = False
+TOP2_GEOMETRY_MAX_DIST_PX     = 35.0
+# Debug-only physical block audit.  This never rejects a match or changes a
+# Grad-SIFT score; it only visualizes/records local sparse-depth consistency.
+DEBUG_METRIC_BLOCK_SIZE_MM    = 5.0
+DEBUG_METRIC_BLOCKS_DEFAULT   = False
+DEBUG_METRIC_BLOCK_GRID_RADIUS = 1                         # selected block + one neighboring block on each side
+DEBUG_METRIC_BLOCK_MIN_POINTS = 3
+DEBUG_METRIC_BLOCK_BASE_TOL_MM = 1.0
+DEBUG_METRIC_BLOCK_SIGMA_D_PX = 1.0
+DEBUG_METRIC_BLOCK_SIGMA_MULT = 3.0
+DEBUG_METRIC_BLOCK_MAX_REPROJ_PX = 3.5
 UI_LOOP_SLEEP_SEC             = 0.03                       # idle UI loop delay; lower is smoother but uses more CPU
 IDEAL_BASELINE_MM             = 45.0                       # preferred baseline for pair selection
 PAIR_SCORE_REPROJ_W           = 1.00                       # pair selection weight: reprojection error
@@ -554,6 +568,141 @@ def fit_plane_to_points(pts, ransac_thresh_mm=1.5, ransac_iters=200):
         n = -n  # 法向量朝向相機
     residuals = (pts - c) @ n
     return n, c, inlier_mask, residuals
+
+
+def compute_shared_marker_corner_plane(corners_left, corners_right,
+                                       K_L, K_R, R_rel, t_rel, F=None,
+                                       reference_normal=None,
+                                       min_shared_markers=2):
+    """Triangulate every valid corner of shared markers and fit one 3D plane.
+
+    The returned plane is expressed in the left-camera coordinate system.  A
+    marker only participates when all four corresponding corners triangulate
+    to finite points in front of both cameras.  Unlike ``fit_plane_to_points``,
+    this diagnostic reference intentionally uses every accepted marker corner
+    (no point-level RANSAC), so the fitted plane means exactly "all shared
+    patterns" and the residual report exposes any non-coplanarity.
+    """
+    diag = {
+        'available': False,
+        'reason': '',
+        'shared_marker_ids': [],
+        'used_marker_ids': [],
+        'skipped_markers': {},
+        'point_count': 0,
+        'rms_mm': None,
+        'p90_abs_mm': None,
+        'max_abs_mm': None,
+        'per_marker': {},
+    }
+    if not isinstance(corners_left, dict) or not isinstance(corners_right, dict):
+        diag['reason'] = 'marker corner dictionaries are unavailable'
+        return None, None, diag
+
+    shared_ids = sorted(set(corners_left.keys()) & set(corners_right.keys()))
+    diag['shared_marker_ids'] = [int(mid) for mid in shared_ids]
+    if len(shared_ids) < int(min_shared_markers):
+        diag['reason'] = (
+            f'need at least {int(min_shared_markers)} shared markers; '
+            f'found {len(shared_ids)}')
+        return None, None, diag
+
+    R = np.asarray(R_rel, dtype=np.float64).reshape(3, 3)
+    t = np.asarray(t_rel, dtype=np.float64).reshape(3)
+    all_points = []
+    point_marker_ids = []
+    for mid in shared_ids:
+        try:
+            pts_l = np.asarray(corners_left[mid], dtype=np.float64).reshape(-1, 2)
+            pts_r = np.asarray(corners_right[mid], dtype=np.float64).reshape(-1, 2)
+        except (TypeError, ValueError):
+            diag['skipped_markers'][int(mid)] = 'invalid corner array'
+            continue
+        if len(pts_l) != 4 or len(pts_r) != 4:
+            diag['skipped_markers'][int(mid)] = (
+                f'expected 4/4 corners, got {len(pts_l)}/{len(pts_r)}')
+            continue
+        if not np.all(np.isfinite(pts_l)) or not np.all(np.isfinite(pts_r)):
+            diag['skipped_markers'][int(mid)] = 'non-finite 2D corner'
+            continue
+
+        marker_points = []
+        marker_error = None
+        for corner_idx, (pt_l, pt_r) in enumerate(zip(pts_l, pts_r)):
+            try:
+                p3d = np.asarray(triangulate_point_3d(
+                    pt_l, pt_r, K_L, K_R, R, t.reshape(3, 1), F=F),
+                    dtype=np.float64).reshape(3)
+            except (cv2.error, FloatingPointError, TypeError, ValueError) as exc:
+                marker_error = f'corner {corner_idx}: triangulation failed ({exc})'
+                break
+            if not np.all(np.isfinite(p3d)):
+                marker_error = f'corner {corner_idx}: non-finite 3D point'
+                break
+            right_z = float((R @ p3d + t)[2])
+            if p3d[2] <= 0.0 or right_z <= 0.0:
+                marker_error = f'corner {corner_idx}: point is behind a camera'
+                break
+            if p3d[2] > MAX_DEPTH_MM or right_z > MAX_DEPTH_MM:
+                marker_error = f'corner {corner_idx}: depth exceeds {MAX_DEPTH_MM} mm'
+                break
+            marker_points.append(p3d)
+
+        if marker_error is not None or len(marker_points) != 4:
+            diag['skipped_markers'][int(mid)] = marker_error or 'incomplete 3D corners'
+            continue
+        all_points.extend(marker_points)
+        point_marker_ids.extend([int(mid)] * 4)
+        diag['used_marker_ids'].append(int(mid))
+
+    if len(diag['used_marker_ids']) < int(min_shared_markers):
+        diag['reason'] = (
+            f'only {len(diag["used_marker_ids"])} shared markers have four valid '
+            f'3D corners; need {int(min_shared_markers)}')
+        return None, None, diag
+
+    pts = np.asarray(all_points, dtype=np.float64)
+    c = pts.mean(axis=0)
+    try:
+        _, singular_values, Vt = np.linalg.svd(pts - c, full_matrices=False)
+    except np.linalg.LinAlgError as exc:
+        diag['reason'] = f'plane SVD failed ({exc})'
+        return None, None, diag
+    if len(singular_values) < 3 or singular_values[1] <= 1e-9:
+        diag['reason'] = 'triangulated corners are geometrically degenerate'
+        return None, None, diag
+
+    n = np.asarray(Vt[-1], dtype=np.float64)
+    n_norm = float(np.linalg.norm(n))
+    if not np.isfinite(n_norm) or n_norm <= 1e-12:
+        diag['reason'] = 'fitted plane normal is invalid'
+        return None, None, diag
+    n /= n_norm
+    if reference_normal is not None:
+        ref_n = np.asarray(reference_normal, dtype=np.float64).reshape(3)
+        ref_norm = float(np.linalg.norm(ref_n))
+        if ref_norm > 1e-12 and float(np.dot(n, ref_n / ref_norm)) < 0.0:
+            n = -n
+    elif float(np.dot(n, c)) > 0.0:
+        n = -n
+
+    residuals = (pts - c) @ n
+    abs_residuals = np.abs(residuals)
+    diag['point_count'] = int(len(pts))
+    diag['rms_mm'] = float(np.sqrt(np.mean(residuals ** 2)))
+    diag['p90_abs_mm'] = float(np.percentile(abs_residuals, 90))
+    diag['max_abs_mm'] = float(np.max(abs_residuals))
+    for mid in diag['used_marker_ids']:
+        mask = np.asarray(point_marker_ids, dtype=np.int64) == int(mid)
+        marker_residuals = residuals[mask]
+        diag['per_marker'][int(mid)] = {
+            'rms_mm': float(np.sqrt(np.mean(marker_residuals ** 2))),
+            'max_abs_mm': float(np.max(np.abs(marker_residuals))),
+            'signed_residuals_mm': [float(x) for x in marker_residuals],
+        }
+    diag['available'] = True
+    diag['reason'] = 'ok'
+    return n, c, diag
 
 def apply_dedrift_correction(trajectory, p_end_match):
     """
@@ -1451,11 +1600,55 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
     text_lines.append(f"距標記平面深度: {p_dist_str}")
     text_lines.append(f"自訂平面擬合狀態: {'已擬合' if custom_plane_fitted else '未擬合'}")
     text_lines.append(f"距自訂平面深度: {cp_dist_str}")
+    height_source = res.get('height_reference_source')
+    height_signed = res.get('height_reference_signed_mm')
+    height_display = res.get('height_display_mm')
+    text_lines.append(f"目前高度參考平面: {height_source or 'None'}")
+    text_lines.append(
+        f"目前高度參考平面有號距離: {height_signed:.3f} mm"
+        if height_signed is not None else "目前高度參考平面有號距離: None")
+    text_lines.append(
+        f"目前畫面高度值: {height_display:.3f} mm"
+        if height_display is not None else "目前畫面高度值: None")
+    shared_plane_diag = res.get('shared_pattern_plane_diag')
+    if isinstance(shared_plane_diag, dict):
+        text_lines.append(
+            "共同 Pattern 角點平面: "
+            f"available={shared_plane_diag.get('available', False)}, "
+            f"markers={shared_plane_diag.get('used_marker_ids', [])}, "
+            f"corners={shared_plane_diag.get('point_count', 0)}, "
+            f"RMS={shared_plane_diag.get('rms_mm')} mm, "
+            f"P90={shared_plane_diag.get('p90_abs_mm')} mm, "
+            f"max={shared_plane_diag.get('max_abs_mm')} mm, "
+            f"reason={shared_plane_diag.get('reason', '')}")
     text_lines.append(f"左圖影格索引: {idx_B}")
     text_lines.append(f"基準線 (Baseline): {baseline:.2f} mm" if baseline is not None else "基準線 (Baseline): None")
     text_lines.append(f"相對平移向量 (T_rel): {t_rel_str}")
     text_lines.append(f"相對旋轉矩陣 (R_rel):\n{R_rel_str}")
     text_lines.append(f"相機內參 (KL):\n{K_R_str}")
+    block_audit = res.get('debug_metric_block_audit')
+    block_log = (
+        block_audit.get('log')
+        if isinstance(block_audit, dict) else None)
+    if isinstance(block_log, dict):
+        text_lines.append("--------------------------------------------------")
+        text_lines.append("5x5 mm Block Debug（唯讀，不影響匹配）:")
+        text_lines.append(
+            f"  grid={block_log.get('grid_source', 'N/A')}, "
+            f"block={block_log.get('selected_block')}, "
+            f"projected_px={block_log.get('projected_size_left_px')}")
+        text_lines.append(
+            f"  A-centered support={block_log.get('support_count', 0)}, "
+            f"valid3D={block_log.get('valid_3d_count', 0)}, "
+            f"H/M={block_log.get('high_count', 0)}/{block_log.get('mid_count', 0)}")
+        text_lines.append(
+            f"  median={block_log.get('median_height_mm')} mm, "
+            f"MAD={block_log.get('mad_mm')} mm, "
+            f"P90-P10={block_log.get('robust_span_mm')} mm, "
+            f"tol={block_log.get('tolerance_mm')} mm")
+        text_lines.append(
+            f"  A_delta={block_log.get('a_delta_mm')} mm, "
+            f"status={block_log.get('status', 'N/A')}")
     if "multi_res" in res:
         text_lines.append("--------------------------------------------------")
         text_lines.append(f"多對融合結果 (共 {len(res['multi_res'])} 組成功):")
@@ -1486,12 +1679,19 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
         "dist_to_marker_plane_mm": float(p_dist) if (p3d is not None and cand.get('plane_n') is not None and cand.get('plane_c') is not None) else None,
         "custom_plane_fitted": bool(custom_plane_fitted),
         "dist_to_custom_plane_mm": float(abs(proj_dist_signed)) if (custom_plane_fitted and p3d is not None and custom_plane_n is not None and custom_plane_c is not None) else None,
+        "height_reference_source": height_source,
+        "height_reference_signed_mm": float(height_signed) if height_signed is not None else None,
+        "height_display_mm": float(height_display) if height_display is not None else None,
         "idx_left_frame": int(idx_B) if idx_B is not None else None,
         "baseline_mm": float(baseline) if baseline is not None else None,
         "t_rel": t_rel.flatten().tolist() if t_rel is not None else None,
         "R_rel": R_rel.tolist() if R_rel is not None else None,
         "KL": K_R.tolist() if K_R is not None else None
     }
+    if isinstance(shared_plane_diag, dict):
+        json_data["shared_pattern_plane_diag"] = shared_plane_diag
+    if isinstance(block_log, dict):
+        json_data["debug_metric_block_audit"] = block_log
     if "multi_res" in res:
         json_data["multi_fusion"] = {
             "num_successful_pairs": len(res['multi_res']),
@@ -2009,6 +2209,45 @@ def main():
     current_cand['spec_mask'] = locked_R_spec_mask
     current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
     current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
+
+    # Debug-only height reference: triangulate all four corners of every marker
+    # present in both selected images, then fit one plane in left-camera 3D.
+    # This is deliberately separate from current_cand['plane_n'/'plane_c'] so
+    # enabling it cannot change RT, matching, homography or triangulation.
+    (shared_height_plane_n,
+     shared_height_plane_c,
+     shared_height_plane_diag) = compute_shared_marker_corner_plane(
+        current_cand.get('cornersA'), current_cand.get('cornersB'),
+        KL, current_cand['K_R'], current_cand['R_rel'], current_cand['t_rel'],
+        F=current_cand.get('F'), reference_normal=legacy_height_plane_n,
+        min_shared_markers=2)
+    if shared_height_plane_diag.get('available'):
+        _shared_ids = shared_height_plane_diag['used_marker_ids']
+        log_and_print(
+            f"[Shared Pattern Plane] ready; "
+            f"shared={shared_height_plane_diag['shared_marker_ids']}, "
+            f"used={_shared_ids}, "
+            f"corners={shared_height_plane_diag['point_count']}, "
+            f"RMS={shared_height_plane_diag['rms_mm']:.3f} mm, "
+            f"P90={shared_height_plane_diag['p90_abs_mm']:.3f} mm, "
+            f"max={shared_height_plane_diag['max_abs_mm']:.3f} mm")
+        for _mid in _shared_ids:
+            _marker_diag = shared_height_plane_diag['per_marker'][_mid]
+            log_and_print(
+                f"[Shared Pattern Plane] marker {_mid}: "
+                f"RMS={_marker_diag['rms_mm']:.3f} mm, "
+                f"max={_marker_diag['max_abs_mm']:.3f} mm")
+        for _mid, _reason in shared_height_plane_diag['skipped_markers'].items():
+            log_and_print(
+                f"[Shared Pattern Plane] skipped marker {_mid}: {_reason}")
+        if shared_height_plane_diag['rms_mm'] > 2.0:
+            log_and_print(
+                "[Shared Pattern Plane] warning: plane residual RMS exceeds "
+                "2.0 mm; inspect marker detection and stereo RT")
+    else:
+        log_and_print(
+            "[Shared Pattern Plane] unavailable: "
+            + shared_height_plane_diag.get('reason', 'unknown reason'))
     
     extra_candidates_list = []
     for extra in video_data.get('extra_candidates', []):
@@ -2306,6 +2545,16 @@ def main():
         va='top', ha='left', zorder=12, clip_on=True)
     # 每次點擊都會重建的跨圖連線、Homography residual 線與編號標籤。
     debug_pair_artists = []
+    # Subset of debug_pair_artists controlled by the H-residual visibility
+    # button.  The magenta prediction circles are the persistent dbg_pred_B.
+    debug_homography_residual_artists = []
+    # 5x5 mm physical-grid polygons/text are kept separate so the overlay can
+    # be toggled without disturbing descriptor-audit or correspondence artists.
+    debug_metric_block_artists = []
+    debug_metric_block_state = {
+        'last_audit': None,
+        'last_message': '5x5 mm block audit has not run',
+    }
     # Descriptor-audit selection lines are managed separately so clicking a
     # raw reference can replace only the Top-1/Top-2 explanation.
     debug_audit_artists = []
@@ -2551,12 +2800,30 @@ def main():
                   'show_mid_grad_points': False,
                   'show_aruco_overlay': False,
                   'show_rt_sift_points': False,
+                  'show_metric_blocks': DEBUG_METRIC_BLOCKS_DEFAULT,
+                  'show_homography_residual': True,
+                  'top2_geometry_rescue': TOP2_GEOMETRY_RESCUE_DEFAULT,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
     # Display-only selector.  RT, baseline, matching and triangulated p3d never
     # change when this state is toggled.
-    height_plane_state = {'use_pose_plane': False}
+    height_plane_state = {
+        'use_pose_plane': False,
+        'use_shared_plane': False,
+    }
+
+    def get_selected_height_plane():
+        """Return (normal, center, UI label) for the display-only height plane."""
+        if (height_plane_state['use_shared_plane']
+                and shared_height_plane_n is not None
+                and shared_height_plane_c is not None):
+            return shared_height_plane_n, shared_height_plane_c, 'Shared Pattern Plane'
+        if (height_plane_state['use_pose_plane']
+                and pose_height_plane_n is not None
+                and pose_height_plane_c is not None):
+            return pose_height_plane_n, pose_height_plane_c, 'Marker Pose Plane'
+        return legacy_height_plane_n, legacy_height_plane_c, 'Legacy Plane'
 
     # HighPts / MidPts 預設關閉：初始同步散點顯示狀態
     for _artist in (scatter_grad_ref_A, scatter_grad_ref_B, scatter_grad_inject, scatter_grad_match):
@@ -2711,6 +2978,7 @@ def main():
     measure_results = {}
     last_click = None
     spec_mask_lock = threading.Lock()  # 高光遮罩計算互斥：背景預計算 vs 點擊時延遲計算
+    grad_matcher_config_lock = threading.Lock()  # Debug-only temporary matcher config
 
     def build_grad_descriptor_audit(ref_a, ref_b, ref_a_groups, ref_b_groups,
                                     left_gray, right_gray, left_bgr, cand,
@@ -2730,6 +2998,8 @@ def main():
         use_hamming = bool(snap_view_state.get('use_hamming', False))
         use_rgb_sift = bool(snap_view_state.get('use_rgb_sift', False))
         use_opponent_sift = bool(snap_view_state.get('use_opponent_sift', False))
+        top2_geometry_mode = bool(
+            snap_view_state.get('top2_geometry_rescue', False))
 
         if use_hamming:
             descriptor_name = 'ORB/Hamming'
@@ -2756,6 +3026,9 @@ def main():
             'guided_ratio_limit': guided_ratio_limit,
             'min_group_inliers': min_group_inliers,
             'match_threshold': match_threshold,
+            'top2_geometry_mode': top2_geometry_mode,
+            'top2_geometry_max_dist_px': float(TOP2_GEOMETRY_MAX_DIST_PX),
+            'top2_geometry_result': None,
             'records': [],
             'groups': {},
             'default_index': None,
@@ -2797,6 +3070,376 @@ def main():
             rt_seed = np.asarray(rt_seed, dtype=np.float32).reshape(2)
         except Exception:
             rt_seed = click_arr.copy()
+
+        H_ab = None
+        try:
+            plane_n = np.asarray(cand.get('plane_n'), dtype=np.float64).reshape(3)
+            plane_c = np.asarray(cand.get('plane_c'), dtype=np.float64).reshape(3)
+            d_plane = float(np.dot(plane_n, plane_c))
+            if abs(d_plane) > 1e-8:
+                H_ab = (
+                    np.asarray(cand['K_R'], dtype=np.float64)
+                    @ (
+                        np.asarray(cand['R_rel'], dtype=np.float64).reshape(3, 3)
+                        + np.asarray(cand['t_rel'], dtype=np.float64).reshape(3, 1)
+                        @ plane_n.reshape(1, 3) / d_plane
+                    )
+                    @ np.linalg.inv(np.asarray(KL, dtype=np.float64)))
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            H_ab = None
+
+        def project_h_point(point):
+            if H_ab is None:
+                return None
+            point_h = H_ab @ np.array(
+                [float(point[0]), float(point[1]), 1.0], dtype=np.float64)
+            if not np.all(np.isfinite(point_h)) or abs(float(point_h[2])) <= 1e-9:
+                return None
+            return np.asarray(point_h[:2] / point_h[2], dtype=np.float32)
+
+        def point_epi_distance(point_left, point_right):
+            if cand.get('F') is None:
+                return None
+            line = cand['F'] @ np.array(
+                [float(point_left[0]), float(point_left[1]), 1.0],
+                dtype=np.float64)
+            denom = float(np.hypot(line[0], line[1]))
+            if denom <= 1e-8:
+                return None
+            return abs(float(
+                line[0] * float(point_right[0])
+                + line[1] * float(point_right[1]) + line[2])) / denom
+
+        top2_group_results = {}
+
+        def build_top2_geometry_group(group_records, group_label, group_summary):
+            """Run Top-1/Top-2 geometry rescue and report every sequential gate."""
+            gate = {
+                'ratio_rejected': 0,
+                'within_click_radius': 0,
+                'has_h_prediction': 0,
+                'abs_any': 0,
+                'mutual_any': 0,
+                'epi_any': 0,
+                'h_distance_any': 0,
+                'global_proposals': 0,
+                'rescue_proposals': 0,
+                'pre_unique': 0,
+                'after_unique': 0,
+                'after_offset': 0,
+                'ransac_inliers': None,
+            }
+            first_reject = {
+                'CLICK_RADIUS': 0,
+                'NO_H': 0,
+                'ABS': 0,
+                'MUTUAL': 0,
+                'EPIPOLAR': 0,
+                'H_DISTANCE': 0,
+            }
+            h_min_samples = []
+            for record in group_records:
+                record['top2_geo_selected'] = False
+                record['top2_geo_selected_pR'] = None
+                record['top2_geo_source'] = None
+                record['top2_geo_geom_dist'] = None
+                record['top2_geo_rank'] = None
+                record['top2_geo_reject_stage'] = None
+
+            def print_gate_summary(status):
+                group_summary['top2_geo_gates'] = dict(gate)
+                group_summary['top2_geo_first_reject'] = dict(first_reject)
+                flow = (
+                    f"start={gate['ratio_rejected']} -> "
+                    f"click<50={gate['within_click_radius']} -> "
+                    f"H={gate['has_h_prediction']} -> "
+                    f"abs={gate['abs_any']} -> "
+                    f"mutual={gate['mutual_any']} -> "
+                    f"epi={gate['epi_any']} -> "
+                    f"Hdist<={TOP2_GEOMETRY_MAX_DIST_PX:g}="
+                    f"{gate['h_distance_any']}")
+                print(f"   [Top2-Geo gates {group_label}] ratio-fail points: {flow}")
+                print(
+                    f"   [Top2-Geo rejects {group_label}] first-fail "
+                    + ", ".join(
+                        f"{name}={count}" for name, count in first_reject.items()))
+                if h_min_samples:
+                    h_values = np.asarray(h_min_samples, dtype=np.float64)
+                    print(
+                        f"   [Top2-Geo Hdist {group_label}] after epi, nearest "
+                        f"Top1/Top2 min/median/p90="
+                        f"{np.min(h_values):.2f}/"
+                        f"{np.median(h_values):.2f}/"
+                        f"{np.percentile(h_values, 90):.2f}px "
+                        f"(limit<={TOP2_GEOMETRY_MAX_DIST_PX:g}px)")
+                ransac_text = (
+                    'N/A' if gate['ransac_inliers'] is None
+                    else str(gate['ransac_inliers']))
+                print(
+                    f"   [Top2-Geo group {group_label}] "
+                    f"global={gate['global_proposals']} + "
+                    f"rescued={gate['rescue_proposals']} -> "
+                    f"pre_unique={gate['pre_unique']} -> "
+                    f"unique={gate['after_unique']} -> "
+                    f"offset={gate['after_offset']} -> "
+                    f"RANSAC={ransac_text}; status={status}")
+                if gate['ratio_rejected'] > 0:
+                    dominant_name, dominant_count = max(
+                        first_reject.items(), key=lambda item: item[1])
+                    if dominant_count > 0:
+                        dominant_pct = (
+                            100.0 * dominant_count / gate['ratio_rejected'])
+                        print(
+                            f"   [Top2-Geo bottleneck {group_label}] "
+                            f"{dominant_name} rejected the most: "
+                            f"{dominant_count}/{gate['ratio_rejected']} "
+                            f"({dominant_pct:.1f}%)")
+                    else:
+                        print(
+                            f"   [Top2-Geo bottleneck {group_label}] "
+                            "none in point gates; inspect unique/offset/RANSAC "
+                            "in the group flow above")
+
+            proposals = []
+            for record in group_records:
+                p_left = np.asarray(record['pL'], dtype=np.float32)
+                exact_seed = record.get('exact_h_seed')
+
+                if record['decision'] == 'KNN_PASS':
+                    # Normal Global Top-1 path.  It still uses exact H(pL) for
+                    # the downstream seed bound while Top2-Geo mode is active.
+                    if exact_seed is None:
+                        exact_seed = record.get('translated_seed')
+                    if exact_seed is None:
+                        continue
+                    epi = record.get('epi_distance')
+                    if epi is not None and float(epi) > epi_limit:
+                        continue
+                    geom_dist = float(np.linalg.norm(
+                        np.asarray(record['top1'], dtype=np.float32)
+                        - np.asarray(exact_seed, dtype=np.float32)))
+                    if geom_dist > seed_limit:
+                        continue
+                    selected = {
+                        'pR': np.asarray(record['top1'], dtype=np.float32),
+                        'train_index': int(record['top1_train_index']),
+                        'descriptor_distance': float(record['d1']),
+                        'geom_dist': geom_dist,
+                        'source': 'GLOBAL_KNN',
+                        'rank': 'Top1',
+                    }
+                    gate['global_proposals'] += 1
+                elif record['pass_distance'] and not record['pass_ratio']:
+                    gate['ratio_rejected'] += 1
+                    if float(np.linalg.norm(p_left - click_arr)) >= 50.0:
+                        first_reject['CLICK_RADIUS'] += 1
+                        record['top2_geo_reject_stage'] = 'CLICK_RADIUS'
+                        continue
+                    gate['within_click_radius'] += 1
+                    if exact_seed is None:
+                        first_reject['NO_H'] += 1
+                        record['top2_geo_reject_stage'] = 'NO_H'
+                        continue
+                    gate['has_h_prediction'] += 1
+                    exact_seed = np.asarray(exact_seed, dtype=np.float32)
+                    raw_candidates = [
+                        {
+                            'rank': 'Top1',
+                            'pR': record.get('top1'),
+                            'distance': record.get('d1'),
+                            'train_index': record.get('top1_train_index'),
+                            'mutual': record.get('pass_mutual'),
+                            'epi': record.get('epi_distance'),
+                        },
+                        {
+                            'rank': 'Top2',
+                            'pR': record.get('top2'),
+                            'distance': record.get('d2'),
+                            'train_index': record.get('top2_train_index'),
+                            'mutual': record.get('top2_pass_mutual'),
+                            'epi': record.get('top2_epi_distance'),
+                        },
+                    ]
+                    candidates = [
+                        item for item in raw_candidates
+                        if (item['pR'] is not None
+                            and item['distance'] is not None
+                            and item['train_index'] is not None
+                            and float(item['distance']) < match_threshold)
+                    ]
+                    if not candidates:
+                        first_reject['ABS'] += 1
+                        record['top2_geo_reject_stage'] = 'ABS'
+                        continue
+                    gate['abs_any'] += 1
+                    candidates = [item for item in candidates if item['mutual']]
+                    if not candidates:
+                        first_reject['MUTUAL'] += 1
+                        record['top2_geo_reject_stage'] = 'MUTUAL'
+                        continue
+                    gate['mutual_any'] += 1
+                    candidates = [
+                        item for item in candidates
+                        if item['epi'] is None or float(item['epi']) <= epi_limit]
+                    if not candidates:
+                        first_reject['EPIPOLAR'] += 1
+                        record['top2_geo_reject_stage'] = 'EPIPOLAR'
+                        continue
+                    gate['epi_any'] += 1
+                    for item in candidates:
+                        item['geom_dist'] = float(np.linalg.norm(
+                            np.asarray(item['pR'], dtype=np.float32) - exact_seed))
+                    h_min_samples.append(min(
+                        item['geom_dist'] for item in candidates))
+                    candidates = [
+                        item for item in candidates
+                        if item['geom_dist'] <= TOP2_GEOMETRY_MAX_DIST_PX]
+                    if not candidates:
+                        first_reject['H_DISTANCE'] += 1
+                        record['top2_geo_reject_stage'] = 'H_DISTANCE'
+                        continue
+                    gate['h_distance_any'] += 1
+                    selected_candidate = min(
+                        candidates,
+                        key=lambda item: (
+                            item['geom_dist'], float(item['distance'])))
+                    selected = {
+                        'pR': np.asarray(
+                            selected_candidate['pR'], dtype=np.float32),
+                        'train_index': int(selected_candidate['train_index']),
+                        'descriptor_distance': float(
+                            selected_candidate['distance']),
+                        'geom_dist': float(selected_candidate['geom_dist']),
+                        'source': 'TOP2_GEO_RESCUE',
+                        'rank': selected_candidate['rank'],
+                    }
+                    gate['rescue_proposals'] += 1
+                else:
+                    continue
+
+                if snap_view_state.get('use_color_hist', False):
+                    if not check_color_histogram_similarity(
+                            left_bgr, p_left, selected['pR'], cand,
+                            patch_size=16, threshold=0.45):
+                        continue
+                proposals.append({
+                    'record': record,
+                    'pL': p_left,
+                    'pR': selected['pR'],
+                    'off': selected['pR'] - p_left,
+                    'dist': selected['descriptor_distance'],
+                    'geom_dist': selected['geom_dist'],
+                    'train_index': selected['train_index'],
+                    'source': selected['source'],
+                    'rank': selected['rank'],
+                })
+
+            gate['pre_unique'] = len(proposals)
+            best_by_right = {}
+            for item in proposals:
+                previous = best_by_right.get(item['train_index'])
+                item_key = (
+                    0 if item['source'] == 'GLOBAL_KNN' else 1,
+                    item['geom_dist'], item['dist'])
+                if previous is None:
+                    best_by_right[item['train_index']] = item
+                    continue
+                previous_key = (
+                    0 if previous['source'] == 'GLOBAL_KNN' else 1,
+                    previous['geom_dist'], previous['dist'])
+                if item_key < previous_key:
+                    best_by_right[item['train_index']] = item
+            proposals = list(best_by_right.values())
+            gate['after_unique'] = len(proposals)
+
+            if len(proposals) >= 3:
+                offsets = np.asarray(
+                    [item['off'] for item in proposals], dtype=np.float32)
+                median_offset = np.median(offsets, axis=0)
+                proposals = [
+                    item for item in proposals
+                    if float(np.linalg.norm(item['off'] - median_offset))
+                    < GRAD_SIFT_OFFSET_MEDIAN_TOL_PX]
+            gate['after_offset'] = len(proposals)
+            if len(proposals) < GRAD_SIFT_MIN_GROUP_INLIERS:
+                print_gate_summary('REJECT_SUPPORT')
+                return None
+
+            pts_a = np.asarray(
+                [item['pL'] for item in proposals], dtype=np.float32)
+            pts_b = np.asarray(
+                [item['pR'] for item in proposals], dtype=np.float32)
+            M_local, inliers = cv2.estimateAffinePartial2D(
+                pts_a, pts_b, method=cv2.RANSAC,
+                ransacReprojThreshold=GRAD_SIFT_RANSAC_REPROJ_PX)
+            if M_local is None:
+                gate['ransac_inliers'] = 0
+                print_gate_summary('REJECT_AFFINE')
+                return None
+            if inliers is not None:
+                inlier_mask = inliers.ravel().astype(bool)
+                gate['ransac_inliers'] = int(np.count_nonzero(inlier_mask))
+                if gate['ransac_inliers'] < GRAD_SIFT_MIN_GROUP_INLIERS:
+                    print_gate_summary('REJECT_RANSAC')
+                    return None
+                pts_a = pts_a[inlier_mask]
+                pts_b = pts_b[inlier_mask]
+                proposals = [
+                    item for item, keep in zip(proposals, inlier_mask) if keep]
+            else:
+                gate['ransac_inliers'] = len(proposals)
+
+            # Recompute after RANSAC: rejected points cannot leak into fallback.
+            weights = 1.0 / (
+                np.sum((pts_a - click_arr) ** 2, axis=1) + 1e-5)
+            weighted_group = (
+                click_arr
+                + np.sum((pts_b - pts_a) * weights[:, None], axis=0)
+                / np.sum(weights))
+            mapped_group = (
+                M_local @ np.array(
+                    [float(click_arr[0]), float(click_arr[1]), 1.0])
+            )[:2]
+            center_b = np.mean(pts_b, axis=0)
+            radius_b = max(float(np.percentile(
+                np.linalg.norm(pts_b - center_b, axis=1), 90)), 3.0)
+            if float(np.linalg.norm(mapped_group - center_b)) > radius_b * 1.25:
+                mapped_group = weighted_group
+            if float(np.linalg.norm(mapped_group - rt_seed)) > seed_limit:
+                print_gate_summary('REJECT_FINAL_RT')
+                return None
+
+            for item in proposals:
+                record = item['record']
+                record['top2_geo_selected'] = True
+                record['top2_geo_selected_pR'] = item['pR'].copy()
+                record['top2_geo_source'] = item['source']
+                record['top2_geo_geom_dist'] = float(item['geom_dist'])
+                record['top2_geo_rank'] = item['rank']
+                record['top2_geo_reject_stage'] = None
+            offsets = pts_b - pts_a
+            offset_spread = float(np.median(np.linalg.norm(
+                offsets - np.median(offsets, axis=0), axis=1)))
+            mean_dist = float(np.mean([item['dist'] for item in proposals]))
+            score = len(proposals) / (
+                1.0 + offset_spread + mean_dist / max(match_threshold, 1.0))
+            rescued_final = sum(
+                item['source'] == 'TOP2_GEO_RESCUE' for item in proposals)
+            rescued_top2 = sum(
+                item['source'] == 'TOP2_GEO_RESCUE'
+                and item['rank'] == 'Top2' for item in proposals)
+            print_gate_summary('ACCEPT')
+            print(
+                f"   [Top2-Geo {group_label}] accepted: "
+                f"inliers={len(proposals)}, rescued={rescued_final} "
+                f"(Top2={rescued_top2}), spread={offset_spread:.2f}, "
+                f"score={score:.2f}")
+            return {
+                'mapped': np.asarray(mapped_group, dtype=np.float32),
+                'ptsA': pts_a,
+                'ptsB': pts_b,
+                'score': float(score),
+            }
 
         for group_key, group_label in (('high', 'HIGH'), ('mid', 'MID')):
             points_left = ref_a[labels_a == group_key]
@@ -2906,18 +3549,19 @@ def main():
                 else:
                     decision = 'KNN_PASS'
 
-                epi_distance = None
-                if cand.get('F') is not None:
-                    line = cand['F'] @ np.array(
-                        [p_left[0], p_left[1], 1.0], dtype=np.float64)
-                    denom = float(np.hypot(line[0], line[1]))
-                    if denom > 1e-8:
-                        epi_distance = abs(float(
-                            line[0] * p_top1[0]
-                            + line[1] * p_top1[1]
-                            + line[2])) / denom
-                local_seed = rt_seed + (p_left - click_arr)
+                epi_distance = point_epi_distance(p_left, p_top1)
+                top2_epi_distance = (
+                    point_epi_distance(p_left, p_top2)
+                    if p_top2 is not None else None)
+                translated_seed = rt_seed + (p_left - click_arr)
+                exact_h_seed = project_h_point(p_left)
+                local_seed = (
+                    exact_h_seed if top2_geometry_mode and exact_h_seed is not None
+                    else translated_seed)
                 seed_distance = float(np.linalg.norm(p_top1 - local_seed))
+                top2_seed_distance = (
+                    float(np.linalg.norm(p_top2 - local_seed))
+                    if p_top2 is not None else None)
                 top12_spatial_distance = (
                     float(np.linalg.norm(p_top1 - p_top2))
                     if p_top2 is not None else None
@@ -2927,6 +3571,9 @@ def main():
                     'group': group_key,
                     'group_label': group_label,
                     'query_index': int(best.queryIdx),
+                    'top1_train_index': int(best.trainIdx),
+                    'top2_train_index': (
+                        int(second.trainIdx) if second is not None else None),
                     'pL': p_left,
                     'top1': p_top1,
                     'top2': p_top2,
@@ -2939,6 +3586,12 @@ def main():
                     'pass_distance': bool(pass_distance),
                     'pass_ratio': bool(pass_ratio),
                     'pass_mutual': bool(pass_mutual),
+                    'top2_pass_distance': bool(
+                        second is not None
+                        and float(second.distance) < match_threshold),
+                    'top2_pass_mutual': bool(
+                        second is not None
+                        and reverse_best.get(second.trainIdx) == best.queryIdx),
                     'decision': decision,
                     'epi_distance': epi_distance,
                     'pass_epi': (
@@ -2947,6 +3600,13 @@ def main():
                     ),
                     'seed_distance': seed_distance,
                     'pass_seed': bool(seed_distance <= seed_limit),
+                    'top2_epi_distance': top2_epi_distance,
+                    'top2_pass_epi': (
+                        None if top2_epi_distance is None
+                        else bool(top2_epi_distance <= epi_limit)),
+                    'top2_seed_distance': top2_seed_distance,
+                    'translated_seed': translated_seed,
+                    'exact_h_seed': exact_h_seed,
                     'match_threshold': match_threshold,
                     'ratio_limit': ratio_limit,
                 }
@@ -2959,7 +3619,9 @@ def main():
             # map_from_gradient_group().
             global_good_count = sum(
                 record['decision'] == 'KNN_PASS' for record in group_records)
-            guided_triggered = global_good_count < min_group_inliers
+            guided_triggered = (
+                not top2_geometry_mode
+                and global_good_count < min_group_inliers)
             group_summary['guided_triggered'] = bool(guided_triggered)
             group_summary['guided_attempted'] = 0
             group_summary['guided_candidate_pass'] = 0
@@ -3133,15 +3795,137 @@ def main():
                 f"{group_summary['reject_mutual']}, "
                 f"d2=0:{group_summary['d2_zero']} | "
                 f"ratio {ratio_stats} | {sensitivity}")
+            global_rejects = {
+                'DIST': group_summary['reject_dist'],
+                'RATIO': group_summary['reject_ratio'],
+                'MUTUAL': group_summary['reject_mutual'],
+            }
+            dominant_gate, dominant_count = max(
+                global_rejects.items(), key=lambda item: item[1])
+            dominant_pct = (
+                100.0 * dominant_count / len(group_records)
+                if group_records else 0.0)
+            largest_text = (
+                f"{dominant_gate} {dominant_count}/{len(group_records)} "
+                f"({dominant_pct:.1f}%)"
+                if dominant_count > 0 else 'NONE (all KNN-pass)')
             print(
-                f"   [Descriptor Audit guided {group_label}] "
-                f"triggered={guided_triggered} "
-                f"(global_good={global_good_count} < "
-                f"min={min_group_inliers}), "
-                f"attempted={group_summary['guided_attempted']}, "
-                f"candidate_pass={group_summary['guided_candidate_pass']}, "
-                f"radius<={guided_radius:g}px, epi<={epi_limit:g}px, "
-                f"ratio<{guided_ratio_limit:.2f}")
+                f"   [Descriptor Audit bottleneck {group_label}] "
+                f"Global KNN first-fail: DIST={global_rejects['DIST']}, "
+                f"RATIO={global_rejects['RATIO']}, "
+                f"MUTUAL={global_rejects['MUTUAL']}; largest={largest_text}")
+            if top2_geometry_mode:
+                print(
+                    f"   [Descriptor Audit guided {group_label}] "
+                    "paused by Top2-Geo mode; no arbitrary local candidates")
+                top2_group_results[group_key] = build_top2_geometry_group(
+                    group_records, group_label, group_summary)
+            else:
+                print(
+                    f"   [Descriptor Audit guided {group_label}] "
+                    f"triggered={guided_triggered} "
+                    f"(global_good={global_good_count} < "
+                    f"min={min_group_inliers}), "
+                    f"attempted={group_summary['guided_attempted']}, "
+                    f"candidate_pass={group_summary['guided_candidate_pass']}, "
+                    f"radius<={guided_radius:g}px, epi<={epi_limit:g}px, "
+                    f"ratio<{guided_ratio_limit:.2f}")
+                if guided_triggered:
+                    guided_pool = sum(
+                        record['decision'] != 'KNN_PASS'
+                        for record in group_records)
+                    radius_nonempty = sum(
+                        record.get('guided_radius_candidate_count', 0) > 0
+                        for record in group_records)
+                    epi_nonempty = sum(
+                        record.get('guided_candidate_count', 0) > 0
+                        for record in group_records)
+                    guided_abs_pass = sum(
+                        record.get('guided_pass_distance') is True
+                        for record in group_records)
+                    guided_ratio_pass = sum(
+                        record.get('guided_candidate_pass') is True
+                        for record in group_records)
+                    guided_rejects = {}
+                    for record in group_records:
+                        decision = record.get('guided_decision')
+                        if (decision is not None
+                                and decision not in (
+                                    'GLOBAL_ALREADY_GOOD', 'NOT_TRIGGERED',
+                                    'CANDIDATE_PASS')):
+                            guided_rejects[decision] = (
+                                guided_rejects.get(decision, 0) + 1)
+                    reject_text = (
+                        ', '.join(
+                            f"{key}={value}"
+                            for key, value in sorted(guided_rejects.items()))
+                        or 'none')
+                    print(
+                        f"   [Guided gates {group_label}] "
+                        f"non-global={guided_pool} -> click<50="
+                        f"{group_summary['guided_attempted']} -> "
+                        f"radius-hit={radius_nonempty} -> "
+                        f"epi-hit={epi_nonempty} -> "
+                        f"abs-pass={guided_abs_pass} -> "
+                        f"ratio-pass={guided_ratio_pass}; "
+                        f"first-fail {reject_text}")
+
+        if top2_geometry_mode:
+            valid_top2_groups = [
+                (group_key, result)
+                for group_key, result in top2_group_results.items()
+                if result is not None
+            ]
+            if valid_top2_groups:
+                total_score = sum(
+                    max(float(result['score']), 1e-6)
+                    for _, result in valid_top2_groups)
+                mapped = sum(
+                    np.asarray(result['mapped'], dtype=np.float32)
+                    * max(float(result['score']), 1e-6)
+                    for _, result in valid_top2_groups
+                ) / total_score
+                top2_pts_a = np.vstack([
+                    result['ptsA'] for _, result in valid_top2_groups
+                ]).astype(np.float32)
+                top2_pts_b = np.vstack([
+                    result['ptsB'] for _, result in valid_top2_groups
+                ]).astype(np.float32)
+                top2_groups = np.concatenate([
+                    np.asarray(
+                        [group_key] * len(result['ptsA']), dtype=object)
+                    for group_key, result in valid_top2_groups
+                ])
+                valid_keys = {key for key, _ in valid_top2_groups}
+                if valid_keys == {'high', 'mid'}:
+                    top2_method = 'Grad-SIFT+Top2Geo+MidGradInterp'
+                elif 'mid' in valid_keys:
+                    top2_method = 'Grad-SIFT+Top2Geo+MidGrad'
+                else:
+                    top2_method = 'Grad-SIFT+Top2Geo+HighGrad'
+                audit['top2_geometry_result'] = {
+                    'm_pt': np.asarray(mapped, dtype=np.float32),
+                    'method': top2_method,
+                    'ptsA': top2_pts_a,
+                    'ptsB': top2_pts_b,
+                    'groups': top2_groups,
+                    'reject_reason': None,
+                }
+            else:
+                audit['top2_geometry_result'] = {
+                    'm_pt': None,
+                    'method': '',
+                    'ptsA': None,
+                    'ptsB': None,
+                    'groups': None,
+                    'reject_reason': (
+                        'Top2-Geo: HIGH/MID 均未通過支援點與 RANSAC 門檻'),
+                }
+
+        if top2_geometry_mode and audit['top2_geometry_result'] is not None:
+            final_pts_a = audit['top2_geometry_result']['ptsA']
+            final_pts_b = audit['top2_geometry_result']['ptsB']
+            final_groups = audit['top2_geometry_result']['groups']
 
         # Compare the global-KNN audit with the matcher output that actually
         # survived geometry/offset/RANSAC and participated in interpolation.
@@ -3188,7 +3972,11 @@ def main():
             support_index = int(same_group[nearest_pos])
             record['used_in_interpolation'] = True
             record['accepted_pR'] = accepted_right[support_index].copy()
-            if record['decision'] == 'KNN_PASS':
+            if (top2_geometry_mode
+                    and record.get('top2_geo_selected')
+                    and record.get('top2_geo_source') == 'TOP2_GEO_RESCUE'):
+                record['support_source'] = 'TOP2_GEO_RESCUE'
+            elif record['decision'] == 'KNN_PASS':
                 record['support_source'] = 'GLOBAL_KNN'
             else:
                 record['guided_rescue'] = True
@@ -3212,15 +4000,21 @@ def main():
             global_support_count = sum(
                 record['support_source'] == 'GLOBAL_KNN'
                 for record in group_records)
+            top2_geo_rescue_count = sum(
+                record['support_source'] == 'TOP2_GEO_RESCUE'
+                for record in group_records)
             audit['groups'].setdefault(group_key, {})[
                 'final_support_count'] = int(final_support_count)
             audit['groups'][group_key][
                 'guided_rescue_count'] = int(guided_rescue_count)
+            audit['groups'][group_key][
+                'top2_geo_rescue_count'] = int(top2_geo_rescue_count)
             print(
                 f"   [Descriptor Audit support {group_label}] "
                 f"final={final_support_count}, "
                 f"global={global_support_count}, "
-                f"guided_rescue={guided_rescue_count}")
+                f"guided_rescue={guided_rescue_count}, "
+                f"top2_geo_rescue={top2_geo_rescue_count}")
 
         if audit['records']:
             nearest = min(
@@ -3319,14 +4113,32 @@ def main():
                             left_bgr=locked_L
                         )
                     else:
-                        gs = run_grad_sift_matching_flow(
-                            snap_imgA_gray, cand['gray'], u, v, cand, KL,
-                            snap_view_state, orb, sift,
-                            locked_L, locked_R,
-                            left_spec_mask, right_spec_mask,
-                            is_best_cand=(cand['idx'] == current_cand['idx']),
-                            left_cache=left_cache
-                        )
+                        top2_geometry_mode = bool(
+                            snap_view_state.get('top2_geometry_rescue', False))
+                        with grad_matcher_config_lock:
+                            saved_guided_radius = getattr(
+                                stereo_algo, 'GRAD_SIFT_GUIDED_RADIUS_PX',
+                                GRAD_SIFT_GUIDED_RADIUS_PX)
+                            if top2_geometry_mode:
+                                # Keep the shared matcher untouched on disk.  A
+                                # negative radius makes its original local guided
+                                # candidate set empty for this Debug-only call.
+                                stereo_algo.GRAD_SIFT_GUIDED_RADIUS_PX = -1.0
+                                print(
+                                    "   [Top2-Geo] original Guided Fallback disabled; "
+                                    "ratio rejects use Global Top-1/Top-2 + exact H(pL)")
+                            try:
+                                gs = run_grad_sift_matching_flow(
+                                    snap_imgA_gray, cand['gray'], u, v, cand, KL,
+                                    snap_view_state, orb, sift,
+                                    locked_L, locked_R,
+                                    left_spec_mask, right_spec_mask,
+                                    is_best_cand=(cand['idx'] == current_cand['idx']),
+                                    left_cache=left_cache
+                                )
+                            finally:
+                                stereo_algo.GRAD_SIFT_GUIDED_RADIUS_PX = (
+                                    saved_guided_radius)
                         m_pt = gs['m_pt']
                         if gs['method']:
                             method = gs['method']
@@ -3341,7 +4153,9 @@ def main():
                     # for the displayed/best right frame.  This is deliberately
                     # outside the matcher and cannot alter good/inliers/m_pt.
                     if (not snap_view_state.get('use_improved_matching', False)
-                            and cand.get('idx') == current_cand.get('idx')
+                            and (cand.get('idx') == current_cand.get('idx')
+                                 or snap_view_state.get(
+                                     'top2_geometry_rescue', False))
                             and g_refA is not None and g_refB is not None):
                         _t_audit = time.perf_counter()
                         try:
@@ -3366,6 +4180,19 @@ def main():
                             }
                         t_prof['Descriptor audit'] = (
                             time.perf_counter() - _t_audit)
+                        if (snap_view_state.get('top2_geometry_rescue', False)
+                                and grad_descriptor_audit is not None):
+                            top2_result = grad_descriptor_audit.get(
+                                'top2_geometry_result')
+                            if top2_result is not None:
+                                m_pt = top2_result.get('m_pt')
+                                method = top2_result.get('method', '')
+                                g_ptsA = top2_result.get('ptsA')
+                                g_ptsB = top2_result.get('ptsB')
+                                g_groups = top2_result.get('groups')
+                                rt_bound_reject_reason = (
+                                    None if m_pt is not None
+                                    else top2_result.get('reject_reason'))
                 if (m_pt is None and snap_view_state['precise']):
                     _t_blk = time.perf_counter()
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
@@ -3861,6 +4688,68 @@ def main():
                 
         if res.get('trajectory') is not None:
             draw_trajectory_on_ui(res['trajectory'])
+
+        # Debug-only sparse block audit.  It consumes the already accepted
+        # support pairs and never feeds a decision back into matching/fusion.
+        if snap_vs.get('show_metric_blocks', False):
+            try:
+                block_pts_a = res.get('g_ptsA')
+                block_pts_b = res.get('g_ptsB')
+                block_pts_a = (
+                    np.empty((0, 2), dtype=np.float32) if block_pts_a is None
+                    else np.asarray(block_pts_a, dtype=np.float32).reshape(-1, 2))
+                block_pts_b = (
+                    np.empty((0, 2), dtype=np.float32) if block_pts_b is None
+                    else np.asarray(block_pts_b, dtype=np.float32).reshape(-1, 2))
+                block_count = min(len(block_pts_a), len(block_pts_b))
+                block_pts_a = block_pts_a[:block_count]
+                block_pts_b = block_pts_b[:block_count]
+                block_groups = res.get('g_groups')
+                if (block_groups is None
+                        or len(np.asarray(block_groups).reshape(-1)) != block_count):
+                    block_groups = np.asarray(['high'] * block_count, dtype=object)
+                else:
+                    block_groups = np.asarray(
+                        block_groups, dtype=object).reshape(-1)[:block_count]
+                res['debug_metric_block_audit'] = build_metric_block_audit(
+                    res, u, v, block_pts_a, block_pts_b, block_groups)
+                print_metric_block_audit(res['debug_metric_block_audit'])
+            except Exception as exc:
+                print(f"   [5mm Block Debug] unavailable: {exc}")
+                res['debug_metric_block_audit'] = {
+                    'available': False, 'reason': str(exc),
+                    'log': {
+                        'grid_source': 'error', 'selected_block': None,
+                        'status': 'UNAVAILABLE', 'read_only': True,
+                        'block_filter_applied': False,
+                    },
+                }
+
+        # Persist the exact plane source used by the height readout.  This is
+        # metadata only and does not feed back into any matching calculation.
+        res['shared_pattern_plane_diag'] = shared_height_plane_diag
+        res['height_reference_source'] = None
+        res['height_reference_signed_mm'] = None
+        res['height_display_mm'] = None
+        if (custom_plane_fitted and res.get('p3d') is not None
+                and custom_plane_n is not None and custom_plane_c is not None):
+            _height_signed = float(np.dot(
+                custom_plane_n, res['p3d'] - custom_plane_c))
+            res['height_reference_source'] = 'Custom Plane'
+            res['height_reference_signed_mm'] = _height_signed
+            res['height_display_mm'] = _height_signed
+        elif res.get('p3d') is not None:
+            _height_n, _height_c, _height_source = get_selected_height_plane()
+            if _height_n is not None and _height_c is not None:
+                _height_p3d = (
+                    res['p3d_best'] if res.get('p3d_best') is not None
+                    else res['p3d'])
+                _height_signed = float(np.dot(
+                    _height_n, _height_p3d - _height_c))
+                res['height_reference_source'] = _height_source
+                res['height_reference_signed_mm'] = _height_signed
+                res['height_display_mm'] = (
+                    _height_signed - DEFAULT_WOUND_HEIGHT_OFFSET_MM)
                 
         measure_results[current_cand['idx']] = res
         all_d = [r['d'] for r in measure_results.values() if r['d'] is not None]
@@ -3892,6 +4781,477 @@ def main():
         update_display(avg, summary)
     
     plane_dist_history = collections.deque(maxlen=15)
+
+    # ------------------------------------------------------------------
+    # Debug-only 5x5 mm physical block audit
+    # ------------------------------------------------------------------
+    def clear_metric_block_debug_artists():
+        for artist in debug_metric_block_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_metric_block_artists.clear()
+
+    def get_metric_grid_frame():
+        """Return origin/x/y/normal for a physical grid in left-camera mm."""
+        pose = None
+        valid_poses = video_data.get('valid_poses', {})
+        try:
+            pose = valid_poses.get(int(locked_L_idx))
+        except (TypeError, ValueError, AttributeError):
+            pose = None
+        if pose is not None and len(pose) == 2:
+            try:
+                R_marker = np.asarray(pose[0], dtype=np.float64).reshape(3, 3)
+                origin = np.asarray(pose[1], dtype=np.float64).reshape(3)
+                x_axis = R_marker[:, 0].copy()
+                y_axis = R_marker[:, 1].copy()
+                if (np.all(np.isfinite(R_marker))
+                        and np.all(np.isfinite(origin))):
+                    x_norm = float(np.linalg.norm(x_axis))
+                    if x_norm > 1e-9:
+                        x_axis /= x_norm
+                        y_axis -= x_axis * float(np.dot(x_axis, y_axis))
+                        y_norm = float(np.linalg.norm(y_axis))
+                        if y_norm > 1e-9:
+                            y_axis /= y_norm
+                            normal = np.cross(x_axis, y_axis)
+                            n_norm = float(np.linalg.norm(normal))
+                            if n_norm > 1e-9:
+                                normal /= n_norm
+                                if float(np.dot(normal, R_marker[:, 2])) < 0.0:
+                                    y_axis = -y_axis
+                                    normal = -normal
+                                return {
+                                    'origin': origin, 'x_axis': x_axis,
+                                    'y_axis': y_axis, 'normal': normal,
+                                    'source': 'marker-pose',
+                                }
+            except (TypeError, ValueError):
+                pass
+
+        # Pose axes are preferable because they keep block IDs stable.  If the
+        # temporal anchor pose is unavailable, retain metric scale with an
+        # arbitrary but deterministic basis on the existing reference plane.
+        plane_n = current_cand.get('plane_n')
+        plane_c = current_cand.get('plane_c')
+        if plane_n is None or plane_c is None:
+            return None
+        try:
+            normal = np.asarray(plane_n, dtype=np.float64).reshape(3)
+            origin = np.asarray(plane_c, dtype=np.float64).reshape(3)
+        except (TypeError, ValueError):
+            return None
+        n_norm = float(np.linalg.norm(normal))
+        if (n_norm <= 1e-9 or not np.all(np.isfinite(normal))
+                or not np.all(np.isfinite(origin))):
+            return None
+        normal /= n_norm
+        x_axis = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        x_axis -= normal * float(np.dot(normal, x_axis))
+        if float(np.linalg.norm(x_axis)) <= 1e-6:
+            x_axis = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+            x_axis -= normal * float(np.dot(normal, x_axis))
+        x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+        y_axis = np.cross(normal, x_axis)
+        y_axis /= max(float(np.linalg.norm(y_axis)), 1e-12)
+        return {
+            'origin': origin, 'x_axis': x_axis,
+            'y_axis': y_axis, 'normal': normal,
+            'source': 'plane-basis-fallback',
+        }
+
+    def metric_pixel_to_grid_xy(point_uv, grid_frame):
+        """Intersect an undistorted left-image ray with the metric grid plane."""
+        try:
+            point_uv = np.asarray(point_uv, dtype=np.float64).reshape(2)
+            ray = np.linalg.inv(np.asarray(KL, dtype=np.float64)) @ np.array(
+                [point_uv[0], point_uv[1], 1.0], dtype=np.float64)
+            normal = grid_frame['normal']
+            denom = float(np.dot(normal, ray))
+            if abs(denom) <= 1e-9:
+                return None, None
+            scale = float(np.dot(normal, grid_frame['origin']) / denom)
+            if not np.isfinite(scale) or scale <= 0.0:
+                return None, None
+            point_3d = ray * scale
+            delta = point_3d - grid_frame['origin']
+            xy = np.array([
+                np.dot(delta, grid_frame['x_axis']),
+                np.dot(delta, grid_frame['y_axis']),
+            ], dtype=np.float64)
+            return xy, point_3d
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            return None, None
+
+    def metric_grid_xy_to_left_3d(xy_points, grid_frame):
+        xy_points = np.asarray(xy_points, dtype=np.float64).reshape(-1, 2)
+        return (
+            grid_frame['origin'][None, :]
+            + xy_points[:, 0:1] * grid_frame['x_axis'][None, :]
+            + xy_points[:, 1:2] * grid_frame['y_axis'][None, :]
+        )
+
+    def project_metric_points(points_left_3d, cand, right=False):
+        points = np.asarray(points_left_3d, dtype=np.float64).reshape(-1, 3)
+        K_proj = np.asarray(KL, dtype=np.float64)
+        if right:
+            R_rel = np.asarray(cand['R_rel'], dtype=np.float64).reshape(3, 3)
+            t_rel = np.asarray(cand['t_rel'], dtype=np.float64).reshape(3)
+            points = (R_rel @ points.T).T + t_rel[None, :]
+            K_proj = np.asarray(cand['K_R'], dtype=np.float64).reshape(3, 3)
+        if len(points) == 0 or np.any(points[:, 2] <= 1e-6):
+            return None
+        projected_h = (K_proj @ points.T).T
+        if np.any(np.abs(projected_h[:, 2]) <= 1e-9):
+            return None
+        projected = projected_h[:, :2] / projected_h[:, 2:3]
+        return projected if np.all(np.isfinite(projected)) else None
+
+    def summarize_metric_height_samples(samples, tolerance_mm):
+        if not samples:
+            return {
+                'count': 0, 'high_count': 0, 'mid_count': 0,
+                'median': None, 'mad': None, 'p10': None, 'p90': None,
+                'span': None, 'status': 'INSUFFICIENT',
+            }
+        heights = np.asarray([sample['height'] for sample in samples], dtype=np.float64)
+        median = float(np.median(heights))
+        mad = float(np.median(np.abs(heights - median)))
+        p10, p90 = np.percentile(heights, [10.0, 90.0])
+        span = float(p90 - p10)
+        if len(samples) < DEBUG_METRIC_BLOCK_MIN_POINTS:
+            status = 'INSUFFICIENT'
+        elif span <= tolerance_mm:
+            status = 'STABLE'
+        elif span <= 2.0 * tolerance_mm:
+            status = 'CAUTION'
+        else:
+            status = 'INCONSISTENT'
+        return {
+            'count': int(len(samples)),
+            'high_count': int(sum(sample['group'] != 'mid' for sample in samples)),
+            'mid_count': int(sum(sample['group'] == 'mid' for sample in samples)),
+            'median': median, 'mad': mad,
+            'p10': float(p10), 'p90': float(p90),
+            'span': span, 'status': status,
+        }
+
+    def build_metric_block_audit(res, u, v, pts_a, pts_b, pair_groups):
+        """Build a read-only sparse-depth audit from final matcher supports."""
+        grid_frame = get_metric_grid_frame()
+        if grid_frame is None:
+            return {
+                'available': False,
+                'reason': 'marker pose / reference plane unavailable',
+                'log': {
+                    'grid_source': 'unavailable', 'selected_block': None,
+                    'status': 'UNAVAILABLE',
+                },
+            }
+        click_xy, click_plane_point = metric_pixel_to_grid_xy((u, v), grid_frame)
+        if click_xy is None:
+            return {
+                'available': False, 'reason': 'click ray is parallel to grid plane',
+                'log': {
+                    'grid_source': grid_frame['source'], 'selected_block': None,
+                    'status': 'UNAVAILABLE',
+                },
+            }
+
+        block_size = float(DEBUG_METRIC_BLOCK_SIZE_MM)
+        selected_block = (
+            int(np.floor(click_xy[0] / block_size)),
+            int(np.floor(click_xy[1] / block_size)),
+        )
+        pts_a = np.asarray(pts_a, dtype=np.float32).reshape(-1, 2)
+        pts_b = np.asarray(pts_b, dtype=np.float32).reshape(-1, 2)
+        pair_count = min(len(pts_a), len(pts_b))
+        pts_a, pts_b = pts_a[:pair_count], pts_b[:pair_count]
+        pair_groups = np.asarray(pair_groups, dtype=object).reshape(-1)
+        if len(pair_groups) != pair_count:
+            pair_groups = np.asarray(['high'] * pair_count, dtype=object)
+
+        p3d_reference = res.get('p3d_best')
+        if p3d_reference is None:
+            p3d_reference = res.get('p3d')
+        if p3d_reference is not None:
+            try:
+                ref_z = float(np.asarray(p3d_reference).reshape(3)[2])
+            except (TypeError, ValueError):
+                ref_z = float(click_plane_point[2])
+        else:
+            ref_z = float(click_plane_point[2])
+        baseline = float(np.linalg.norm(
+            np.asarray(current_cand['t_rel'], dtype=np.float64).reshape(3)))
+        focal = 0.5 * (float(KL[0, 0]) + float(KL[1, 1]))
+        sigma_z = (
+            (ref_z * ref_z / (focal * baseline))
+            * float(DEBUG_METRIC_BLOCK_SIGMA_D_PX)
+            if ref_z > 0.0 and focal > 0.0 and baseline > 1e-6 else 0.0)
+        tolerance_mm = max(
+            float(DEBUG_METRIC_BLOCK_BASE_TOL_MM),
+            float(DEBUG_METRIC_BLOCK_SIGMA_MULT) * sigma_z)
+
+        samples = []
+        support_count_centered = 0
+        half_block = block_size * 0.5
+        R_rel = np.asarray(current_cand['R_rel'], dtype=np.float64).reshape(3, 3)
+        t_rel = np.asarray(current_cand['t_rel'], dtype=np.float64).reshape(3)
+        for index in range(pair_count):
+            support_xy, _ = metric_pixel_to_grid_xy(pts_a[index], grid_frame)
+            if support_xy is None:
+                continue
+            in_centered_window = bool(
+                abs(float(support_xy[0] - click_xy[0])) <= half_block
+                and abs(float(support_xy[1] - click_xy[1])) <= half_block)
+            if in_centered_window:
+                support_count_centered += 1
+            try:
+                support_3d = triangulate_point_3d(
+                    pts_a[index], pts_b[index], KL, current_cand['K_R'],
+                    current_cand['R_rel'], current_cand['t_rel'],
+                    F=current_cand.get('F'))
+            except Exception:
+                continue
+            support_3d = np.asarray(support_3d, dtype=np.float64).reshape(3)
+            support_right_3d = R_rel @ support_3d + t_rel
+            if (not np.all(np.isfinite(support_3d))
+                    or support_3d[2] <= 0.0
+                    or support_3d[2] > MAX_DEPTH_MM
+                    or support_right_3d[2] <= 0.0):
+                continue
+            proj_left = project_metric_points([support_3d], current_cand, right=False)
+            proj_right = project_metric_points([support_3d], current_cand, right=True)
+            if proj_left is None or proj_right is None:
+                continue
+            reproj_rms = float(np.sqrt(0.5 * (
+                np.sum((proj_left[0] - pts_a[index]) ** 2)
+                + np.sum((proj_right[0] - pts_b[index]) ** 2))))
+            if reproj_rms > DEBUG_METRIC_BLOCK_MAX_REPROJ_PX:
+                continue
+            cell = (
+                int(np.floor(support_xy[0] / block_size)),
+                int(np.floor(support_xy[1] / block_size)),
+            )
+            samples.append({
+                'index': int(index), 'cell': cell,
+                'xy': support_xy, 'p3d': support_3d,
+                'height': float(np.dot(
+                    grid_frame['normal'], support_3d - grid_frame['origin'])),
+                'group': str(pair_groups[index]),
+                'reproj_rms': reproj_rms,
+                'in_centered_window': in_centered_window,
+            })
+
+        samples_by_cell = {}
+        for sample in samples:
+            samples_by_cell.setdefault(sample['cell'], []).append(sample)
+        block_summaries = {
+            cell: summarize_metric_height_samples(cell_samples, tolerance_mm)
+            for cell, cell_samples in samples_by_cell.items()
+        }
+        centered_samples = [
+            sample for sample in samples if sample['in_centered_window']]
+        centered_summary = summarize_metric_height_samples(
+            centered_samples, tolerance_mm)
+        selected_summary = block_summaries.get(
+            selected_block,
+            summarize_metric_height_samples([], tolerance_mm))
+
+        a_height = None
+        a_delta = None
+        if p3d_reference is not None:
+            try:
+                p3d_reference = np.asarray(p3d_reference, dtype=np.float64).reshape(3)
+                if np.all(np.isfinite(p3d_reference)):
+                    a_height = float(np.dot(
+                        grid_frame['normal'],
+                        p3d_reference - grid_frame['origin']))
+            except (TypeError, ValueError):
+                a_height = None
+        if a_height is not None and centered_summary['median'] is not None:
+            a_delta = abs(a_height - centered_summary['median'])
+        status = centered_summary['status']
+        if (status != 'INSUFFICIENT' and a_delta is not None
+                and a_delta > 2.0 * tolerance_mm):
+            status = 'A_OUTLIER'
+
+        cells = []
+        radius = int(DEBUG_METRIC_BLOCK_GRID_RADIUS)
+        for cell_y in range(selected_block[1] - radius, selected_block[1] + radius + 1):
+            for cell_x in range(selected_block[0] - radius, selected_block[0] + radius + 1):
+                x0, y0 = cell_x * block_size, cell_y * block_size
+                corners_xy = np.array([
+                    [x0, y0], [x0 + block_size, y0],
+                    [x0 + block_size, y0 + block_size], [x0, y0 + block_size],
+                ], dtype=np.float64)
+                corners_3d = metric_grid_xy_to_left_3d(corners_xy, grid_frame)
+                left_poly = project_metric_points(corners_3d, current_cand, right=False)
+                right_poly = project_metric_points(corners_3d, current_cand, right=True)
+                if left_poly is None or right_poly is None:
+                    continue
+                cell_key = (cell_x, cell_y)
+                cells.append({
+                    'cell': cell_key, 'left': left_poly, 'right': right_poly,
+                    'summary': block_summaries.get(
+                        cell_key, summarize_metric_height_samples([], tolerance_mm)),
+                    'selected': cell_key == selected_block,
+                })
+
+        centered_xy = np.array([
+            [click_xy[0] - half_block, click_xy[1] - half_block],
+            [click_xy[0] + half_block, click_xy[1] - half_block],
+            [click_xy[0] + half_block, click_xy[1] + half_block],
+            [click_xy[0] - half_block, click_xy[1] + half_block],
+        ], dtype=np.float64)
+        centered_3d = metric_grid_xy_to_left_3d(centered_xy, grid_frame)
+        centered_left = project_metric_points(centered_3d, current_cand, right=False)
+        centered_right = project_metric_points(centered_3d, current_cand, right=True)
+
+        selected_cell_entry = next(
+            (cell for cell in cells if cell['selected']), None)
+        projected_size_left = None
+        projected_size_right = None
+        if selected_cell_entry is not None:
+            def polygon_metric_size(poly):
+                widths = [
+                    np.linalg.norm(poly[1] - poly[0]),
+                    np.linalg.norm(poly[2] - poly[3]),
+                ]
+                heights = [
+                    np.linalg.norm(poly[3] - poly[0]),
+                    np.linalg.norm(poly[2] - poly[1]),
+                ]
+                return float(np.mean(widths)), float(np.mean(heights))
+            projected_size_left = polygon_metric_size(selected_cell_entry['left'])
+            projected_size_right = polygon_metric_size(selected_cell_entry['right'])
+
+        def rounded(value, digits=3):
+            return None if value is None else round(float(value), digits)
+
+        log_data = {
+            'read_only': True,
+            'block_filter_applied': False,
+            'block_size_mm': block_size,
+            'grid_source': grid_frame['source'],
+            'selected_block': [int(selected_block[0]), int(selected_block[1])],
+            'click_grid_xy_mm': [rounded(click_xy[0]), rounded(click_xy[1])],
+            'projected_size_left_px': (
+                None if projected_size_left is None else
+                [rounded(projected_size_left[0], 2), rounded(projected_size_left[1], 2)]),
+            'projected_size_right_px': (
+                None if projected_size_right is None else
+                [rounded(projected_size_right[0], 2), rounded(projected_size_right[1], 2)]),
+            'support_count': int(support_count_centered),
+            'valid_3d_count': int(centered_summary['count']),
+            'high_count': int(centered_summary['high_count']),
+            'mid_count': int(centered_summary['mid_count']),
+            'median_height_mm': rounded(centered_summary['median']),
+            'mad_mm': rounded(centered_summary['mad']),
+            'robust_span_mm': rounded(centered_summary['span']),
+            'tolerance_mm': rounded(tolerance_mm),
+            'sigma_z_mm': rounded(sigma_z),
+            'a_height_mm': rounded(a_height),
+            'a_delta_mm': rounded(a_delta),
+            'status': status,
+        }
+        return {
+            'available': True, 'grid_frame': grid_frame,
+            'selected_block': selected_block,
+            'click_xy': click_xy, 'cells': cells,
+            'centered_left': centered_left, 'centered_right': centered_right,
+            'centered_summary': centered_summary,
+            'selected_summary': selected_summary,
+            'tolerance_mm': tolerance_mm, 'a_delta': a_delta,
+            'status': status, 'samples': samples, 'log': log_data,
+        }
+
+    def print_metric_block_audit(audit):
+        log_data = audit.get('log', {}) if isinstance(audit, dict) else {}
+        if not audit or not audit.get('available'):
+            print(
+                f"   [5mm Block Debug] unavailable: "
+                f"{audit.get('reason', 'unknown') if isinstance(audit, dict) else 'unknown'}")
+            return
+        print(
+            f"   [5mm Block Debug] source={log_data.get('grid_source')} | "
+            f"block={log_data.get('selected_block')} | "
+            f"L_size={log_data.get('projected_size_left_px')}px | "
+            f"R_size={log_data.get('projected_size_right_px')}px")
+        print(
+            f"   [5mm Block Debug A-window] support={log_data.get('support_count')} | "
+            f"valid3D={log_data.get('valid_3d_count')} | "
+            f"H/M={log_data.get('high_count')}/{log_data.get('mid_count')} | "
+            f"median={log_data.get('median_height_mm')}mm | "
+            f"MAD={log_data.get('mad_mm')}mm | "
+            f"P90-P10={log_data.get('robust_span_mm')}mm | "
+            f"tol={log_data.get('tolerance_mm')}mm | "
+            f"A_delta={log_data.get('a_delta_mm')}mm | "
+            f"status={log_data.get('status')} | read_only=True")
+
+    def render_metric_block_audit(audit):
+        clear_metric_block_debug_artists()
+        if (not view_state.get('show_metric_blocks', False)
+                or not isinstance(audit, dict) or not audit.get('available')):
+            return
+        status_colors = {
+            'STABLE': '#00DD66', 'CAUTION': '#FFCC00',
+            'INCONSISTENT': '#FF3333', 'A_OUTLIER': '#FF3333',
+            'INSUFFICIENT': '#888888',
+        }
+        for cell in audit.get('cells', []):
+            cell_status = cell['summary'].get('status', 'INSUFFICIENT')
+            color = status_colors.get(cell_status, '#888888')
+            for axis, key in ((ax_debug_A, 'left'), (ax_debug_B, 'right')):
+                patch = Polygon(
+                    cell[key], closed=True,
+                    facecolor=color, edgecolor=color,
+                    alpha=0.13, linewidth=0.9, zorder=4)
+                axis.add_patch(patch)
+                debug_metric_block_artists.append(patch)
+                if cell.get('selected'):
+                    outline = Polygon(
+                        cell[key], closed=True, fill=False,
+                        edgecolor='white', linewidth=1.8, zorder=7)
+                    axis.add_patch(outline)
+                    debug_metric_block_artists.append(outline)
+        for axis, poly in (
+                (ax_debug_A, audit.get('centered_left')),
+                (ax_debug_B, audit.get('centered_right'))):
+            if poly is not None:
+                window_outline = Polygon(
+                    poly, closed=True, fill=False, edgecolor='#00FFFF',
+                    linestyle=':', linewidth=1.5, zorder=7)
+                axis.add_patch(window_outline)
+                debug_metric_block_artists.append(window_outline)
+        selected = next(
+            (cell for cell in audit.get('cells', []) if cell.get('selected')),
+            None)
+        if selected is not None:
+            center_left = np.mean(selected['left'], axis=0)
+            label = ax_debug_A.text(
+                center_left[0], center_left[1],
+                f"5mm {audit.get('status', 'N/A')}",
+                color='white', fontsize=6.5, fontweight='bold',
+                ha='center', va='center', zorder=8,
+                bbox=dict(facecolor='black', alpha=0.55, edgecolor='none', pad=1.0))
+            debug_metric_block_artists.append(label)
+
+    def ensure_metric_block_audit(res, u, v, pts_a, pts_b, pair_groups,
+                                  announce=False):
+        audit = res.get('debug_metric_block_audit')
+        if not isinstance(audit, dict):
+            audit = build_metric_block_audit(
+                res, u, v, pts_a, pts_b, pair_groups)
+            res['debug_metric_block_audit'] = audit
+            announce = True
+        debug_metric_block_state['last_audit'] = audit
+        if announce:
+            print_metric_block_audit(audit)
+        render_metric_block_audit(audit)
+        return audit
 
     def select_grad_descriptor_audit(index=None, screen_xy=None,
                                      announce=False, refresh=False):
@@ -3967,6 +5327,22 @@ def main():
         dbg_audit_local_seed_B.set_offsets(
             [local_seed] if local_seed is not None else empty)
 
+        # The lower-right yellow line follows the reference selected in the
+        # lower-left Debug panel.  It is this pL's own epipolar line, not the
+        # line of the original measurement click.
+        if current_cand.get('F') is not None:
+            try:
+                p0_selected, p1_selected = epipolar_line(
+                    current_cand['F'],
+                    (float(p_left[0]), float(p_left[1])), w)
+                dbg_epi_line.set_data(
+                    [p0_selected[0], p1_selected[0]],
+                    [p0_selected[1], p1_selected[1]])
+            except Exception:
+                dbg_epi_line.set_data([], [])
+        else:
+            dbg_epi_line.set_data([], [])
+
         top1_line = ConnectionPatch(
             xyA=p_left, xyB=p_top1,
             coordsA='data', coordsB='data',
@@ -3983,6 +5359,17 @@ def main():
                 alpha=0.8, zorder=9)
             ax_debug_B.add_artist(top2_line)
             debug_audit_artists.append(top2_line)
+        accepted_pR_for_line = record.get('accepted_pR')
+        if (record.get('support_source') == 'TOP2_GEO_RESCUE'
+                and accepted_pR_for_line is not None):
+            top2_selected_line = ConnectionPatch(
+                xyA=p_left,
+                xyB=np.asarray(accepted_pR_for_line, dtype=np.float32),
+                coordsA='data', coordsB='data',
+                axesA=ax_debug_A, axesB=ax_debug_B,
+                color='#FFD700', lw=2.4, alpha=1.0, zorder=11)
+            ax_debug_B.add_artist(top2_selected_line)
+            debug_audit_artists.append(top2_selected_line)
 
         d2_text = (
             'N/A' if record.get('d2') is None
@@ -4030,7 +5417,10 @@ def main():
                 f"({accepted_pR[0]:.1f},{accepted_pR[1]:.1f})")
         else:
             support_text = support_source
-        if record.get('guided_rescue'):
+        if support_source == 'TOP2_GEO_RESCUE':
+            geometry_role = (
+                'ratio rejected; exact H(pL) selected Global Top1/Top2')
+        elif record.get('guided_rescue'):
             geometry_role = (
                 'global Top1 diagnostic; guided used the final R below')
         elif record.get('decision') == 'KNN_PASS':
@@ -4040,6 +5430,23 @@ def main():
         ratio_limit = float(record.get('ratio_limit', 0.78))
         match_threshold = float(record.get('match_threshold', 0.0))
         guided_detail = ''
+        if support_source == 'TOP2_GEO_RESCUE':
+            selected_rank = record.get('top2_geo_rank', 'N/A')
+            geom_dist = record.get('top2_geo_geom_dist')
+            geom_dist_text = (
+                'N/A' if geom_dist is None else f'{float(geom_dist):.2f}px')
+            selected_pt = record.get('top2_geo_selected_pR')
+            selected_pt_text = (
+                'N/A' if selected_pt is None
+                else f'({selected_pt[0]:.1f},{selected_pt[1]:.1f})')
+            guided_detail += (
+                f"\nTOP2-GEO: selected {selected_rank}={selected_pt_text}; "
+                f"Hdist={geom_dist_text}/"
+                f"{TOP2_GEOMETRY_MAX_DIST_PX:g}px")
+        elif record.get('top2_geo_reject_stage'):
+            guided_detail += (
+                f"\nTOP2-GEO rejected at "
+                f"{record.get('top2_geo_reject_stage')}")
         if record.get('guided_triggered'):
             guided_decision = record.get('guided_decision', 'N/A')
             if record.get('guided_attempted'):
@@ -4087,7 +5494,7 @@ def main():
             + guided_detail
             + f"\nfinal interpolation support: {support_text}"
             + "\nlime circle=Top1, red square=Top2, magenta x=local seed; "
-              "guided fallback is separate")
+              "gold line=Top2-Geo selection; yellow line=selected pL epiline")
 
         if announce:
             print(
@@ -4100,6 +5507,14 @@ def main():
                 f"abs={abs_text}, Lowe={ratio_gate_text}, "
                 f"mutual={mutual_text}, decision={record['decision']}, "
                 f"support={support_source}")
+            if support_source == 'TOP2_GEO_RESCUE' and accepted_pR is not None:
+                print(
+                    f"   [Descriptor Audit TOP2_GEO_RESCUE] "
+                    f"#{record['audit_index']:03d} {record['group_label']} "
+                    f"selected={record.get('top2_geo_rank')} "
+                    f"R=({accepted_pR[0]:.1f},{accepted_pR[1]:.1f}), "
+                    f"Hdist={float(record.get('top2_geo_geom_dist', float('nan'))):.2f}px; "
+                    "this point participated in Grad-SIFT interpolation")
             if record.get('guided_rescue') and accepted_pR is not None:
                 guided_top1 = record.get('guided_top1')
                 guided_top2 = record.get('guided_top2')
@@ -4192,6 +5607,7 @@ def main():
             except Exception:
                 pass
         debug_pair_artists.clear()
+        debug_homography_residual_artists.clear()
 
         ref_a = as_points(res.get('g_refA'))
         ref_b = as_points(res.get('g_refB'))
@@ -4218,6 +5634,22 @@ def main():
         dbg_inlier_mid_A.set_offsets(in_a_mid)
         dbg_inlier_high_B.set_offsets(in_b_high)
         dbg_inlier_mid_B.set_offsets(in_b_mid)
+
+        metric_block_audit = None
+        if view_state.get('show_metric_blocks', False):
+            try:
+                metric_block_audit = ensure_metric_block_audit(
+                    res, u, v, pts_a, pts_b, pair_groups,
+                    announce=False)
+            except Exception as exc:
+                clear_metric_block_debug_artists()
+                metric_block_audit = {
+                    'available': False, 'reason': str(exc),
+                    'log': {'status': 'UNAVAILABLE'},
+                }
+                print(f"   [5mm Block Debug] overlay unavailable: {exc}")
+        else:
+            clear_metric_block_debug_artists()
 
         click_pt = np.array([float(u), float(v)], dtype=np.float32)
         dbg_click_A.set_offsets([click_pt])
@@ -4299,6 +5731,8 @@ def main():
         )
         dbg_pred_B.set_offsets(
             predicted_b[valid_pred] if np.any(valid_pred) else empty)
+        dbg_pred_B.set_visible(
+            view_state.get('show_homography_residual', True))
 
         # Accepted correspondences are numbered consistently in both zoomed
         # panels.  Only the nearest 30 labels are drawn to prevent text clutter.
@@ -4320,8 +5754,11 @@ def main():
                 residual_line, = ax_debug_B.plot(
                     [predicted_b[index, 0], point_b[0]],
                     [predicted_b[index, 1], point_b[1]],
-                    color='#FF00FF', lw=0.75, alpha=0.65, zorder=5)
+                    color='#FF00FF', lw=0.75, alpha=0.65, zorder=5,
+                    visible=view_state.get(
+                        'show_homography_residual', True))
                 debug_pair_artists.append(residual_line)
+                debug_homography_residual_artists.append(residual_line)
             if index in label_ids:
                 label_a = ax_debug_A.text(
                     point_a[0] + 1.2, point_a[1] - 1.2, str(index),
@@ -4435,6 +5872,15 @@ def main():
             f"accepted H/M={high_count}/{mid_count}\n"
             f"support hull={hull_state}, area={hull_area:.1f}px² | "
             "cyan=High, orange=Mid")
+        if isinstance(metric_block_audit, dict):
+            block_log = metric_block_audit.get('log', {})
+            if metric_block_audit.get('available'):
+                base_left_text += (
+                    f"\n5mm grid={block_log.get('grid_source')} | "
+                    f"block={block_log.get('selected_block')} | "
+                    f"Lpx={block_log.get('projected_size_left_px')}")
+            else:
+                base_left_text += "\n5mm grid unavailable"
         if isinstance(audit, dict):
             ratio_limit = float(audit.get('ratio_limit', 0.78))
             group_bits = []
@@ -4453,11 +5899,13 @@ def main():
                     'final_support_count', 0))
                 guided_count = int(group_summary.get(
                     'guided_rescue_count', 0))
+                top2_geo_count = int(group_summary.get(
+                    'top2_geo_rescue_count', 0))
                 group_bits.append(
                     f"{short_name} Lowe-stage<{ratio_limit:.2f}:"
                     f"{ratio_pass}/{ratio_reached}, med={median_text}, "
                     f"d2=0:{d2_zero}, support={support_count}"
-                    f"(guided={guided_count})")
+                    f"(guided={guided_count}, top2geo={top2_geo_count})")
             if group_bits:
                 base_left_text += "\n" + "\n".join(group_bits)
         raw_text = "None" if raw_pt is None else f"({raw_pt[0]:.1f},{raw_pt[1]:.1f})"
@@ -4468,6 +5916,14 @@ def main():
             f"raw→final={shift_text}\n"
             "purple +=seed/circles=H(pL), white diamond=raw, green x=final, "
             "green dashed=matched left hull")
+        if isinstance(metric_block_audit, dict) and metric_block_audit.get('available'):
+            block_log = metric_block_audit.get('log', {})
+            base_right_text += (
+                f"\n5mm A-window n={block_log.get('valid_3d_count')} "
+                f"H/M={block_log.get('high_count')}/{block_log.get('mid_count')} | "
+                f"med/MAD/span={block_log.get('median_height_mm')}/"
+                f"{block_log.get('mad_mm')}/{block_log.get('robust_span_mm')}mm | "
+                f"AΔ={block_log.get('a_delta_mm')} => {block_log.get('status')}")
         debug_audit_state['audit'] = audit
         debug_audit_state['records'] = (
             list(audit.get('records', []))
@@ -4645,12 +6101,7 @@ def main():
                     p_dist_str = f"\nWound Height (Custom Plane): {p_dist:.1f}mm"
             elif res['p3d'] is not None:
                 # 與平面同鏈: 高度用最優對的 p3d (平面即由最優對 RT 三角化)，誤差相消才成立
-                _use_pose_plane = (
-                    height_plane_state['use_pose_plane']
-                    and pose_height_plane_n is not None
-                    and pose_height_plane_c is not None)
-                _height_plane_n = pose_height_plane_n if _use_pose_plane else legacy_height_plane_n
-                _height_plane_c = pose_height_plane_c if _use_pose_plane else legacy_height_plane_c
+                _height_plane_n, _height_plane_c, _plane_label = get_selected_height_plane()
                 if _height_plane_n is not None and _height_plane_c is not None:
                     _p3d_plane = res['p3d_best'] if res.get('p3d_best') is not None else res['p3d']
                     p_dist = float(np.dot(_height_plane_n, _p3d_plane - _height_plane_c))
@@ -4660,7 +6111,6 @@ def main():
                     else:
                         plane_dist_history.clear()
                         display_wound_height = p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM
-                    _plane_label = "Marker Pose Plane" if _use_pose_plane else "Legacy Plane"
                     p_dist_str = f"\nWound Height ({_plane_label}): {display_wound_height:.1f}mm"
             
             if res['depth'] is not None:
@@ -4959,8 +6409,31 @@ def main():
     ax_btn_rt_sift = fig.add_axes([0.88, control_row_y[3], 0.08, control_h])
     btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
 
-    ax_btn_height_plane = fig.add_axes([0.58, control_row_y[4], 0.18, control_h])
-    btn_height_plane = Button(ax_btn_height_plane, "Height Plane: Legacy", **btn_style)
+    ax_btn_height_plane = fig.add_axes([0.58, control_row_y[4], 0.12, control_h])
+    btn_height_plane = Button(ax_btn_height_plane, "Height: Legacy", **btn_style)
+
+    ax_btn_metric_blocks = fig.add_axes([0.88, control_row_y[4], 0.08, control_h])
+    btn_metric_blocks = Button(
+        ax_btn_metric_blocks,
+        "5mm Grid: On" if view_state['show_metric_blocks'] else "5mm Grid: Off",
+        **btn_style)
+
+    ax_btn_shared_plane = fig.add_axes([0.58, control_row_y[5], 0.12, control_h])
+    btn_shared_plane = Button(ax_btn_shared_plane, "Shared: Off", **btn_style)
+
+    ax_btn_top2_geo = fig.add_axes([0.71, control_row_y[5], 0.12, control_h])
+    btn_top2_geo = Button(
+        ax_btn_top2_geo,
+        "Top2Geo: On" if view_state['top2_geometry_rescue']
+        else "Top2Geo: Off",
+        **btn_style)
+
+    ax_btn_h_residual = fig.add_axes([0.84, control_row_y[5], 0.12, control_h])
+    btn_h_residual = Button(
+        ax_btn_h_residual,
+        "H Residual: On" if view_state['show_homography_residual']
+        else "H Residual: Off",
+        **btn_style)
 
     wound_z_offset = 0.0
     # 原本位於左下角，會壓到新的 Debug 資訊列；移入右側控制區空位。
@@ -4986,7 +6459,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(7)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -5001,7 +6474,7 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
@@ -5029,6 +6502,22 @@ def main():
         btn_mid_grad_pts.label.set_text("MidPts: On" if visible else "MidPts: Off")
         for artist in (scatter_mid_grad_ref_A, scatter_mid_grad_ref_B, scatter_mid_grad_inject, scatter_mid_grad_match):
             artist.set_visible(visible)
+        request_blit_refresh()
+
+    def on_metric_blocks_toggle(event):
+        view_state['show_metric_blocks'] = not view_state['show_metric_blocks']
+        visible = view_state['show_metric_blocks']
+        btn_metric_blocks.label.set_text(
+            "5mm Grid: On" if visible else "5mm Grid: Off")
+        res = measure_results.get(current_cand['idx'])
+        if last_click is not None and res is not None:
+            update_grad_match_debug_views(
+                res, float(last_click[0]), float(last_click[1]))
+        else:
+            clear_metric_block_debug_artists()
+        print(
+            f"[5mm Block Debug] {'enabled' if visible else 'disabled'}; "
+            "read_only=True, block_filter_applied=False")
         request_blit_refresh()
 
     def on_wound_toggle(event):
@@ -5282,13 +6771,28 @@ def main():
     btn_rt_sift.on_clicked(on_rt_sift_toggle)
 
     def on_height_plane_toggle(event):
+        # The original selector and the new shared-pattern selector are
+        # mutually exclusive.  Pressing this button always returns control to
+        # the Legacy/Marker-Pose pair before toggling that pair.
+        if height_plane_state['use_shared_plane']:
+            height_plane_state['use_shared_plane'] = False
+            btn_shared_plane.label.set_text("Shared: Off")
+            btn_shared_plane.ax.patch.set_facecolor('#1A1A1A')
         if pose_height_plane_n is None or pose_height_plane_c is None:
-            print("[Height Plane] Marker-pose plane is unavailable; keeping Legacy mode")
+            height_plane_state['use_pose_plane'] = False
+            btn_height_plane.label.set_text("Height: Legacy")
+            btn_height_plane.ax.patch.set_facecolor('#1A1A1A')
+            plane_dist_history.clear()
+            print("[Height Plane] Marker-pose plane is unavailable; using Legacy mode")
+            if last_click and current_cand['idx'] in measure_results:
+                update_display(None, [])
+            else:
+                request_blit_refresh()
             return
         height_plane_state['use_pose_plane'] = not height_plane_state['use_pose_plane']
         use_pose = height_plane_state['use_pose_plane']
         btn_height_plane.label.set_text(
-            "Height Plane: Marker Pose" if use_pose else "Height Plane: Legacy")
+            "Height: Marker" if use_pose else "Height: Legacy")
         btn_height_plane.ax.patch.set_facecolor('#145A32' if use_pose else '#1A1A1A')
         plane_dist_history.clear()
         print(
@@ -5302,7 +6806,85 @@ def main():
         else:
             request_blit_refresh()
 
+    def on_shared_plane_toggle(event):
+        if shared_height_plane_n is None or shared_height_plane_c is None:
+            print(
+                "[Shared Pattern Plane] unavailable; keeping current height plane: "
+                + shared_height_plane_diag.get('reason', 'unknown reason'))
+            return
+
+        use_shared = not height_plane_state['use_shared_plane']
+        height_plane_state['use_shared_plane'] = use_shared
+        if use_shared:
+            height_plane_state['use_pose_plane'] = False
+            btn_height_plane.label.set_text("Height: Legacy")
+            btn_height_plane.ax.patch.set_facecolor('#1A1A1A')
+        btn_shared_plane.label.set_text(
+            "Shared: On" if use_shared else "Shared: Off")
+        btn_shared_plane.ax.patch.set_facecolor('#145A32' if use_shared else '#1A1A1A')
+        plane_dist_history.clear()
+        if use_shared:
+            print(
+                "[Shared Pattern Plane] Display mode -> ON; "
+                f"markers={shared_height_plane_diag['used_marker_ids']}, "
+                f"corners={shared_height_plane_diag['point_count']}, "
+                f"RMS={shared_height_plane_diag['rms_mm']:.3f} mm, "
+                f"P90={shared_height_plane_diag['p90_abs_mm']:.3f} mm, "
+                f"max={shared_height_plane_diag['max_abs_mm']:.3f} mm; "
+                "RT, baseline, matching and p3d unchanged")
+        else:
+            print(
+                "[Shared Pattern Plane] Display mode -> OFF; returning to "
+                "Legacy Triangulated/SVD Plane; RT, baseline, matching and p3d unchanged")
+        if custom_plane_fitted:
+            print("[Shared Pattern Plane] Custom Plane is active and still has display priority")
+        if last_click and current_cand['idx'] in measure_results:
+            update_display(None, [])
+        else:
+            request_blit_refresh()
+
+    def on_top2_geometry_toggle(event):
+        enabled = not view_state['top2_geometry_rescue']
+        view_state['top2_geometry_rescue'] = enabled
+        btn_top2_geo.label.set_text(
+            "Top2Geo: On" if enabled else "Top2Geo: Off")
+        btn_top2_geo.ax.patch.set_facecolor(
+            '#145A32' if enabled else '#1A1A1A')
+        if enabled:
+            print(
+                "[Top2-Geo] ON: original Guided Fallback is paused; "
+                "ratio-rejected references test only Global Top-1/Top-2, "
+                f"then choose the candidate nearest exact H(pL) within "
+                f"{TOP2_GEOMETRY_MAX_DIST_PX:g}px. Gate statistics are logged.")
+        else:
+            print(
+                "[Top2-Geo] OFF: restored the original Guided Fallback path.")
+        mark_wound_size_dirty('top2_geometry_rescue')
+        if last_click:
+            do_measure(last_click[0], last_click[1])
+        else:
+            request_blit_refresh()
+
+    def on_h_residual_toggle(event):
+        visible = not view_state['show_homography_residual']
+        view_state['show_homography_residual'] = visible
+        btn_h_residual.label.set_text(
+            "H Residual: On" if visible else "H Residual: Off")
+        btn_h_residual.ax.patch.set_facecolor(
+            '#145A32' if visible else '#1A1A1A')
+        dbg_pred_B.set_visible(visible)
+        for artist in debug_homography_residual_artists:
+            artist.set_visible(visible)
+        print(
+            f"[Homography Residual] {'shown' if visible else 'hidden'}: "
+            "magenta H(pL) circles and residual segments only; "
+            "matching and interpolation are unchanged")
+        request_blit_refresh()
+
     btn_height_plane.on_clicked(on_height_plane_toggle)
+    btn_shared_plane.on_clicked(on_shared_plane_toggle)
+    btn_top2_geo.on_clicked(on_top2_geometry_toggle)
+    btn_h_residual.on_clicked(on_h_residual_toggle)
 
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
@@ -5317,6 +6899,7 @@ def main():
     btn_norm_toggle.on_clicked(on_norm_toggle)
     btn_custom_plane.on_clicked(on_custom_plane)
     btn_rt_diff.on_clicked(on_rt_diff)
+    btn_metric_blocks.on_clicked(on_metric_blocks_toggle)
     btn_return_menu.on_clicked(on_return_menu)
     # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單與自訂傷口平面不受影響）----
     panel_defs = [
@@ -5327,7 +6910,8 @@ def main():
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
                      ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift,
-                     ax_btn_height_plane]),
+                     ax_btn_height_plane, ax_btn_metric_blocks, ax_btn_shared_plane,
+                     ax_btn_top2_geo, ax_btn_h_residual]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]

@@ -60,6 +60,9 @@ _WOUND_DETECTOR_ERROR_LOGGED = False
 # ==================== 全局設定區 ====================
 VIDEO_PATH            = r"test_video_Zebra//video_20260601_172436.mp4"        # 影片檔案路徑
 RECORD_SAVE_DIR       = "test_video_Zebra"                                    # 錄影儲存資料夾路徑
+# True：選擇錄影模式並完成錄影後，分析指定影片，不使用剛錄好的影片。
+USE_SPECIFIED_VIDEO_AFTER_RECORDING = False
+SPECIFIED_VIDEO_AFTER_RECORDING_PATH = r"test_video_Zebra//video_20260902_161255.mp4"
 START_FRAME_COUNT     = 30                         # 前段評估幀數 (N)
 
 # ----------------- 全局日誌收集區 -----------------
@@ -87,6 +90,11 @@ ANGLE_GUIDED_PAIR_SCORE_WEIGHT = 0.35
 ENABLE_RT_SIFT_ROI = True
 RT_SIFT_ROI_RATIO = (0.10, 0.10, 0.80, 0.80)
 RT_SIFT_IMAGE_SCALE = 0.5
+# 錄影預覽的詳細疊圖：False 時隱藏 RT-SIFT ROI、Pattern ID、距離與角度資訊。
+# 中心距離指示十字不受此設定影響，會保持顯示。
+SHOW_RECORDING_PREVIEW_DETAILS = False
+RECORDING_TARGET_DISTANCE_MIN_MM = 150.0
+RECORDING_TARGET_DISTANCE_MAX_MM = 300.0
 POSE_SELECT_MODE      = "reproj_min"               # "reproj_min" (最小重投影誤差), "average" (平均姿態去噪) 或 "best_pair"
 MEASURE_MODE          = "dual_direct"              # "dual_direct", "multi_dedrift", "multi_pure"
 FLOW_FB_THRESHOLD     = 0.8                        # 雙向光流一致性誤差閾值 (pixels)
@@ -106,7 +114,7 @@ PARAMS_JSON_PATH      = "calibration_result_Zebra_1_monocular.json"  # 標定參
 ACTUAL_MARKER_SIZE_MM = 8.25                       # ArUco 標籤真實邊長 (mm)
 TARGET_W              = 1024                       # 統一縮放寬度
 MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無效 (mm)
-DEFAULT_WOUND_HEIGHT_OFFSET_MM = 10.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
+DEFAULT_WOUND_HEIGHT_OFFSET_MM = 12.5              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
 MIN_BASELINE_MM       = 35.0#8.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
@@ -747,6 +755,66 @@ def compute_marker_pose_plane(valid_poses, frame_idx, reference_normal=None):
             n = -n
     return n, c
 
+
+def compute_multi_pattern_triangulated_plane(
+        corners_left, corners_right, K, R_rel, t_rel,
+        reference_normal=None, min_pattern_count=2):
+    """Fit one plane to all shared-pattern corners triangulated from both views."""
+    if not isinstance(corners_left, dict) or not isinstance(corners_right, dict):
+        return None, None, [], None
+    shared_ids = sorted(set(corners_left) & set(corners_right))
+    if len(shared_ids) < int(min_pattern_count):
+        return None, None, shared_ids, None
+
+    points_left = np.vstack([
+        np.asarray(corners_left[mid], dtype=np.float64).reshape(4, 2)
+        for mid in shared_ids])
+    points_right = np.vstack([
+        np.asarray(corners_right[mid], dtype=np.float64).reshape(4, 2)
+        for mid in shared_ids])
+    point_pattern_ids = np.repeat(np.asarray(shared_ids, dtype=np.int32), 4)
+    K = np.asarray(K, dtype=np.float64).reshape(3, 3)
+    R_rel = np.asarray(R_rel, dtype=np.float64).reshape(3, 3)
+    t_rel = np.asarray(t_rel, dtype=np.float64).reshape(3, 1)
+    projection_left = K @ np.hstack((np.eye(3), np.zeros((3, 1))))
+    projection_right = K @ np.hstack((R_rel, t_rel))
+
+    homogeneous = cv2.triangulatePoints(
+        projection_left.astype(np.float32), projection_right.astype(np.float32),
+        points_left.T.astype(np.float32), points_right.T.astype(np.float32))
+    scale = homogeneous[3]
+    valid = np.isfinite(scale) & (np.abs(scale) > 1e-12)
+    points_3d = np.full((len(scale), 3), np.nan, dtype=np.float64)
+    points_3d[valid] = (homogeneous[:3, valid] / scale[valid]).T
+    points_right_3d = (R_rel @ points_3d.T + t_rel).T
+    valid &= np.all(np.isfinite(points_3d), axis=1)
+    valid &= np.all(np.isfinite(points_right_3d), axis=1)
+    valid &= points_3d[:, 2] > 0.0
+    valid &= points_right_3d[:, 2] > 0.0
+
+    used_ids = sorted(set(point_pattern_ids[valid].tolist()))
+    fitted_points = points_3d[valid]
+    if len(used_ids) < int(min_pattern_count) or len(fitted_points) < 6:
+        return None, None, used_ids, None
+
+    center = np.mean(fitted_points, axis=0)
+    _, _, Vt = np.linalg.svd(fitted_points - center)
+    normal = Vt[-1]
+    normal_norm = float(np.linalg.norm(normal))
+    if normal_norm <= 1e-12:
+        return None, None, used_ids, None
+    normal /= normal_norm
+    if reference_normal is not None:
+        ref_normal = np.asarray(reference_normal, dtype=np.float64).reshape(3)
+        ref_norm = float(np.linalg.norm(ref_normal))
+        if ref_norm > 1e-12 and float(np.dot(normal, ref_normal / ref_norm)) < 0.0:
+            normal = -normal
+    elif float(np.dot(normal, center)) > 0.0:
+        normal = -normal
+    residuals = (fitted_points - center) @ normal
+    rms = float(np.sqrt(np.mean(residuals ** 2)))
+    return normal, center, used_ids, rms
+
 def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, global_plane_n=None, global_plane_c=None, prev_marker_poses=None, prev_rel_pose=None, marker_map=None, map_calibrated=False):
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
     if hasattr(cv2.aruco, 'ArucoDetector'):
@@ -1108,6 +1176,27 @@ def draw_rt_sift_roi_preview(image):
             font_scale=0.68)
 
 
+def draw_recording_center_cross(image, color):
+    """Draw the always-visible distance-status cross at the frame centre."""
+    height, width = image.shape[:2]
+    center_x, center_y = width // 2, height // 2
+    arm_length = max(18, int(round(min(width, height) * 0.035)))
+    gap = max(4, int(round(arm_length * 0.22)))
+
+    segments = (
+        ((center_x - arm_length, center_y), (center_x - gap, center_y)),
+        ((center_x + gap, center_y), (center_x + arm_length, center_y)),
+        ((center_x, center_y - arm_length), (center_x, center_y - gap)),
+        ((center_x, center_y + gap), (center_x, center_y + arm_length)),
+    )
+    # Dark outline keeps the status colour visible on bright camera images.
+    for start, end in segments:
+        cv2.line(image, start, end, (20, 20, 20), 8, cv2.LINE_AA)
+    for start, end in segments:
+        cv2.line(image, start, end, color, 4, cv2.LINE_AA)
+    cv2.circle(image, (center_x, center_y), 3, color, -1, cv2.LINE_AA)
+
+
 def estimate_aruco_pattern_distances(
         frame_bgr, camera_matrix, distortion, marker_size_mm,
         detector=None, calibration_image_size=None):
@@ -1281,7 +1370,8 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
 
         display_frame = frame.copy()
         h, w = display_frame.shape[:2]
-        draw_rt_sift_roi_preview(display_frame)
+        if SHOW_RECORDING_PREVIEW_DETAILS:
+            draw_rt_sift_roi_preview(display_frame)
 
         # ArUco detection is throttled so the recording preview remains fluid.
         now_monotonic = time.monotonic()
@@ -1297,37 +1387,47 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
             view_angles = [v["view_angle_deg"] for v in distance_estimates.values()]
             median_distance = float(np.median(distances))
             median_view_angle = float(np.median(view_angles))
-            distance_text = (
-                f"Pattern distance: {median_distance:.1f} mm "
-                f"({median_distance / 10.0:.1f} cm) | "
-                f"Angle: {median_view_angle:.1f} deg")
-            draw_high_contrast_preview_text(
-                display_frame, distance_text, (30, 103), font_scale=1.02)
-            for row, (marker_id, estimate) in enumerate(
-                    sorted(distance_estimates.items())):
-                pts = np.rint(estimate["corners"]).astype(np.int32).reshape(-1, 1, 2)
-                cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2,
-                              cv2.LINE_AA)
-                origin = tuple(pts[0, 0].tolist())
+            cross_color = (
+                (0, 255, 0)
+                if (RECORDING_TARGET_DISTANCE_MIN_MM <= median_distance <=
+                    RECORDING_TARGET_DISTANCE_MAX_MM)
+                else (0, 165, 255))
+            if SHOW_RECORDING_PREVIEW_DETAILS:
+                distance_text = (
+                    f"Pattern distance: {median_distance:.1f} mm "
+                    f"({median_distance / 10.0:.1f} cm) | "
+                    f"Angle: {median_view_angle:.1f} deg")
                 draw_high_contrast_preview_text(
-                    display_frame,
-                    f"ID {marker_id}: {estimate['distance_mm']:.1f} mm  "
-                    f"{estimate['view_angle_deg']:.1f} deg",
-                    (origin[0], max(24, origin[1] - 10)),
-                    font_scale=0.68)
-                if row < 3:
+                    display_frame, distance_text, (30, 103), font_scale=1.02)
+                for row, (marker_id, estimate) in enumerate(
+                        sorted(distance_estimates.items())):
+                    pts = np.rint(estimate["corners"]).astype(np.int32).reshape(-1, 1, 2)
+                    cv2.polylines(display_frame, [pts], True, (0, 255, 0), 2,
+                                  cv2.LINE_AA)
+                    origin = tuple(pts[0, 0].tolist())
                     draw_high_contrast_preview_text(
                         display_frame,
                         f"ID {marker_id}: {estimate['distance_mm']:.1f} mm  "
-                        f"Angle {estimate['view_angle_deg']:.1f} deg  "
-                        f"RMS {estimate['reprojection_rms_px']:.2f}px",
-                        (30, 143 + row * 38), font_scale=0.68)
+                        f"{estimate['view_angle_deg']:.1f} deg",
+                        (origin[0], max(24, origin[1] - 10)),
+                        font_scale=0.68)
+                    if row < 3:
+                        draw_high_contrast_preview_text(
+                            display_frame,
+                            f"ID {marker_id}: {estimate['distance_mm']:.1f} mm  "
+                            f"Angle {estimate['view_angle_deg']:.1f} deg  "
+                            f"RMS {estimate['reprojection_rms_px']:.2f}px",
+                            (30, 143 + row * 38), font_scale=0.68)
         else:
-            status = ("Pattern distance: calibration unavailable" if
-                      camera_matrix is None else
-                      "Pattern distance: ArUco not detected")
-            draw_high_contrast_preview_text(
-                display_frame, status, (30, 103), font_scale=0.86)
+            cross_color = (0, 0, 255)
+            if SHOW_RECORDING_PREVIEW_DETAILS:
+                status = ("Pattern distance: calibration unavailable" if
+                          camera_matrix is None else
+                          "Pattern distance: ArUco not detected")
+                draw_high_contrast_preview_text(
+                    display_frame, status, (30, 103), font_scale=0.86)
+
+        draw_recording_center_cross(display_frame, cross_color)
 
         # 顯示錄影狀態指示
         if is_recording:
@@ -1823,7 +1923,19 @@ def main():
         if recorded_path is None or not os.path.exists(recorded_path):
             print("❌ 錄影失敗或未錄製影片，程式結束。")
             sys.exit(1)
-        VIDEO_PATH = recorded_path
+        if USE_SPECIFIED_VIDEO_AFTER_RECORDING:
+            override_path = os.fspath(SPECIFIED_VIDEO_AFTER_RECORDING_PATH)
+            if not override_path or not os.path.exists(override_path):
+                print(
+                    "❌ 已啟用 USE_SPECIFIED_VIDEO_AFTER_RECORDING，"
+                    f"但指定影片不存在: {override_path}")
+                sys.exit(1)
+            VIDEO_PATH = override_path
+            log_and_print(
+                f"📂 錄影已儲存至 {recorded_path}；分析階段改載指定影片：{VIDEO_PATH}")
+        else:
+            VIDEO_PATH = recorded_path
+            log_and_print(f"📂 分析剛錄製的影片：{VIDEO_PATH}")
     else:
         if not selected_path or not os.path.exists(selected_path):
             print("❌ 載入檔案無效或取消選取，程式結束。")
@@ -1969,6 +2081,21 @@ def main():
     else:
         log_and_print(
             "[Height Plane] Marker-pose plane unavailable; height display will remain in legacy mode")
+
+    multi_height_plane_n, multi_height_plane_c, multi_height_plane_ids, multi_height_plane_rms = (
+        compute_multi_pattern_triangulated_plane(
+            video_data.get('cornersB', {}), video_data.get('cornersA', {}),
+            KL, R_r, t_r, reference_normal=legacy_height_plane_n,
+            min_pattern_count=2))
+    if multi_height_plane_n is not None:
+        log_and_print(
+            f"[Height Plane] Multi-pattern plane ready; IDs={multi_height_plane_ids}, "
+            f"corners={len(multi_height_plane_ids) * 4}, "
+            f"RMS={multi_height_plane_rms:.3f} mm")
+    else:
+        log_and_print(
+            f"[Height Plane] Multi-pattern plane unavailable; requires at least "
+            f"2 shared valid patterns (available IDs={multi_height_plane_ids})")
     
     # 預設直接鎖定
     locked_L = imgA_bgr.copy()
@@ -2433,7 +2560,10 @@ def main():
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
     # Display-only selector.  RT, baseline, matching and triangulated p3d never
     # change when this state is toggled.
-    height_plane_state = {'use_pose_plane': False}
+    # Prefer the multi-pattern reference plane at startup.  When fewer than two
+    # valid shared patterns are available, retain the safe legacy fallback.
+    height_plane_state = {
+        'mode': 'multi' if multi_height_plane_n is not None else 'legacy'}
 
     # HighPts / MidPts 預設關閉：初始同步散點顯示狀態
     for _artist in (scatter_grad_ref_A, scatter_grad_ref_B, scatter_grad_inject, scatter_grad_match):
@@ -3364,12 +3494,23 @@ def main():
                     p_dist_str = f"\nWound Height (Custom Plane): {p_dist:.1f}mm"
             elif res['p3d'] is not None:
                 # 與平面同鏈: 高度用最優對的 p3d (平面即由最優對 RT 三角化)，誤差相消才成立
-                _use_pose_plane = (
-                    height_plane_state['use_pose_plane']
-                    and pose_height_plane_n is not None
-                    and pose_height_plane_c is not None)
-                _height_plane_n = pose_height_plane_n if _use_pose_plane else legacy_height_plane_n
-                _height_plane_c = pose_height_plane_c if _use_pose_plane else legacy_height_plane_c
+                _height_plane_mode = height_plane_state.get('mode', 'legacy')
+                if (_height_plane_mode == 'multi'
+                        and multi_height_plane_n is not None
+                        and multi_height_plane_c is not None):
+                    _height_plane_n = multi_height_plane_n
+                    _height_plane_c = multi_height_plane_c
+                    _plane_label = "Multi Pattern Plane"
+                elif (_height_plane_mode == 'pose'
+                      and pose_height_plane_n is not None
+                      and pose_height_plane_c is not None):
+                    _height_plane_n = pose_height_plane_n
+                    _height_plane_c = pose_height_plane_c
+                    _plane_label = "Marker Pose Plane"
+                else:
+                    _height_plane_n = legacy_height_plane_n
+                    _height_plane_c = legacy_height_plane_c
+                    _plane_label = "Legacy Plane"
                 if _height_plane_n is not None and _height_plane_c is not None:
                     _p3d_plane = res['p3d_best'] if res.get('p3d_best') is not None else res['p3d']
                     p_dist = float(np.dot(_height_plane_n, _p3d_plane - _height_plane_c))
@@ -3379,7 +3520,6 @@ def main():
                     else:
                         plane_dist_history.clear()
                         display_wound_height = p_dist - DEFAULT_WOUND_HEIGHT_OFFSET_MM
-                    _plane_label = "Marker Pose Plane" if _use_pose_plane else "Legacy Plane"
                     p_dist_str = f"\nWound Height ({_plane_label}): {display_wound_height:.1f}mm"
             
             if res['depth'] is not None:
@@ -3616,7 +3756,20 @@ def main():
     btn_rt_sift = Button(ax_btn_rt_sift, "RT SIFT: Off", **btn_style)
 
     ax_btn_height_plane = fig.add_axes([0.58, 0.68, 0.18, 0.04])
-    btn_height_plane = Button(ax_btn_height_plane, "Height Plane: Legacy", **btn_style)
+    btn_height_plane = Button(
+        ax_btn_height_plane,
+        "Height Plane: Multi" if height_plane_state['mode'] == 'multi'
+        else "Height Plane: Legacy",
+        **btn_style)
+
+    ax_btn_multi_height_plane = fig.add_axes([0.78, 0.68, 0.18, 0.04])
+    btn_multi_height_plane = Button(
+        ax_btn_multi_height_plane,
+        "Multi Pattern Plane: On" if height_plane_state['mode'] == 'multi'
+        else "Multi Pattern Plane: Off",
+        **btn_style)
+    if height_plane_state['mode'] == 'multi':
+        btn_multi_height_plane.ax.patch.set_facecolor('#145A32')
 
     wound_z_offset = 0.0
     ax_box = fig.add_axes([0.02, 0.02, 0.04, 0.04])
@@ -3641,7 +3794,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane, btn_multi_height_plane]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(8)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -3656,7 +3809,7 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane, btn_multi_height_plane]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
@@ -3935,20 +4088,8 @@ def main():
 
     btn_rt_sift.on_clicked(on_rt_sift_toggle)
 
-    def on_height_plane_toggle(event):
-        if pose_height_plane_n is None or pose_height_plane_c is None:
-            print("[Height Plane] Marker-pose plane is unavailable; keeping Legacy mode")
-            return
-        height_plane_state['use_pose_plane'] = not height_plane_state['use_pose_plane']
-        use_pose = height_plane_state['use_pose_plane']
-        btn_height_plane.label.set_text(
-            "Height Plane: Marker Pose" if use_pose else "Height Plane: Legacy")
-        btn_height_plane.ax.patch.set_facecolor('#145A32' if use_pose else '#1A1A1A')
+    def refresh_height_plane_display():
         plane_dist_history.clear()
-        print(
-            "[Height Plane] Display mode -> "
-            + ("Marker Pose Plane" if use_pose else "Legacy Triangulated/SVD Plane")
-            + "; RT, baseline, matching and p3d unchanged")
         if custom_plane_fitted:
             print("[Height Plane] Custom Plane is active and still has display priority")
         if last_click and current_cand['idx'] in measure_results:
@@ -3956,7 +4097,49 @@ def main():
         else:
             request_blit_refresh()
 
+    def on_height_plane_toggle(event):
+        if pose_height_plane_n is None or pose_height_plane_c is None:
+            print("[Height Plane] Marker-pose plane is unavailable; keeping Legacy mode")
+            return
+        use_pose = height_plane_state.get('mode') != 'pose'
+        height_plane_state['mode'] = 'pose' if use_pose else 'legacy'
+        btn_height_plane.label.set_text(
+            "Height Plane: Marker Pose" if use_pose else "Height Plane: Legacy")
+        btn_height_plane.ax.patch.set_facecolor('#145A32' if use_pose else '#1A1A1A')
+        btn_multi_height_plane.label.set_text("Multi Pattern Plane: Off")
+        btn_multi_height_plane.ax.patch.set_facecolor('#1A1A1A')
+        print(
+            "[Height Plane] Display mode -> "
+            + ("Marker Pose Plane" if use_pose else "Legacy Triangulated/SVD Plane")
+            + "; RT, baseline, matching and p3d unchanged")
+        refresh_height_plane_display()
+
     btn_height_plane.on_clicked(on_height_plane_toggle)
+
+    def on_multi_height_plane_toggle(event):
+        if multi_height_plane_n is None or multi_height_plane_c is None:
+            print(
+                "[Height Plane] Multi-pattern plane is unavailable; at least "
+                f"2 patterns must be detected in both selected views "
+                f"(valid shared IDs={multi_height_plane_ids})")
+            return
+        use_multi = height_plane_state.get('mode') != 'multi'
+        height_plane_state['mode'] = 'multi' if use_multi else 'legacy'
+        btn_multi_height_plane.label.set_text(
+            "Multi Pattern Plane: On" if use_multi else "Multi Pattern Plane: Off")
+        btn_multi_height_plane.ax.patch.set_facecolor('#145A32' if use_multi else '#1A1A1A')
+        btn_height_plane.label.set_text(
+            "Height Plane: Multi" if use_multi else "Height Plane: Legacy")
+        btn_height_plane.ax.patch.set_facecolor('#1A1A1A')
+        print(
+            "[Height Plane] Display mode -> "
+            + (f"Multi Pattern Plane (IDs={multi_height_plane_ids}, "
+               f"RMS={multi_height_plane_rms:.3f} mm)" if use_multi
+               else "Legacy Triangulated/SVD Plane")
+            + "; RT, baseline, matching and p3d unchanged")
+        refresh_height_plane_display()
+
+    btn_multi_height_plane.on_clicked(on_multi_height_plane_toggle)
 
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
@@ -3981,7 +4164,7 @@ def main():
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
                      ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift,
-                     ax_btn_height_plane]),
+                     ax_btn_height_plane, ax_btn_multi_height_plane]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]

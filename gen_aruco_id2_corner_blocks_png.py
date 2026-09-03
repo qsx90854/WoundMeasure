@@ -25,11 +25,11 @@ CORNER_BLOCK_SIZE_MM = 1.6
 CORNER_BLOCK_MARGIN_MM = 0.4
 
 ARUCO_DICT = cv2.aruco.DICT_4X4_100
-ARUCO_ID = 5
+ARUCO_ID = 12
 BORDER_BITS = 1
 DPI = 1200
 
-OUTPUT_PNG = "aruco_id5_12_25mm_corner_blocks.png"
+OUTPUT_PNG = "aruco_id12_12_25mm_corner_blocks.png"
 OUTPUT_METADATA = "aruco_id5_12_25mm_corner_blocks.json"
 
 
