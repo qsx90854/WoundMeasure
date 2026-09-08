@@ -37,6 +37,10 @@ from Algorithm.specular_detection import (
     overlay_specular_mask_rgb,
 )
 from Algorithm import stereo_matching as stereo_algo
+from Algorithm.Region_SIFT_Matching import (
+    RegionSIFTConfig,
+    run_region_sift_matching,
+)
 from Algorithm.stereo_matching import (
     get_patch, score_patch_match, score_zncc_patch_match,
     score_warped_patch_match, score_warped_zncc_patch_match,
@@ -87,6 +91,13 @@ ANGLE_GUIDED_PAIR_SCORE_WEIGHT = 0.35
 ENABLE_RT_SIFT_ROI = True
 RT_SIFT_ROI_RATIO = (0.10, 0.10, 0.80, 0.80)
 RT_SIFT_IMAGE_SCALE = 0.5
+# True: Marker 世界座標重投影 + SIFT Sampson residual 聯合精修最終 RT。
+# False: 最終 RT 只做 marker-only world optimization；SIFT 仍保留作為
+#        影格配對與 validation-only 品質檢查，不會改動 R/t。
+ENABLE_WORLD_MARKER_SIFT_RT_REFINE = True
+# True: 保留 PRE / MARKER / FINAL 的完整 RT 與 delta Log；整段會用
+#       醒目的分隔線包住，避免與選幀、SIFT 及品質 Log 混在一起。
+WORLD_RT_AUDIT_VERBOSE = True
 POSE_SELECT_MODE      = "reproj_min"               # "reproj_min" (最小重投影誤差), "average" (平均姿態去噪) 或 "best_pair"
 MEASURE_MODE          = "dual_direct"              # "dual_direct", "multi_dedrift", "multi_pure"
 FLOW_FB_THRESHOLD     = 0.8                        # 雙向光流一致性誤差閾值 (pixels)
@@ -149,6 +160,62 @@ GRAD_SIFT_RANSAC_REPROJ_PX    = 2.5                        # local affine RANSAC
 GRAD_SIFT_MIN_GROUP_INLIERS   = 3                          # minimum inliers for accepting one high/mid gradient group
 GRAD_SIFT_GUIDED_RADIUS_PX    = 10.0                       # guided fallback: search right refs near RT/plane-predicted location
 GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback uses geometry, so descriptor ambiguity can be looser
+# Region-SIFT tuning.  Defaults produce 27 automatic samples + click P,
+# a 28x128 descriptor matrix and a rotated 5x75 epipolar band. GroupScore
+# blends best-21 with cell-balanced ALL-row L2; only reliable frames add a penalty.
+REGION_SIFT_CONFIG = RegionSIFTConfig(
+    grid_rows=3,
+    grid_cols=3,
+    cell_width_px=10,
+    cell_height_px=10,
+    points_per_cell=3,
+    sobel_ksize=3,
+    min_point_distance_px=1.0,
+    exclude_click_from_cell_points=True,
+    auto_scale_orientation=True,
+    scale_keypoint_sizes_px=(3.2, 4.0, 5.0, 6.4, 8.0, 10.0, 12.0, 16.0),
+    sift_n_octave_layers=3,
+    sift_sigma=1.6,
+    descriptor_max_support_radius_px=40.0,  # nominal SIFT radius; None disables cap
+    flat_keypoint_size_px=3.2,
+    scale_min_confidence=0.05,
+    orientation_min_confidence=0.10,
+    scale_boundary_is_reliable=False,
+    scale_dog_ratio=2.0 ** (1.0 / 3.0),
+    scale_response_pool_sigma_factor=0.75,
+    scale_response_floor=1e-4,
+    orientation_bins=36,
+    orientation_sigma_factor=1.5,
+    orientation_radius_factor=3.0,
+    orientation_hist_smooth_passes=2,
+    frame_coordinate_quantization_px=0.0,  # 0=exact; raise only for speed tuning
+    # Fallback frame only; used in locally flat areas or when auto is off.
+    keypoint_size_px=10.0,
+    keypoint_angle_deg=0.0,
+    require_all_descriptors=True,
+    normalize_descriptors=False,
+    search_length_px=75.0,
+    search_width_px=5.0,
+    search_along_step_px=1.0,
+    search_across_step_px=1.0,
+    keep_best_ratio=0.75,
+    keep_best_count=None,
+    max_group_score=None,
+    epipolar_penalty_weight=0.0,
+    second_best_exclusion_radius_px=3.0,
+    group_balance_weight=0.35,  # G = 0.65 * Trim21 + 0.35 * CellAll
+    frame_consistency_weight=0.05,
+    frame_scale_tolerance_log2=0.5,
+    frame_angle_tolerance_deg=30.0,
+    frame_min_reliable_pairs=3,
+    reject_uninformative_group=True,
+    reject_flat_score_surface=True,
+    flat_score_relative_tolerance=1e-6,
+    warp_interpolation=cv2.INTER_LINEAR,
+    min_valid_warp_ratio=1.0,
+    descriptor_border_margin_px=8,
+    descriptor_batch_size=4096,
+)
 # Debug-only alternative to the original guided fallback.  Ratio-rejected
 # points may select only their original Global Top-1/Top-2 using exact H(pL).
 TOP2_GEOMETRY_RESCUE_DEFAULT  = False
@@ -800,8 +867,289 @@ def track_feature_and_verify(all_frames, start_f_idx, end_f_idx, p_start, valid_
         
     return trajectory
 
+def configure_world_marker_sift_rt_refine():
+    """Configure the imported pose module without modifying the shared Algorithm file.
+
+    The Debug wrapper also logs seed -> marker-only -> final RT differences.
+    With refinement disabled, SIFT statistics are restored after marker-only
+    optimization for validation, but cannot feed back into R/t.
+    """
+    enabled = bool(ENABLE_WORLD_MARKER_SIFT_RT_REFINE)
+    optimizer_name = '_unified_optimize_endpoint_world_poses'
+    original_name = '_grad_sift_debug_original_world_optimizer'
+    original_optimizer = getattr(video_pose_algo, original_name, None)
+    if original_optimizer is None:
+        original_optimizer = getattr(video_pose_algo, optimizer_name)
+        setattr(video_pose_algo, original_name, original_optimizer)
+
+    # Keep the legacy/fallback feature-refine path consistent with the World
+    # endpoint optimizer controlled below.
+    if hasattr(video_pose_algo, 'ENABLE_FEATURE_RT_REFINE'):
+        video_pose_algo.ENABLE_FEATURE_RT_REFINE = enabled
+
+    def audited_world_optimizer(*args, **kwargs):
+        # Optional arguments begin after marker_size_mm in the shared optimizer.
+        def input_value(position, name):
+            return args[position] if len(args) > position else kwargs.get(name)
+
+        feature_points_B = input_value(11, 'feature_points_B')
+        feature_points_A = input_value(12, 'feature_points_A')
+        feature_mask = input_value(13, 'feature_mask')
+        feature_K = input_value(9, 'feature_K')
+        R_A0 = np.asarray(input_value(0, 'R_A0'), dtype=np.float64).reshape(3, 3)
+        t_A0 = np.asarray(input_value(1, 't_A0'), dtype=np.float64).reshape(3, 1)
+        R_B0 = np.asarray(input_value(2, 'R_B0'), dtype=np.float64).reshape(3, 3)
+        t_B0 = np.asarray(input_value(3, 't_B0'), dtype=np.float64).reshape(3, 1)
+        corners_A = input_value(4, 'corners_A')
+        corners_B = input_value(5, 'corners_B')
+        marker_map = input_value(6, 'marker_map')
+        camera_matrix = input_value(7, 'camera_matrix')
+        distortion = input_value(8, 'distortion')
+        marker_size_mm = input_value(10, 'marker_size_mm')
+
+        def run_marker_only():
+            marker_args = list(args)
+            marker_kwargs = dict(kwargs)
+            for position, name in (
+                    (11, 'feature_points_B'),
+                    (12, 'feature_points_A'),
+                    (13, 'feature_mask')):
+                if len(marker_args) > position:
+                    marker_args[position] = None
+                else:
+                    marker_kwargs[name] = None
+            return original_optimizer(*marker_args, **marker_kwargs)
+
+        def feature_stats_for_rt(R_rel_value, t_rel_value):
+            """Evaluate the same optimizer-input SIFT pairs against one RT."""
+            try:
+                pts_B = np.asarray(
+                    feature_points_B, dtype=np.float64).reshape(-1, 2)
+                pts_A = np.asarray(
+                    feature_points_A, dtype=np.float64).reshape(-1, 2)
+                if len(pts_B) != len(pts_A) or len(pts_B) == 0:
+                    return None
+                if feature_mask is not None:
+                    mask = np.asarray(feature_mask, dtype=bool).reshape(-1)
+                    if len(mask) == len(pts_B):
+                        pts_B = pts_B[mask]
+                        pts_A = pts_A[mask]
+                if len(pts_B) == 0:
+                    return None
+                residuals = np.abs(video_pose_algo._unified_signed_sampson(
+                    pts_B, pts_A, R_rel_value, t_rel_value, feature_K))
+                residuals = residuals[np.isfinite(residuals)]
+                if len(residuals) == 0:
+                    return None
+                inlier_threshold = float(
+                    video_pose_algo.FEATURE_FINAL_INLIER_PX)
+                inlier_values = residuals[residuals <= inlier_threshold]
+                return {
+                    'pair_count': int(len(residuals)),
+                    'inlier_count': int(len(inlier_values)),
+                    'inlier_threshold_px': inlier_threshold,
+                    'inlier_median_px': float(np.median(inlier_values))
+                        if len(inlier_values) else float('inf'),
+                    'inlier_p90_px': float(np.percentile(inlier_values, 90))
+                        if len(inlier_values) else float('inf'),
+                    'all_median_px': float(np.median(residuals)),
+                    'all_p90_px': float(np.percentile(residuals, 90)),
+                }
+            except (TypeError, ValueError, KeyError, np.linalg.LinAlgError):
+                return None
+
+        if enabled:
+            result = original_optimizer(*args, **kwargs)
+            if result is None:
+                log_and_print("⚠️ [World RT Audit] 聯合最佳化未產生有效結果")
+                return None
+            # The shared optimizer does not expose its internal marker-only pose
+            # when the joint candidate wins. Re-run only that small final audit
+            # solve so the Debug log can compare both actual candidates.
+            marker_result = (
+                result if result.get('role') == 'marker_only_world'
+                else run_marker_only())
+        else:
+            marker_result = run_marker_only()
+            result = marker_result
+        if result is None:
+            log_and_print("⚠️ [World RT Audit] Marker-only 最佳化未產生有效結果")
+            return None
+        result = dict(result)
+
+        if not enabled:
+            result['applied_feature'] = False
+            result['uses_feature'] = False
+
+            # Compute Sampson statistics strictly after marker-only optimization.
+            feature_stats = feature_stats_for_rt(
+                result['R_rel'], result['t_rel'])
+
+            result['feature'] = feature_stats
+            result['feature_ok'] = bool(
+                feature_stats is not None
+                and feature_stats['inlier_count']
+                >= int(video_pose_algo.FEATURE_MIN_MATCHES)
+                and feature_stats['inlier_p90_px']
+                <= float(video_pose_algo.FEATURE_FINAL_P90_MAX_PX))
+            result['role'] = 'marker_only_world'
+
+        def relative_pose(R_A, t_A, R_B, t_B):
+            R_rel = np.asarray(R_A, dtype=np.float64).reshape(3, 3) @ np.asarray(
+                R_B, dtype=np.float64).reshape(3, 3).T
+            t_rel = (np.asarray(t_A, dtype=np.float64).reshape(3, 1)
+                     - R_rel @ np.asarray(t_B, dtype=np.float64).reshape(3, 1))
+            return R_rel, t_rel
+
+        def rotation_delta_deg(R_from, R_to):
+            delta = np.asarray(R_to) @ np.asarray(R_from).T
+            cos_angle = np.clip((float(np.trace(delta)) - 1.0) * 0.5, -1.0, 1.0)
+            return float(np.degrees(np.arccos(cos_angle)))
+
+        def marker_stats(R_A, t_A, R_B, t_B):
+            try:
+                return video_pose_algo._unified_pair_reprojection_stats(
+                    R_A, t_A, corners_A, R_B, t_B, corners_B, marker_map,
+                    camera_matrix, distortion, marker_size_mm)
+            except (TypeError, ValueError, KeyError, np.linalg.LinAlgError, cv2.error):
+                return None
+
+        def format_rt(label, R_rel, t_rel, stats):
+            R_text = np.array2string(
+                np.asarray(R_rel).reshape(-1), precision=6,
+                separator=',', suppress_small=True)
+            t_vec = np.asarray(t_rel, dtype=np.float64).reshape(3)
+            t_text = np.array2string(
+                t_vec, precision=4, separator=',', suppress_small=True)
+            reproj_text = "N/A" if stats is None else (
+                f"RMS={stats['rms_px']:.4f}px, max={stats['max_px']:.4f}px")
+            log_and_print(
+                f"   {label}: R={R_text} | t={t_text} mm | "
+                f"baseline={np.linalg.norm(t_vec):.4f} mm | marker {reproj_text}")
+
+        def format_delta(label, R_from, t_from, R_to, t_to):
+            delta_t = (np.asarray(t_to, dtype=np.float64).reshape(3)
+                       - np.asarray(t_from, dtype=np.float64).reshape(3))
+            log_and_print(
+                f"   {label}: ΔR={rotation_delta_deg(R_from, R_to):.6f} deg | "
+                f"Δt={np.linalg.norm(delta_t):.6f} mm | "
+                f"Δt_xyz={np.array2string(delta_t, precision=6, separator=',')} | "
+                f"Δbaseline={np.linalg.norm(t_to) - np.linalg.norm(t_from):+.6f} mm")
+
+        def format_feature_transition(stats_from, stats_to):
+            if stats_from is None or stats_to is None:
+                log_and_print(
+                    "   SIFT epipolar MARKER-ONLY→FINAL: N/A "
+                    "(no common optimizer-input feature pairs)")
+                return
+            pair_count = min(
+                int(stats_from['pair_count']), int(stats_to['pair_count']))
+            threshold = float(stats_to['inlier_threshold_px'])
+            log_and_print(
+                "   SIFT epipolar MARKER-ONLY→FINAL "
+                f"(same {pair_count} pairs, inlier≤{threshold:.3f}px):")
+            log_and_print(
+                f"      inliers {stats_from['inlier_count']}/{pair_count}→"
+                f"{stats_to['inlier_count']}/{pair_count} | "
+                f"inlier median {stats_from['inlier_median_px']:.4f}→"
+                f"{stats_to['inlier_median_px']:.4f}px | "
+                f"P90 {stats_from['inlier_p90_px']:.4f}→"
+                f"{stats_to['inlier_p90_px']:.4f}px")
+            log_and_print(
+                f"      all-pair median {stats_from['all_median_px']:.4f}→"
+                f"{stats_to['all_median_px']:.4f}px | "
+                f"P90 {stats_from['all_p90_px']:.4f}→"
+                f"{stats_to['all_p90_px']:.4f}px")
+
+        def format_compact_transition(
+                label, R_from, t_from, stats_from, R_to, t_to, stats_to):
+            delta_t = (np.asarray(t_to, dtype=np.float64).reshape(3)
+                       - np.asarray(t_from, dtype=np.float64).reshape(3))
+            log_and_print(
+                f"   {label}: ΔR={rotation_delta_deg(R_from, R_to):.6f}° | "
+                f"Δt={np.linalg.norm(delta_t):.6f}mm "
+                f"xyz={np.array2string(delta_t, precision=5, separator=',')} | "
+                f"baseline {np.linalg.norm(t_from):.4f}→{np.linalg.norm(t_to):.4f}mm")
+            if stats_from is None or stats_to is None:
+                log_and_print("      marker reprojection: N/A")
+            else:
+                log_and_print(
+                    f"      marker RMS {stats_from['rms_px']:.4f}→"
+                    f"{stats_to['rms_px']:.4f}px | max "
+                    f"{stats_from['max_px']:.4f}→{stats_to['max_px']:.4f}px")
+
+        R_seed, t_seed = relative_pose(R_A0, t_A0, R_B0, t_B0)
+        seed_stats = marker_stats(R_A0, t_A0, R_B0, t_B0)
+        marker_result = dict(marker_result) if marker_result is not None else result
+        R_marker = np.asarray(marker_result['R_rel'], dtype=np.float64).reshape(3, 3)
+        t_marker = np.asarray(marker_result['t_rel'], dtype=np.float64).reshape(3, 1)
+        marker_result_stats = marker_stats(
+            marker_result['R_A'], marker_result['t_A'],
+            marker_result['R_B'], marker_result['t_B'])
+        R_final = np.asarray(result['R_rel'], dtype=np.float64).reshape(3, 3)
+        t_final = np.asarray(result['t_rel'], dtype=np.float64).reshape(3, 1)
+        final_stats = marker_stats(
+            result['R_A'], result['t_A'], result['R_B'], result['t_B'])
+        marker_feature_stats = feature_stats_for_rt(R_marker, t_marker)
+        final_audit_feature_stats = feature_stats_for_rt(R_final, t_final)
+        mapped_A = sorted(set(int(x) for x in (corners_A or {})) & set(marker_map or {}))
+        mapped_B = sorted(set(int(x) for x in (corners_B or {})) & set(marker_map or {}))
+        audit_separator = "=" * 96
+        log_and_print(audit_separator)
+        log_and_print("📐 [WORLD RT AUDIT：最佳化前／Marker-only／最終 RT 比較]")
+        log_and_print(
+            f"📐 [RT Audit] ids A/B={mapped_A}/{mapped_B} | "
+            f"corners={len(mapped_A) * 4}/{len(mapped_B) * 4} | "
+            f"SIFT={'ON' if enabled else 'OFF'} | role={result.get('role')}")
+        if WORLD_RT_AUDIT_VERBOSE:
+            format_rt("PRE seed (ArUco/temporal; not guaranteed raw solvePnP)",
+                      R_seed, t_seed, seed_stats)
+            format_rt("MARKER-ONLY", R_marker, t_marker, marker_result_stats)
+            format_delta("PRE→MARKER", R_seed, t_seed, R_marker, t_marker)
+            format_rt("FINAL", R_final, t_final, final_stats)
+            format_delta("MARKER→FINAL", R_marker, t_marker, R_final, t_final)
+            format_feature_transition(
+                marker_feature_stats, final_audit_feature_stats)
+        else:
+            final_is_marker_only = bool(
+                result.get('role') == 'marker_only_world'
+                or (rotation_delta_deg(R_marker, R_final) < 1e-10
+                    and np.linalg.norm(t_final - t_marker) < 1e-10))
+            if final_is_marker_only:
+                format_compact_transition(
+                    "PRE→FINAL (Marker-only)",
+                    R_seed, t_seed, seed_stats,
+                    R_final, t_final, final_stats)
+            else:
+                format_compact_transition(
+                    "PRE→MARKER", R_seed, t_seed, seed_stats,
+                    R_marker, t_marker, marker_result_stats)
+                format_compact_transition(
+                    "MARKER→FINAL (SIFT)",
+                    R_marker, t_marker, marker_result_stats,
+                    R_final, t_final, final_stats)
+            format_feature_transition(
+                marker_feature_stats, final_audit_feature_stats)
+            final_rvec = cv2.Rodrigues(R_final)[0].reshape(3)
+            log_and_print(
+                "   FINAL RT: rvec(rad)="
+                + np.array2string(final_rvec, precision=6, separator=',')
+                + " | t(mm)="
+                + np.array2string(t_final.reshape(3), precision=5, separator=','))
+        log_and_print(audit_separator)
+        return result
+
+    setattr(video_pose_algo, optimizer_name, audited_world_optimizer)
+    log_and_print(
+        "🔧 [World Marker+SIFT RT] enabled=" + str(enabled) + " | "
+        + ("SIFT residuals may refine final R/t after passing gates"
+           if enabled else
+           "final R/t uses marker-only world optimization; SIFT is validation_only"))
+
+
 def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None):
     video_pose_algo.log_and_print = log_and_print
+    configure_world_marker_sift_rt_refine()
     video_pose_algo.RECORD_SAVE_DIR = RECORD_SAVE_DIR
     video_pose_algo.MIN_BASELINE_MM = MIN_BASELINE_MM
     video_pose_algo.MAX_BASELINE_MM = MAX_BASELINE_MM
@@ -2563,6 +2911,14 @@ def main():
         'base_left_text': '', 'base_right_text': '',
         'descriptor_name': 'N/A', 'audit': None,
     }
+    # Region-SIFT uses the same lower axes but keeps its dynamic 3x3 grid,
+    # rotated search band and numbered point annotations separate.
+    debug_region_artists = []
+    debug_region_state = {
+        'records': [], 'selected_index': None,
+        'base_left_text': '', 'base_right_text': '',
+        'support_artists': [],
+    }
     # Home limits are refreshed for every measurement.  Debug zoom/reset only
     # changes the axes view and never feeds coordinates back into matching.
     debug_zoom_home = {'A': None, 'B': None}
@@ -2636,6 +2992,11 @@ def main():
     }
 
     def update_wound_size_from_current_v1(reason="state change"):
+        if view_state.get('show_rt_warp_view', False):
+            print(
+                f"⚠️ [RT Warp View] 跳過 Wound V1 深度/尺寸重算 ({reason})；"
+                "純顯示模式不執行任何深度計算。")
+            return
         wound_state['size_error'] = None
         wound_state['v1_size'] = compute_wound_size_with_current_v1()
         wound_state['left_size'] = wound_state['v1_size']
@@ -2736,31 +3097,33 @@ def main():
     # 由於 Matplotlib 的 CheckButtons 在不同版本間極難著色，這裡改用標準 Button 來模擬勾選框！
     # 頂端保留 0.965 以上給面板顯示切換小圓點；其餘控制項緊密
     # 排在 0.772~0.958，讓下方 2x2 影像區能向上延伸。
-    control_row_y = (0.932, 0.900, 0.868, 0.836, 0.804, 0.772)
+    control_row_y = (0.932, 0.905, 0.878, 0.851, 0.824, 0.797, 0.770)
     control_h = 0.026
     ax_c1 = fig.add_axes([0.05, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
     ax_c2 = fig.add_axes([0.17, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c3 = fig.add_axes([0.29, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c4 = fig.add_axes([0.05, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c5 = fig.add_axes([0.17, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c6 = fig.add_axes([0.29, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c7 = fig.add_axes([0.05, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c8 = fig.add_axes([0.17, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c9 = fig.add_axes([0.29, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c10 = fig.add_axes([0.05, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c11 = fig.add_axes([0.17, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c12 = fig.add_axes([0.29, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c13 = fig.add_axes([0.05, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c14 = fig.add_axes([0.17, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c15 = fig.add_axes([0.29, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c16 = fig.add_axes([0.05, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c17 = fig.add_axes([0.17, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
-    ax_c19 = fig.add_axes([0.29, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c18 = fig.add_axes([0.29, control_row_y[0], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c3 = fig.add_axes([0.05, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c4 = fig.add_axes([0.17, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c5 = fig.add_axes([0.29, control_row_y[1], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c6 = fig.add_axes([0.05, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c7 = fig.add_axes([0.17, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c8 = fig.add_axes([0.29, control_row_y[2], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c9 = fig.add_axes([0.05, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c10 = fig.add_axes([0.17, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c11 = fig.add_axes([0.29, control_row_y[3], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c12 = fig.add_axes([0.05, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c13 = fig.add_axes([0.17, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c14 = fig.add_axes([0.29, control_row_y[4], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c15 = fig.add_axes([0.05, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c16 = fig.add_axes([0.17, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c17 = fig.add_axes([0.29, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
+    ax_c19 = fig.add_axes([0.05, control_row_y[6], 0.11, control_h], facecolor='#1E1E1E')
     
     # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
     c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
     c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
+    c18 = Button(ax_c18, "[ ] Region-SIFT 匹配", **btn_opt_style)
     c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
     c4 = Button(
         ax_c4,
@@ -2781,7 +3144,8 @@ def main():
     c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
     c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
 
-    view_state = {'precise': True, 'grad_sift': True, 'enforce_epi': True,
+    view_state = {'precise': True, 'grad_sift': True, 'region_sift': False,
+                  'enforce_epi': True,
                   'ecc': ENABLE_ECC_REFINEMENT_DEFAULT, 'manual': False,
                   'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
@@ -2803,9 +3167,17 @@ def main():
                   'show_metric_blocks': DEBUG_METRIC_BLOCKS_DEFAULT,
                   'show_homography_residual': True,
                   'top2_geometry_rescue': TOP2_GEOMETRY_RESCUE_DEFAULT,
+                  'show_rt_warp_view': False,
                   'manual_pt_A': None, 'lines': [], 'grad_lines': [], 'show_grad_lines': False,
                   'highlighted_grad_line': None, 'highlighted_grad_line_artist': None,
                   'grad_data': None, 'restart': False}  # grad_data = {'ptsA': ndarray, 'ptsB': ndarray}
+    # 純顯示用：保存「右圖經 RT + 基準平面 Homography 投回左圖座標」的 RGB 畫面。
+    # 此狀態不會覆寫 locked_R/current_cand，也不會進入 matcher 或三角化流程。
+    rt_warp_view_state = {
+        'frame_rgb': None,
+        'valid_ratio': None,
+        'forced_ax_b_visible': False,
+    }
     # Display-only selector.  RT, baseline, matching and triangulated p3d never
     # change when this state is toggled.
     height_plane_state = {
@@ -2860,7 +3232,7 @@ def main():
     radio_mode.on_clicked(on_mode_change)
 
     # 統一設定文字顏色為白色，並將按鈕外框設為白色
-    for c in [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c19]:
+    for c in [c1, c2, c18, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c19]:
         c.label.set_color('white')
         c.label.set_fontsize(7)
         c.ax.patch.set_edgecolor('white')
@@ -2889,7 +3261,40 @@ def main():
         return _on_opt
         
     c1.on_clicked(make_on_opt(c1, 'precise', "嚴格精細匹配"))
-    c2.on_clicked(make_on_opt(c2, 'grad_sift', "梯度 SIFT 匹配"))
+
+    def on_grad_sift_mode_clicked(event):
+        enabling = not view_state['grad_sift']
+        view_state['grad_sift'] = enabling
+        c2.label.set_text("[X] 梯度 SIFT 匹配" if enabling else "[ ] 梯度 SIFT 匹配")
+        if enabling and view_state.get('region_sift', False):
+            view_state['region_sift'] = False
+            c18.label.set_text("[ ] Region-SIFT 匹配")
+        request_blit_refresh()
+        mark_wound_size_dirty('grad_sift')
+        if last_click:
+            do_measure(last_click[0], last_click[1])
+
+    def on_region_sift_mode_clicked(event):
+        enabling = not view_state.get('region_sift', False)
+        view_state['region_sift'] = enabling
+        c18.label.set_text("[X] Region-SIFT 匹配" if enabling else "[ ] Region-SIFT 匹配")
+        if enabling and view_state.get('grad_sift', False):
+            view_state['grad_sift'] = False
+            c2.label.set_text("[ ] 梯度 SIFT 匹配")
+        if enabling and not ax_debug_B.get_visible():
+            # Region mode needs both lower panels to explain the shared group
+            # shift; keep the upper/lower right visibility controls coherent.
+            ax_B.set_visible(True)
+            ax_debug_B.set_visible(True)
+            ax_debug_info_B.set_visible(True)
+            btn_hide_R.label.set_text("隱藏右圖")
+        request_blit_refresh()
+        mark_wound_size_dirty('region_sift')
+        if last_click:
+            do_measure(last_click[0], last_click[1])
+
+    c2.on_clicked(on_grad_sift_mode_clicked)
+    c18.on_clicked(on_region_sift_mode_clicked)
     c3.on_clicked(make_on_opt(c3, 'enforce_epi', "強制極線對齊"))
     c4.on_clicked(make_on_opt(c4, 'ecc', "啟用 ECC 精修"))
     c5.on_clicked(make_on_opt(c5, 'manual', "手動匹配模式"))
@@ -4068,6 +4473,7 @@ def main():
         g_ptsA, g_ptsB, g_groups, g_refA, g_refB, g_refA_groups, g_refB_groups, g_kptsB, g_rect = None, None, None, None, None, None, None, None, None
         trajectory_res = None
         grad_descriptor_audit = None
+        region_debug = None
 
         if not cand.get('pose_valid', True):
             print(f"❌ [測量失敗] 當前候選影格位姿無效 (pose_valid == False)，原因: {cand.get('pose_info', '未知')}")
@@ -4091,14 +4497,100 @@ def main():
                 m_pt, method = manual_match_pt, "手動點選"
 
             if m_pt is None:
-                for mid, cA in cand['cornersA'].items():
-                    d = np.linalg.norm(cA - np.array([u, v]), axis=1)
-                    if np.min(d) < 10:
-                        best_idx = np.argmin(d)
-                        u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
-                        m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
-                        break
-                if m_pt is None and snap_view_state['grad_sift']:
+                region_mode = bool(snap_view_state.get('region_sift', False))
+                if region_mode:
+                    _t_blk = time.perf_counter()
+                    region_right_gray = preprocess_gray(
+                        cand['gray'], snap_view_state.get('enable_clahe', False))
+                    region_result = run_region_sift_matching(
+                        snap_imgA_gray, region_right_gray, (u, v), cand, KL,
+                        sift=sift, config=REGION_SIFT_CONFIG,
+                        left_cache=left_cache)
+                    region_debug = region_result.get('region_debug')
+                    m_pt = region_result.get('m_pt')
+                    method = region_result.get('method', '')
+                    if region_result.get('reject_reason'):
+                        rt_bound_reject_reason = region_result['reject_reason']
+                        print(
+                            f"   [Region-SIFT] rejected: "
+                            f"{region_result['reject_reason']}")
+                    if region_debug is not None:
+                        delta = np.asarray(
+                            region_debug['best_displacement_warp']).reshape(2)
+                        print(
+                            f"   [Region-SIFT] {'rejected candidate' if region_result.get('reject_reason') else 'accepted'}: "
+                            f"points={region_debug['point_count']}, "
+                            f"keep={region_debug['keep_count']}, "
+                            f"candidates={region_debug['valid_candidate_count']}/"
+                            f"{region_debug['candidate_count']}, "
+                            f"deltaW=({delta[0]:.1f},{delta[1]:.1f}), "
+                            f"GroupScore={region_debug['group_score']:.3f}")
+                        print(
+                            f"   [Region-SIFT score] "
+                            f"Trim{region_debug['keep_count']}={region_debug['trimmed_score']:.3f}, "
+                            f"CellAll={region_debug['balanced_score']:.3f}, "
+                            f"balanceWeight={REGION_SIFT_CONFIG.group_balance_weight:.2f}, "
+                            f"FramePenalty={region_debug['frame_penalty']:.3f}, "
+                            f"Total={region_debug['objective_score']:.3f}; "
+                            + (f"all {region_debug['point_count']} rows contribute to CellAll"
+                               if REGION_SIFT_CONFIG.group_balance_weight > 0 else
+                               "CellAll diagnostic only (weight=0)"))
+                        print(
+                            f"   [Region-SIFT frame/support] "
+                            f"reliablePairs scale/angle={region_debug['frame_scale_pair_count']}/"
+                            f"{region_debug['frame_orientation_pair_count']}, "
+                            f"groupScaleRatio={2.0 ** region_debug['frame_scale_center_log2']:.3f}, "
+                            f"groupAngleDelta={region_debug['frame_angle_center_deg']:.2f}deg, "
+                            f"leftSizes={np.unique(region_debug['left_frame_sizes_px']).round(2).tolist()}, "
+                            f"supportMaxL/R={np.max(region_debug['left_frames']['support_radius_px']):.1f}/"
+                            f"{np.max(region_debug['right_frames']['support_radius_px']):.1f}px")
+                        kept_stats = region_debug.get('kept_l2_stats', {})
+                        print(
+                            f"   [Region-SIFT ambiguity] "
+                            f"bestG={region_debug['group_score']:.3f}, "
+                            f"secondG={region_debug.get('second_group_score', float('nan')):.3f} "
+                            f"(outside {region_debug.get('second_best_exclusion_radius_px', 0.0):.1f}px), "
+                            f"marginG={region_debug.get('group_score_margin', float('nan')):.3f}, "
+                            f"relativeG={region_debug.get('relative_group_score', float('nan')):.4f}, "
+                            f"bestObj={region_debug.get('objective_score', float('nan')):.3f}, "
+                            f"secondObj={region_debug.get('second_objective_score', float('nan')):.3f}, "
+                            f"ratioObj={region_debug.get('objective_score_ratio', float('nan')):.4f}")
+                        print(
+                            f"   [Region-SIFT distribution] "
+                            f"KEEP-L2 mean/median/std/min/max="
+                            f"{kept_stats.get('mean', float('nan')):.3f}/"
+                            f"{kept_stats.get('median', float('nan')):.3f}/"
+                            f"{kept_stats.get('std', float('nan')):.3f}/"
+                            f"{kept_stats.get('min', float('nan')):.3f}/"
+                            f"{kept_stats.get('max', float('nan')):.3f}, "
+                            f"cells={region_debug.get('kept_cell_coverage', 0)}/"
+                            f"{region_debug.get('total_cell_count', 0)}")
+                        print(
+                            f"   [Region-SIFT geometry/frame] "
+                            f"bestOffset(along,across)=("
+                            f"{region_debug.get('best_along_offset_px', float('nan')):.1f},"
+                            f"{region_debug.get('best_across_offset_px', float('nan')):.1f})px, "
+                            f"secondOffset=("
+                            f"{region_debug.get('second_along_offset_px', float('nan')):.1f},"
+                            f"{region_debug.get('second_across_offset_px', float('nan')):.1f})px, "
+                            f"scaleRatio median/MAD="
+                            f"{region_debug.get('kept_scale_ratio_median', float('nan')):.3f}/"
+                            f"{region_debug.get('kept_scale_ratio_mad', float('nan')):.3f}, "
+                            f"absAngleDelta median/MAD="
+                            f"{region_debug.get('kept_abs_angle_delta_median', float('nan')):.1f}/"
+                            f"{region_debug.get('kept_abs_angle_delta_mad', float('nan')):.1f}deg")
+                    t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
+
+                if not region_mode:
+                    for mid, cA in cand['cornersA'].items():
+                        d = np.linalg.norm(cA - np.array([u, v]), axis=1)
+                        if np.min(d) < 10:
+                            best_idx = np.argmin(d)
+                            u, v = cA[best_idx] # 🌟 同步校正左圖座標為精確角點
+                            m_pt, method = cand['cornersB'][mid][best_idx], "ArUco"
+                            break
+                if (m_pt is None and not region_mode
+                        and snap_view_state['grad_sift']):
                     _t_blk = time.perf_counter()
                     if snap_view_state.get('use_improved_matching', False):
                         m_pt, method, g_ptsA, g_ptsB, g_rect = run_improved_matching_flow(
@@ -4193,7 +4685,8 @@ def main():
                                 rt_bound_reject_reason = (
                                     None if m_pt is not None
                                     else top2_result.get('reject_reason'))
-                if (m_pt is None and snap_view_state['precise']):
+                if (m_pt is None and not region_mode
+                        and snap_view_state['precise']):
                     _t_blk = time.perf_counter()
                     res_p = find_precise_match(snap_imgA_gray, cand['gray'], (u, v), cand['F'],
                                                KL, cand['K_R'], cand['R_rel'], cand['t_rel'],
@@ -4204,6 +4697,7 @@ def main():
             m_pt_raw = m_pt.copy() if m_pt is not None else None
 
             if (m_pt is not None and method != "ArUco" and manual_match_pt is None
+                    and not snap_view_state.get('region_sift', False)
                     and snap_view_state.get('epipolar_band_search', False)):
                 _t_blk = time.perf_counter()
                 rt_seed_for_bound, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
@@ -4230,7 +4724,8 @@ def main():
                     print(f"   [Epi-band] 沿極線重新搜尋未通過門檻，保留原始候選點 (best score={epi_score:.3f})")
                 t_prof['Epi-band搜尋'] = time.perf_counter() - _t_blk
 
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"
+                    and not snap_view_state.get('region_sift', False)):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
@@ -4239,14 +4734,16 @@ def main():
                                       m_pt[1] - l_B[1]/np.sqrt(denom)*dist_e])
                     method += "+極線對齊"
 
-            if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+            if (m_pt is not None and method != "ArUco" and manual_match_pt is None
+                    and not snap_view_state.get('region_sift', False)):
                 rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
                 rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
                 if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
                     print(f"❌ [RT邊界] 匹配點偏離 RT/平面預測 {rt_dev:.1f}px (> {GRAD_SIFT_MAX_RT_ADJUST_PX:.0f}px)，判定匹配失敗。")
                     rt_bound_reject_reason = f"匹配點偏離RT/平面預測 {rt_dev:.0f}px"
                     m_pt = None
-            if (m_pt is not None and snap_view_state['ecc']):
+            if (m_pt is not None and snap_view_state['ecc']
+                    and not snap_view_state.get('region_sift', False)):
                 _t_blk = time.perf_counter()
                 if snap_view_state.get('use_improved_matching', False):
                     m_pt, ecc_method = pyramid_ecc_refinement(snap_imgA_gray, cand['gray'], (u, v), m_pt, 45, 91)
@@ -4265,7 +4762,8 @@ def main():
                             method += "+ECC精修"
                         except: method += "+ECC失敗"
                 t_prof['ECC精修'] = time.perf_counter() - _t_blk
-            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"):
+            if (m_pt is not None and snap_view_state['enforce_epi'] and method != "ArUco"
+                    and not snap_view_state.get('region_sift', False)):
                 l_B = cand['F'] @ np.array([u, v, 1.0])
                 denom = l_B[0]**2 + l_B[1]**2
                 if denom > 1e-9:
@@ -4277,7 +4775,8 @@ def main():
         d_val, p3d_val, p3d_w_val, fail_reason = None, None, None, ""
         p3d = None
         
-        if (m_pt is not None and method != "ArUco" and manual_match_pt is None):
+        if (m_pt is not None and method != "ArUco" and manual_match_pt is None
+                and not snap_view_state.get('region_sift', False)):
             rt_seed_final, _rt_seed_method = predict_right_seed_from_geometry((u, v), cand, KL)
             rt_dev = float(np.linalg.norm(np.array(m_pt, dtype=np.float32) - np.array(rt_seed_final, dtype=np.float32)))
             if rt_dev > GRAD_SIFT_MAX_RT_ADJUST_PX:
@@ -4458,6 +4957,7 @@ def main():
                 'g_refA_groups': g_refA_groups, 'g_refB_groups': g_refB_groups,
                 'g_kptsB': g_kptsB, 'g_rect': g_rect,
                 'grad_descriptor_audit': grad_descriptor_audit,
+                'region_debug': region_debug,
                 'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
                 'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score,
                 # Read-only references for the lower debug panels.  These are
@@ -4584,6 +5084,15 @@ def main():
 
     def do_measure(u, v, manual_match_pt=None):
         """同步計算並立即更新 UI"""
+        if view_state.get('show_rt_warp_view', False):
+            print(
+                "⚠️ [RT Warp View] 目前為純顯示模式，深度計算已停用；"
+                "請先按 RT Warp: On 關閉此模式。")
+            depth_text.set_text(
+                "RT+Plane Warp View (display only)\n"
+                "Depth calculation is disabled")
+            request_blit_refresh()
+            return None
         nonlocal last_click, locked_L, locked_R; last_click = (u, v)
         print("\n" + "=" * 80)
         print(f"🖱️ [新點選量測] 左圖點選座標: ({float(u):.1f}, {float(v):.1f})")
@@ -5563,8 +6072,368 @@ def main():
             request_blit_refresh()
         return True
 
+    def clear_region_sift_debug_artists():
+        for artist in debug_region_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_region_artists.clear()
+        debug_region_state['records'] = []
+        debug_region_state['selected_index'] = None
+        debug_region_state['support_artists'] = []
+
+    def select_region_sift_debug_point(index=None, screen_xy=None,
+                                       announce=False, refresh=False):
+        records = debug_region_state.get('records', [])
+        if not records:
+            return False
+        selected = index
+        if selected is None and screen_xy is not None:
+            mouse_xy = np.asarray(screen_xy, dtype=np.float64).reshape(2)
+            display_points = np.asarray([
+                ax_debug_A.transData.transform(record['left_point'])
+                for record in records
+            ], dtype=np.float64)
+            distances = np.linalg.norm(display_points - mouse_xy, axis=1)
+            nearest = int(np.argmin(distances))
+            if float(distances[nearest]) > 12.0:
+                return False
+            selected = nearest
+        if selected is None or not 0 <= int(selected) < len(records):
+            return False
+        selected = int(selected)
+        record = records[selected]
+        debug_region_state['selected_index'] = selected
+        point_left = np.asarray(record['left_point'], dtype=np.float32)
+        dbg_audit_selected_A.set_offsets([point_left])
+
+        label = 'P' if record.get('is_click') else f"#{selected + 1:02d}"
+        cell_text = (
+            f"({int(record['cell_row'])},{int(record['cell_col'])})")
+        keep_text = 'KEEP in TrimK' if record.get('kept') else 'TRIM from TrimK'
+        keep_text += ('; CellAll active' if record.get('balanced_score_active')
+                      else '; CellAll disabled (weight=0)')
+        point_warp = np.asarray(record['right_point_warp'], dtype=np.float32)
+        point_right = np.asarray(record['right_point_original'], dtype=np.float32)
+        for support_artist in debug_region_state.get('support_artists', []):
+            support_artist.remove()
+            if support_artist in debug_region_artists:
+                debug_region_artists.remove(support_artist)
+        support_artists = []
+        for support_ax, support_point, radius_key in (
+                (ax_debug_A, point_left, 'left_support_radius_px'),
+                (ax_debug_B, point_warp, 'right_support_radius_px')):
+            radius = float(record.get(radius_key, 0.0))
+            support_box = Rectangle(
+                (support_point[0] - radius, support_point[1] - radius),
+                2.0 * radius, 2.0 * radius, fill=False,
+                edgecolor='#FFFF66', linestyle=':', linewidth=1.0, zorder=6)
+            support_ax.add_patch(support_box)
+            support_artists.append(support_box)
+        debug_region_artists.extend(support_artists)
+        debug_region_state['support_artists'] = support_artists
+        dbg_info_A.set_text(
+            debug_region_state.get('base_left_text', '')
+            + f"\nSelected {label}: cell={cell_text}, "
+              f"level={record.get('gradient_label')}, "
+              f"gradient={float(record.get('gradient_magnitude', 0.0)):.2f}"
+            + f"\nL frame: size={float(record.get('left_scale_px', 0.0)):.1f}px, "
+              f"angle={float(record.get('left_angle_deg', 0.0)):.1f}deg, "
+              f"support={float(record.get('left_support_radius_px', 0.0)):.1f}px"
+            + f"\nreliable scale/angle pair={record.get('scale_pair_reliable')}/"
+              f"{record.get('angle_pair_reliable')}; dotted=full support bounds")
+        dbg_info_B.set_text(
+            debug_region_state.get('base_right_text', '')
+            + f"\n{label}: L2={float(record['l2_distance']):.3f}, "
+              f"rank={int(record['distance_rank'])}/{len(records)} => {keep_text}"
+            + f"\nL=({point_left[0]:.1f},{point_left[1]:.1f}), "
+              f"RW=({point_warp[0]:.1f},{point_warp[1]:.1f}), "
+              f"R=({point_right[0]:.1f},{point_right[1]:.1f})"
+            + f"\nR frame: size={float(record.get('right_scale_px', 0.0)):.1f}px, "
+              f"angle={float(record.get('right_angle_deg', 0.0)):.1f}deg | "
+              f"scale-ratio={float(record.get('scale_ratio', 0.0)):.2f}, "
+              f"dAngle={float(record.get('angle_delta_deg', 0.0)):+.1f}deg"
+            + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px")
+        if announce:
+            print(
+                f"   [Region-SIFT point] {label} cell={cell_text} "
+                f"level={record.get('gradient_label')} "
+                f"gradient={float(record.get('gradient_magnitude', 0.0)):.2f} "
+                f"L-frame={float(record.get('left_scale_px', 0.0)):.1f}px/"
+                f"{float(record.get('left_angle_deg', 0.0)):.1f}deg "
+                f"R-frame={float(record.get('right_scale_px', 0.0)):.1f}px/"
+                f"{float(record.get('right_angle_deg', 0.0)):.1f}deg "
+                f"packedOctave L/R={record.get('left_octave')}/{record.get('right_octave')} "
+                f"support L/R={record.get('left_support_radius_px')}/{record.get('right_support_radius_px')}px "
+                f"reliableScale/Angle={record.get('scale_pair_reliable')}/{record.get('angle_pair_reliable')} "
+                f"L2={float(record['l2_distance']):.3f} "
+                f"rank={int(record['distance_rank'])}/{len(records)} "
+                f"status={keep_text}")
+        if refresh:
+            request_blit_refresh()
+        return True
+
+    def update_region_sift_debug_views(res, u, v):
+        """Draw the exact Region-SIFT inputs and the winning shared shift."""
+        empty = np.empty((0, 2), dtype=np.float32)
+        clear_region_sift_debug_artists()
+        clear_metric_block_debug_artists()
+        for artist in debug_pair_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_pair_artists.clear()
+        debug_homography_residual_artists.clear()
+        for artist in debug_audit_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        debug_audit_artists.clear()
+        debug_audit_state['records'] = []
+        debug_audit_state['selected_index'] = None
+        for scatter in (dbg_ref_high_A, dbg_ref_high_B, dbg_ref_mid_A,
+                        dbg_ref_mid_B, dbg_inlier_high_A, dbg_inlier_high_B,
+                        dbg_inlier_mid_A, dbg_inlier_mid_B, dbg_pred_B,
+                        dbg_audit_top1_B, dbg_audit_top2_B,
+                        dbg_audit_local_seed_B):
+            scatter.set_offsets(empty)
+        dbg_hull_line.set_data([], [])
+        dbg_hull_line_B.set_data([], [])
+        dbg_search_rect.set_visible(False)
+        dbg_raw_B.set_offsets(empty)
+        dbg_audit_selected_A.set_offsets(empty)
+
+        ax_debug_A.set_title(
+            'Region-SIFT Debug - Left 3x3 Sampling Grid', color='#8FD3FF',
+            fontsize=10, fontweight='bold', pad=5)
+        ax_debug_B.set_title(
+            'Region-SIFT Debug - Warped Right / Epipolar Band', color='#FFD29A',
+            fontsize=10, fontweight='bold', pad=5)
+        debug_left_gray = res.get('debug_left_gray')
+        if debug_left_gray is not None:
+            im_debug_A.set_data(cv2.cvtColor(
+                np.asarray(debug_left_gray), cv2.COLOR_GRAY2RGB))
+
+        debug = res.get('region_debug')
+        if not isinstance(debug, dict):
+            debug_right_gray = res.get('debug_right_gray')
+            if debug_right_gray is not None:
+                im_debug_B.set_data(cv2.cvtColor(
+                    np.asarray(debug_right_gray), cv2.COLOR_GRAY2RGB))
+            dbg_click_A.set_offsets([[float(u), float(v)]])
+            dbg_seed_B.set_offsets(empty)
+            dbg_final_B.set_offsets(empty)
+            dbg_epi_line.set_data([], [])
+            fail_reason = res.get('fail_reason') or 'Region-SIFT unavailable'
+            dbg_info_A.set_text('Region-SIFT did not produce debug point data')
+            dbg_info_B.set_text(f"Region-SIFT failed: {fail_reason}")
+            return
+
+        warped_right = np.asarray(debug['warped_right_gray'])
+        im_debug_B.set_data(cv2.cvtColor(warped_right, cv2.COLOR_GRAY2RGB))
+        left_points = np.asarray(debug['left_points'], dtype=np.float32).reshape(-1, 2)
+        right_points = np.asarray(debug['best_points_warp'], dtype=np.float32).reshape(-1, 2)
+        records = list(debug.get('point_metadata', []))
+        keep_mask = np.asarray(debug['keep_mask'], dtype=bool).reshape(-1)
+        auto_count = int(debug.get('auto_point_count', max(0, len(left_points) - 1)))
+        auto_left = left_points[:auto_count]
+        auto_right = right_points[:auto_count]
+
+        color_map = {
+            'high': '#FF4D4D',
+            'mid': '#FFD84D',
+            'low': '#36C5F0',
+        }
+        auto_colors = [
+            color_map.get(str(records[index].get('gradient_label')), '#B084FF')
+            for index in range(auto_count)
+        ]
+        left_scatter = ax_debug_A.scatter(
+            auto_left[:, 0], auto_left[:, 1], s=40, c=auto_colors,
+            edgecolors='black', linewidths=0.45, zorder=7)
+        debug_region_artists.append(left_scatter)
+        kept_auto = keep_mask[:auto_count]
+        if np.any(kept_auto):
+            kept_scatter = ax_debug_B.scatter(
+                auto_right[kept_auto, 0], auto_right[kept_auto, 1], s=44,
+                facecolors='none', edgecolors='#00FF66', linewidths=1.4,
+                zorder=8)
+            debug_region_artists.append(kept_scatter)
+        if np.any(~kept_auto):
+            trim_scatter = ax_debug_B.scatter(
+                auto_right[~kept_auto, 0], auto_right[~kept_auto, 1], s=34,
+                c='#888888', marker='x', linewidths=1.1, zorder=7)
+            debug_region_artists.append(trim_scatter)
+
+        dbg_click_A.set_offsets([left_points[-1]])
+        dbg_seed_B.set_offsets([np.asarray(debug['seed_on_line']).reshape(2)])
+        dbg_final_B.set_offsets([np.asarray(debug['best_center_warp']).reshape(2)])
+
+        polygon = np.asarray(debug['search_band_polygon_warp'], dtype=np.float32)
+        band_patch = Polygon(
+            polygon, closed=True, fill=False, edgecolor='#FF00FF',
+            linewidth=1.3, linestyle='--', alpha=0.9, zorder=5)
+        ax_debug_B.add_patch(band_patch)
+        debug_region_artists.append(band_patch)
+
+        line = np.asarray(debug['line_warp'], dtype=np.float64).reshape(3)
+        image_h, image_w = warped_right.shape[:2]
+        if abs(line[1]) >= abs(line[0]) and abs(line[1]) > 1e-9:
+            line_x = np.array([0.0, float(image_w - 1)])
+            line_y = -(line[0] * line_x + line[2]) / line[1]
+        elif abs(line[0]) > 1e-9:
+            line_y = np.array([0.0, float(image_h - 1)])
+            line_x = -(line[1] * line_y + line[2]) / line[0]
+        else:
+            line_x = line_y = np.array([], dtype=np.float64)
+        dbg_epi_line.set_data(line_x, line_y)
+
+        x0, y0, roi_w, roi_h = [float(value) for value in debug['left_roi']]
+        cfg = debug['config']
+        for col in range(int(cfg.grid_cols) + 1):
+            x = x0 + col * float(cfg.cell_width_px)
+            grid_line, = ax_debug_A.plot(
+                [x, x], [y0, y0 + roi_h], color='white', lw=0.55,
+                alpha=0.55, zorder=4)
+            debug_region_artists.append(grid_line)
+        for row in range(int(cfg.grid_rows) + 1):
+            y = y0 + row * float(cfg.cell_height_px)
+            grid_line, = ax_debug_A.plot(
+                [x0, x0 + roi_w], [y, y], color='white', lw=0.55,
+                alpha=0.55, zorder=4)
+            debug_region_artists.append(grid_line)
+
+        for index in range(auto_count):
+            color = '#00FF66' if keep_mask[index] else '#AAAAAA'
+            label_a = ax_debug_A.text(
+                left_points[index, 0] + 0.7, left_points[index, 1] - 0.7,
+                str(index + 1), color=auto_colors[index], fontsize=6,
+                fontweight='bold', zorder=9)
+            label_b = ax_debug_B.text(
+                right_points[index, 0] + 0.7, right_points[index, 1] - 0.7,
+                str(index + 1), color=color, fontsize=6,
+                fontweight='bold', zorder=9)
+            connection = ConnectionPatch(
+                xyA=left_points[index], xyB=right_points[index],
+                coordsA='data', coordsB='data', axesA=ax_debug_A,
+                axesB=ax_debug_B, color=color, lw=0.5, alpha=0.25,
+                zorder=4)
+            ax_debug_B.add_artist(connection)
+            debug_region_artists.extend([label_a, label_b, connection])
+
+        # Each short ray is the independently estimated SIFT frame: its
+        # length follows keypoint size and its direction follows orientation.
+        # The point locations themselves still differ only by one shared shift.
+        left_sizes = np.asarray(
+            debug['left_frame_sizes_px'], dtype=np.float32).reshape(-1)
+        left_angles = np.asarray(
+            debug['left_frame_angles_deg'], dtype=np.float32).reshape(-1)
+        right_sizes = np.asarray(
+            debug['right_frame_sizes_px'], dtype=np.float32).reshape(-1)
+        right_angles = np.asarray(
+            debug['right_frame_angles_deg'], dtype=np.float32).reshape(-1)
+        for index in range(len(left_points)):
+            angle_l = np.deg2rad(float(left_angles[index]))
+            angle_r = np.deg2rad(float(right_angles[index]))
+            length_l = max(2.0, 0.5 * float(left_sizes[index]))
+            length_r = max(2.0, 0.5 * float(right_sizes[index]))
+            end_l = left_points[index] + length_l * np.array(
+                [np.cos(angle_l), np.sin(angle_l)], dtype=np.float32)
+            end_r = right_points[index] + length_r * np.array(
+                [np.cos(angle_r), np.sin(angle_r)], dtype=np.float32)
+            color_l = 'white' if index == len(left_points) - 1 else auto_colors[index]
+            color_r = '#00FF66' if keep_mask[index] else '#888888'
+            frame_l, = ax_debug_A.plot(
+                [left_points[index, 0], end_l[0]],
+                [left_points[index, 1], end_l[1]],
+                color=color_l, lw=1.0, alpha=0.9, zorder=8)
+            frame_r, = ax_debug_B.plot(
+                [right_points[index, 0], end_r[0]],
+                [right_points[index, 1], end_r[1]],
+                color=color_r, lw=1.0, alpha=0.9, zorder=8)
+            debug_region_artists.extend([frame_l, frame_r])
+        p_label_a = ax_debug_A.text(
+            left_points[-1, 0] + 1.0, left_points[-1, 1] - 1.0, 'P',
+            color='white', fontsize=8, fontweight='bold', zorder=10)
+        p_label_b = ax_debug_B.text(
+            right_points[-1, 0] + 1.0, right_points[-1, 1] - 1.0, "P'",
+            color='#00FF66', fontsize=8, fontweight='bold', zorder=10)
+        debug_region_artists.extend([p_label_a, p_label_b])
+
+        pad = max(5.0, float(np.max(debug['left_frames']['support_radius_px'])))
+        ax_debug_A.set_xlim(max(-0.5, x0 - pad), min(float(image_w) - 0.5, x0 + roi_w + pad))
+        ax_debug_A.set_ylim(min(float(image_h) - 0.5, y0 + roi_h + pad), max(-0.5, y0 - pad))
+        debug_zoom_home['A'] = (ax_debug_A.get_xlim(), ax_debug_A.get_ylim())
+        right_radii = np.asarray(debug['right_frames']['support_radius_px']).reshape(-1, 1)
+        right_cloud = np.vstack([right_points - right_radii,
+                                 right_points + right_radii, polygon])
+        rx0 = max(-0.5, float(np.min(right_cloud[:, 0])) - 7.0)
+        rx1 = min(float(image_w) - 0.5, float(np.max(right_cloud[:, 0])) + 7.0)
+        ry0 = max(-0.5, float(np.min(right_cloud[:, 1])) - 7.0)
+        ry1 = min(float(image_h) - 0.5, float(np.max(right_cloud[:, 1])) + 7.0)
+        ax_debug_B.set_xlim(rx0, rx1)
+        ax_debug_B.set_ylim(ry1, ry0)
+        debug_zoom_home['B'] = (ax_debug_B.get_xlim(), ax_debug_B.get_ylim())
+
+        delta = np.asarray(debug['best_displacement_warp']).reshape(2)
+        best_right = np.asarray(debug['best_center_right']).reshape(2)
+        descriptor_shape = tuple(np.asarray(debug['left_descriptors']).shape)
+        kept_stats = debug.get('kept_l2_stats', {})
+        base_left_text = (
+            f"Region-SIFT | grid={cfg.grid_rows}x{cfg.grid_cols}, "
+            f"cell={cfg.cell_width_px}x{cfg.cell_height_px}px | "
+            f"auto={auto_count}+P={debug['point_count']} | desc={descriptor_shape}\n"
+            "each ray=size+angle; red=High, yellow=Mid, cyan=Low; click for details")
+        base_right_text = (
+            f"band={cfg.search_width_px:g}x{cfg.search_length_px:g}px, "
+            f"step={cfg.search_across_step_px:g}x{cfg.search_along_step_px:g} | "
+            f"candidates={debug['valid_candidate_count']}/{debug['candidate_count']}\n"
+            f"bestG={debug['group_score']:.3f}, "
+            f"relativeG={debug.get('relative_group_score', float('nan')):.3f}, "
+            f"secondG={debug.get('second_group_score', float('nan')):.3f}, "
+            f"margin={debug.get('group_score_margin', float('nan')):.3f}, "
+            f"ObjRatio={debug.get('objective_score_ratio', float('nan')):.4f}\n"
+            f"Trim{debug['keep_count']}={debug['trimmed_score']:.2f}, "
+            f"CellAll={debug['balanced_score']:.2f} (w={cfg.group_balance_weight:.2f}), "
+            f"Frame+={debug['frame_penalty']:.2f}, Total={debug['objective_score']:.2f}\n"
+            f"KEEP={debug['keep_count']}/{debug['point_count']}, "
+            f"L2 med/std/max={kept_stats.get('median', float('nan')):.1f}/"
+            f"{kept_stats.get('std', float('nan')):.1f}/"
+            f"{kept_stats.get('max', float('nan')):.1f}, "
+            f"cells={debug.get('kept_cell_coverage', 0)}/"
+            f"{debug.get('total_cell_count', 0)}\n"
+            f"deltaW=({delta[0]:.1f},{delta[1]:.1f}) | "
+            f"P' R=({best_right[0]:.1f},{best_right[1]:.1f}) | "
+            f"{debug['elapsed_ms']:.0f}ms\n"
+            + ("green=TrimK+CellAll, gray=CellAll"
+               if cfg.group_balance_weight > 0 else
+               "green=TrimK, gray=trimmed; CellAll diagnostic only (weight=0)")
+            + "; flat frames skip consistency penalty")
+        if res.get('fail_reason'):
+            base_right_text += f"\nResult: {res['fail_reason']}"
+        debug_region_state['records'] = records
+        debug_region_state['base_left_text'] = base_left_text
+        debug_region_state['base_right_text'] = base_right_text
+        dbg_info_A.set_text(base_left_text)
+        dbg_info_B.set_text(base_right_text)
+        # Default to P so its descriptor contribution is visible immediately.
+        select_region_sift_debug_point(index=len(records) - 1)
+
     def update_grad_match_debug_views(res, u, v):
         """Update the lower zoomed views without changing any matching decision."""
+        if view_state.get('region_sift', False):
+            update_region_sift_debug_views(res, u, v)
+            return
+        clear_region_sift_debug_artists()
+        ax_debug_A.set_title(
+            'Grad-SIFT/ORB Debug - Left ROI (wheel zoom; double-click reset)',
+            color='#8FD3FF', fontsize=10, fontweight='bold', pad=5)
+        ax_debug_B.set_title(
+            'Grad-SIFT/ORB Debug - Right ROI (wheel zoom; double-click reset)',
+            color='#FFD29A', fontsize=10, fontweight='bold', pad=5)
         empty = np.empty((0, 2), dtype=np.float32)
 
         def as_points(value):
@@ -6195,9 +7064,14 @@ def main():
         # 程度影響 12 px 的點選容許範圍。
         if event.inaxes == ax_debug_A:
             if event.x is not None and event.y is not None:
-                select_grad_descriptor_audit(
-                    screen_xy=(event.x, event.y),
-                    announce=True, refresh=True)
+                if view_state.get('region_sift', False):
+                    select_region_sift_debug_point(
+                        screen_xy=(event.x, event.y),
+                        announce=True, refresh=True)
+                else:
+                    select_grad_descriptor_audit(
+                        screen_xy=(event.x, event.y),
+                        announce=True, refresh=True)
             return
 
         if event.inaxes not in (ax_A, ax_B): return
@@ -6210,6 +7084,16 @@ def main():
         if not pan_state['pressing']: return
         pan_state['pressing'] = False
         if not pan_state['dragged'] and event.xdata is not None:
+            if (view_state.get('show_rt_warp_view', False)
+                    and pan_state['ax'] in (ax_A, ax_B)):
+                print(
+                    "⚠️ [RT Warp View] 主畫面點擊量測已停用；"
+                    "可繼續縮放/平移，關閉 RT Warp 後才能計算深度。")
+                depth_text.set_text(
+                    "RT+Plane Warp View (display only)\n"
+                    "Depth calculation is disabled")
+                request_blit_refresh()
+                return
             ux, vx = float(event.xdata), float(event.ydata)
             
             # 自動吸附 ArUco 角點
@@ -6418,22 +7302,25 @@ def main():
         "5mm Grid: On" if view_state['show_metric_blocks'] else "5mm Grid: Off",
         **btn_style)
 
-    ax_btn_shared_plane = fig.add_axes([0.58, control_row_y[5], 0.12, control_h])
+    ax_btn_shared_plane = fig.add_axes([0.58, control_row_y[5], 0.09, control_h])
     btn_shared_plane = Button(ax_btn_shared_plane, "Shared: Off", **btn_style)
 
-    ax_btn_top2_geo = fig.add_axes([0.71, control_row_y[5], 0.12, control_h])
+    ax_btn_top2_geo = fig.add_axes([0.68, control_row_y[5], 0.09, control_h])
     btn_top2_geo = Button(
         ax_btn_top2_geo,
         "Top2Geo: On" if view_state['top2_geometry_rescue']
         else "Top2Geo: Off",
         **btn_style)
 
-    ax_btn_h_residual = fig.add_axes([0.84, control_row_y[5], 0.12, control_h])
+    ax_btn_h_residual = fig.add_axes([0.78, control_row_y[5], 0.09, control_h])
     btn_h_residual = Button(
         ax_btn_h_residual,
-        "H Residual: On" if view_state['show_homography_residual']
-        else "H Residual: Off",
+        "H-Resid: On" if view_state['show_homography_residual']
+        else "H-Resid: Off",
         **btn_style)
+
+    ax_btn_rt_warp_view = fig.add_axes([0.88, control_row_y[5], 0.09, control_h])
+    btn_rt_warp_view = Button(ax_btn_rt_warp_view, "RT Warp: Off", **btn_style)
 
     wound_z_offset = 0.0
     # 原本位於左下角，會壓到新的 Debug 資訊列；移入右側控制區空位。
@@ -6459,7 +7346,7 @@ def main():
     text_box.on_submit(submit_z_offset)
     
     # 統一設定字型、文字顏色與邊框寬度
-    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual]:
+    for b in [btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle, btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual, btn_rt_warp_view]:
         b.label.set_color('#E0E0E0') # 質感白
         b.label.set_fontsize(7)
         b.ax.patch.set_linewidth(1.2) # 細緻邊框
@@ -6474,7 +7361,7 @@ def main():
         b.ax.patch.set_edgecolor('#D83B01')
         
     # 3. 功能切換類：使用中性的深灰 (#555555)
-    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual]:
+    for b in [btn_norm_toggle, btn_grad_toggle, btn_custom_plane, btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay, btn_height_plane, btn_metric_blocks, btn_shared_plane, btn_top2_geo, btn_h_residual, btn_rt_warp_view]:
         b.ax.patch.set_edgecolor('#555555')
         
     # 4. 導覽/返回選單類：使用翡翠綠 (#28A745)
@@ -6550,10 +7437,58 @@ def main():
         request_blit_refresh()
 
     def on_rt_diff(event):
-        if current_cand.get('plane_n') is None or current_cand.get('plane_c') is None:
-            print("⚠️ [RT Diff] 缺少 plane_n / plane_c，無法用 RT + 平面單應性 warp 左圖。")
+        # RT 由所有 mapped markers 求得；RT Diff 也優先使用所有左右共視、
+        # 四角皆有效的 markers 擬合共同平面，不再固定使用 reference ID 平面。
+        corners_left_raw = current_cand.get('cornersA') or {}
+        corners_right_raw = current_cand.get('cornersB') or {}
+        # 正規化 ID 型別，避免來源字典使用 np.int / 字串 ID 時，
+        # 交集判定成功卻無法用 Python int 取回角點。
+        corners_left = {int(mid): pts for mid, pts in corners_left_raw.items()}
+        corners_right = {int(mid): pts for mid, pts in corners_right_raw.items()}
+        mapped_ids = set(int(mid) for mid in (current_cand.get('marker_map') or {}))
+        participant_ids_left = sorted(
+            set(int(mid) for mid in corners_left) & mapped_ids)
+        participant_ids_right = sorted(
+            set(int(mid) for mid in corners_right) & mapped_ids)
+        comparable_ids = sorted(
+            set(participant_ids_left) & set(participant_ids_right))
+        rt_plane_left = {mid: corners_left[mid] for mid in comparable_ids}
+        rt_plane_right = {mid: corners_right[mid] for mid in comparable_ids}
+        rt_diff_plane_n, rt_diff_plane_c, rt_diff_plane_diag = (
+            compute_shared_marker_corner_plane(
+                rt_plane_left, rt_plane_right,
+                KL, current_cand['K_R'],
+                current_cand['R_rel'], current_cand['t_rel'],
+                F=current_cand.get('F'),
+                reference_normal=current_cand.get('plane_n'),
+                min_shared_markers=2)
+            if len(comparable_ids) >= 2
+            else (None, None, {
+                'available': False,
+                'reason': f'only {len(comparable_ids)} common mapped RT patterns',
+                'used_marker_ids': comparable_ids,
+            }))
+        use_all_pattern_plane = bool(
+            rt_diff_plane_n is not None
+            and rt_diff_plane_c is not None
+            and rt_diff_plane_diag.get('available', False))
+        if use_all_pattern_plane:
+            plane_n = np.asarray(rt_diff_plane_n, dtype=np.float64).reshape(3)
+            plane_c = np.asarray(rt_diff_plane_c, dtype=np.float64).reshape(3)
+            plane_marker_ids = [
+                int(mid) for mid in rt_diff_plane_diag.get('used_marker_ids', [])]
+            plane_source = "all shared RT patterns"
+        else:
+            plane_n = current_cand.get('plane_n')
+            plane_c = current_cand.get('plane_c')
+            plane_marker_ids = []
+            plane_source = "reference marker fallback"
+        if plane_n is None or plane_c is None:
+            print("⚠️ [RT Diff] 缺少共同平面與 reference plane，無法做 RT warp。")
             return
-        d_plane = float(np.dot(current_cand['plane_n'], current_cand['plane_c']))
+        plane_n = np.asarray(plane_n, dtype=np.float64).reshape(3)
+        plane_c = np.asarray(plane_c, dtype=np.float64).reshape(3)
+        d_plane = float(np.dot(plane_n, plane_c))
         if abs(d_plane) < 1e-6:
             print("⚠️ [RT Diff] 平面距離 d_plane 趨近 0，無法計算 homography。")
             return
@@ -6562,7 +7497,9 @@ def main():
         right_gray = cv2.cvtColor(locked_R_clean, cv2.COLOR_BGR2GRAY)
         hR, wR = right_gray.shape[:2]
         H_AB = current_cand['K_R'] @ (
-            current_cand['R_rel'] + (current_cand['t_rel'] @ current_cand['plane_n'].reshape(1, 3)) / d_plane
+            np.asarray(current_cand['R_rel'], dtype=np.float64).reshape(3, 3)
+            + (np.asarray(current_cand['t_rel'], dtype=np.float64).reshape(3, 1)
+               @ plane_n.reshape(1, 3)) / d_plane
         ) @ np.linalg.inv(KL)
 
         warped_left = cv2.warpPerspective(
@@ -6580,16 +7517,101 @@ def main():
         diff = cv2.absdiff(warped_left, right_gray)
         diff[valid == 0] = 0
 
+        # Red/green false-colour overlay makes alignment easier to inspect than
+        # a scalar absolute-difference image.  Warped left contributes green,
+        # right contributes red; aligned content becomes yellow, while a
+        # displacement leaves separate green/red edges.  Keep ``diff`` above
+        # for the existing numeric gray-difference diagnostics only.
+        left_level = warped_left.astype(np.float32) / 255.0
+        right_level = right_gray.astype(np.float32) / 255.0
+        overlay_rgb = np.empty((hR, wR, 3), dtype=np.float32)
+        overlay_rgb[..., 0] = np.clip(
+            0.90 * right_level + 0.30 * left_level, 0.0, 1.0)
+        overlay_rgb[..., 1] = np.clip(
+            0.30 * right_level + 0.90 * left_level, 0.0, 1.0)
+        overlay_rgb[..., 2] = np.clip(
+            0.22 * (right_level + left_level), 0.0, 1.0)
+        overlay_rgb[valid == 0] = 0.0
+
         diff_fig, diff_ax = plt.subplots(1, 1, figsize=(9, 6), facecolor='#1E1E1E')
-        diff_fig.canvas.manager.set_window_title("RT Warp Gray Difference")
-        diff_ax.imshow(diff, cmap='gray', vmin=0, vmax=255)
-        diff_ax.set_title("abs(gray(warp(left by RT+plane)) - gray(right))", color='white')
+        diff_fig.canvas.manager.set_window_title("RT Warp Red/Green Overlay")
+        diff_ax.imshow(overlay_rgb)
+        diff_ax.set_title(
+            "RT Overlay: warped left=GREEN, right=RED (aligned=YELLOW) | "
+            "all-pattern shared plane"
+            if use_all_pattern_plane
+            else "RT Overlay: warped left=GREEN, right=RED (aligned=YELLOW) | "
+                 "reference-plane fallback",
+            color='white')
+
+        # 直接量測「這張共同 Homography」對每個 Pattern 的實際效果。
+        # 這與 RT/PnP 重投影誤差不同：若 Pattern 不共面，即使 RT 正確，
+        # 各 ID 的 H-warp corner error 仍可能明顯不同。
+        per_marker_lines = []
+        for mid in comparable_ids:
+            try:
+                pts_left = np.asarray(corners_left[mid], dtype=np.float64).reshape(4, 2)
+                pts_right = np.asarray(corners_right[mid], dtype=np.float64).reshape(4, 2)
+                projected = cv2.perspectiveTransform(
+                    pts_left.reshape(-1, 1, 2).astype(np.float64), H_AB
+                ).reshape(4, 2)
+            except (TypeError, ValueError, cv2.error):
+                continue
+            corner_error = np.linalg.norm(projected - pts_right, axis=1)
+            corner_rms = float(np.sqrt(np.mean(corner_error ** 2)))
+            corner_max = float(np.max(corner_error))
+            marker_mask = np.zeros_like(right_gray, dtype=np.uint8)
+            cv2.fillConvexPoly(
+                marker_mask, np.rint(pts_right).astype(np.int32), 255)
+            marker_valid = (marker_mask > 0) & (valid > 0)
+            photo_mean = (
+                float(np.mean(diff[marker_valid]))
+                if np.any(marker_valid) else float('nan'))
+            per_marker_lines.append(
+                f"ID {mid}: H-corner RMS={corner_rms:.3f}px, "
+                f"max={corner_max:.3f}px, gray-diff={photo_mean:.2f}")
+
+            polygon = np.vstack([pts_right, pts_right[0]])
+            diff_ax.plot(
+                polygon[:, 0], polygon[:, 1], color='#00FFFF',
+                linewidth=1.0, alpha=0.9)
+            center = np.mean(pts_right, axis=0)
+            diff_ax.text(
+                float(center[0]), float(center[1]),
+                f"ID {mid}\nH {corner_rms:.2f}px",
+                color='#00FFFF', fontsize=7, ha='center', va='center',
+                bbox=dict(facecolor='black', alpha=0.55, edgecolor='none'))
         diff_ax.axis("off")
         diff_ax.set_facecolor('#1E1E1E')
         diff_fig.tight_layout()
         diff_fig.show()
         valid_mean = float(np.mean(diff[valid > 0])) if np.any(valid > 0) else 0.0
-        print(f"📊 [RT Diff] 已產生相減圖 | d_plane={d_plane:.3f} | valid diff mean={valid_mean:.2f}")
+        print("=" * 96)
+        if use_all_pattern_plane:
+            print(
+                "📊 [RT Diff] 使用全部共視 RT Pattern 擬合的共同平面 | "
+                f"IDs={plane_marker_ids} | corners={rt_diff_plane_diag.get('point_count')} | "
+                f"plane RMS={rt_diff_plane_diag.get('rms_mm'):.3f}mm, "
+                f"P90={rt_diff_plane_diag.get('p90_abs_mm'):.3f}mm, "
+                f"max={rt_diff_plane_diag.get('max_abs_mm'):.3f}mm")
+        else:
+            print(
+                "⚠️ [RT Diff] 全 Pattern 共同平面不可用，已退回 reference marker plane | "
+                f"reason={rt_diff_plane_diag.get('reason', 'unknown')}")
+        print(
+            f"   source={plane_source} | d_plane={d_plane:.3f} | "
+            f"valid gray-diff mean={valid_mean:.2f}")
+        print(
+            "   display=red/green overlay: warped left=GREEN, "
+            "right=RED, aligned=YELLOW; gray-diff remains numeric-only")
+        if participant_ids_left != comparable_ids or participant_ids_right != comparable_ids:
+            print(
+                f"   RT participants right(A)/left(B)="
+                f"{participant_ids_right}/{participant_ids_left}; "
+                f"RT Diff can compare only common IDs={comparable_ids}")
+        for line in per_marker_lines:
+            print("   " + line)
+        print("=" * 96)
         
     def on_return_menu(event):
         view_state['restart'] = True
@@ -6611,6 +7633,15 @@ def main():
     
     def on_auto_calc(event):
         nonlocal auto_calc_active, reset_pose_history
+        if view_state.get('show_rt_warp_view', False):
+            print(
+                "⚠️ [RT Warp View] 純顯示模式中，無法開啟連續計算；"
+                "請先關閉 RT Warp。")
+            depth_text.set_text(
+                "RT+Plane Warp View (display only)\n"
+                "Depth calculation is disabled")
+            request_blit_refresh()
+            return
         if custom_plane_mode:
             print("⚠️ 自訂平面選點中，無法開啟連續計算！")
             return
@@ -6623,6 +7654,120 @@ def main():
             print("⏸️ 關閉連續計算模式")
         reset_pose_history = True
         request_blit_refresh()
+
+    def build_rt_warp_right_display():
+        """用既有 RT + 基準平面 Homography，把原始右圖投回左圖座標（僅顯示）。"""
+        plane_n = current_cand.get('plane_n')
+        plane_c = current_cand.get('plane_c')
+        if plane_n is None or plane_c is None:
+            raise ValueError("缺少 plane_n / plane_c")
+
+        plane_n = np.asarray(plane_n, dtype=np.float64).reshape(3)
+        plane_c = np.asarray(plane_c, dtype=np.float64).reshape(3)
+        d_plane = float(np.dot(plane_n, plane_c))
+        if not np.isfinite(d_plane) or abs(d_plane) < 1e-6:
+            raise ValueError(f"無效的平面距離 d_plane={d_plane}")
+
+        K_left = np.asarray(KL, dtype=np.float64).reshape(3, 3)
+        K_right = np.asarray(current_cand['K_R'], dtype=np.float64).reshape(3, 3)
+        R_rel = np.asarray(current_cand['R_rel'], dtype=np.float64).reshape(3, 3)
+        t_rel = np.asarray(current_cand['t_rel'], dtype=np.float64).reshape(3, 1)
+        H_left_to_right = K_right @ (
+            R_rel + (t_rel @ plane_n.reshape(1, 3)) / d_plane
+        ) @ np.linalg.inv(K_left)
+        if (not np.all(np.isfinite(H_left_to_right))
+                or abs(float(np.linalg.det(H_left_to_right))) < 1e-12):
+            raise ValueError("left-to-right Homography 無效或不可逆")
+
+        H_right_to_left = np.linalg.inv(H_left_to_right)
+        h_left, w_left = locked_L_clean.shape[:2]
+        h_right, w_right = locked_R_clean.shape[:2]
+        warped_right_bgr = cv2.warpPerspective(
+            locked_R_clean,
+            H_right_to_left,
+            (w_left, h_left),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0, 0, 0),
+        )
+        valid = cv2.warpPerspective(
+            np.full((h_right, w_right), 255, dtype=np.uint8),
+            H_right_to_left,
+            (w_left, h_left),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        valid_ratio = float(np.count_nonzero(valid)) / max(float(valid.size), 1.0)
+        return cv2.cvtColor(warped_right_bgr, cv2.COLOR_BGR2RGB), valid_ratio, d_plane
+
+    def on_rt_warp_view_toggle(event):
+        """切換右上圖的 RT+Plane warp 預覽；不修改任何計算影像或結果。"""
+        nonlocal auto_calc_active
+        enabling = not view_state.get('show_rt_warp_view', False)
+
+        if enabling:
+            if custom_plane_mode:
+                print(
+                    "⚠️ [RT Warp View] 自訂平面選點尚未結束；"
+                    "請先完成或取消後再開啟 warp 顯示。")
+                return
+            try:
+                frame_rgb, valid_ratio, d_plane = build_rt_warp_right_display()
+            except (ValueError, np.linalg.LinAlgError, cv2.error) as exc:
+                print(f"❌ [RT Warp View] 無法建立顯示影像: {exc}")
+                depth_text.set_text(f"RT Warp unavailable: {exc}")
+                request_blit_refresh()
+                return
+
+            rt_warp_view_state['frame_rgb'] = frame_rgb
+            rt_warp_view_state['valid_ratio'] = valid_ratio
+            rt_warp_view_state['hud_text'] = depth_text.get_text()
+            rt_warp_view_state['forced_ax_b_visible'] = not ax_B.get_visible()
+            if rt_warp_view_state['forced_ax_b_visible']:
+                ax_B.set_visible(True)
+                btn_hide_R.label.set_text("隱藏右圖")
+            view_state['show_rt_warp_view'] = True
+            if auto_calc_active:
+                auto_calc_active = False
+                btn_auto_calc.label.set_text("連續計算: 關")
+                print("⏸️ [RT Warp View] 連續計算已自動關閉")
+            view_state['manual_pt_A'] = None
+            btn_rt_warp_view.label.set_text("RT Warp: On")
+            btn_rt_warp_view.ax.patch.set_facecolor('#145A32')
+            ax_B.set_title(
+                '右圖 (RT+Plane Warp → Left; DISPLAY ONLY)',
+                color='#7CFFB2', fontsize=10, fontweight='bold', pad=5)
+            depth_text.set_text(
+                "RT+Plane Warp View (display only)\n"
+                "Depth calculation is disabled")
+            print(
+                "👁️ [RT Warp View] ON: 右上圖已切換為原始右圖經 "
+                "RT + 基準平面 Homography 投回左圖座標；"
+                f"valid={valid_ratio * 100.0:.1f}%, d_plane={d_plane:.3f}. ")
+            print(
+                "   僅顯示影像；locked_R、Grad-SIFT、匹配、內插、"
+                "三角化與下方 Debug 右圖完全不變。所有深度計算入口已停用。")
+        else:
+            view_state['show_rt_warp_view'] = False
+            rt_warp_view_state['frame_rgb'] = None
+            rt_warp_view_state['valid_ratio'] = None
+            if rt_warp_view_state.get('forced_ax_b_visible', False):
+                ax_B.set_visible(False)
+                btn_hide_R.label.set_text("顯示右圖")
+            rt_warp_view_state['forced_ax_b_visible'] = False
+            btn_rt_warp_view.label.set_text("RT Warp: Off")
+            btn_rt_warp_view.ax.patch.set_facecolor('#1A1A1A')
+            ax_B.set_title(
+                '右圖 (Locked)', color='white', fontsize=10,
+                fontweight='bold', pad=5)
+            depth_text.set_text(rt_warp_view_state.pop('hud_text', ''))
+            print(
+                "👁️ [RT Warp View] OFF: 右上圖已恢復原始右圖；"
+                "深度計算功能已恢復。")
+
+        mark_display_dirty()
+        request_blit_refresh()
     
     def on_lock_L(event):
         # 離線影片模式沒有 Live 串流可供重新鎖定，左圖固定為分析挑出的最優影格
@@ -6634,6 +7779,16 @@ def main():
         
     def on_custom_plane(event):
         nonlocal custom_plane_mode, custom_plane_n, custom_plane_c, custom_plane_fitted, auto_calc_active
+
+        if view_state.get('show_rt_warp_view', False):
+            print(
+                "⚠️ [RT Warp View] 純顯示模式中，無法進入自訂平面量測；"
+                "請先關閉 RT Warp。")
+            depth_text.set_text(
+                "RT+Plane Warp View (display only)\n"
+                "Depth calculation is disabled")
+            request_blit_refresh()
+            return
         
         # 1. 檢查先決條件：必須鎖定右圖，且外參有效
         if live_R:
@@ -6869,7 +8024,7 @@ def main():
         visible = not view_state['show_homography_residual']
         view_state['show_homography_residual'] = visible
         btn_h_residual.label.set_text(
-            "H Residual: On" if visible else "H Residual: Off")
+            "H-Resid: On" if visible else "H-Resid: Off")
         btn_h_residual.ax.patch.set_facecolor(
             '#145A32' if visible else '#1A1A1A')
         dbg_pred_B.set_visible(visible)
@@ -6885,6 +8040,7 @@ def main():
     btn_shared_plane.on_clicked(on_shared_plane_toggle)
     btn_top2_geo.on_clicked(on_top2_geometry_toggle)
     btn_h_residual.on_clicked(on_h_residual_toggle)
+    btn_rt_warp_view.on_clicked(on_rt_warp_view_toggle)
 
     btn_lock_L.on_clicked(on_lock_L)
     btn_lock_R.on_clicked(on_lock_R)
@@ -6903,7 +8059,7 @@ def main():
     btn_return_menu.on_clicked(on_return_menu)
     # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單與自訂傷口平面不受影響）----
     panel_defs = [
-        ('#00BFFF', [ax_c1, ax_c2, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
+        ('#00BFFF', [ax_c1, ax_c2, ax_c18, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
                      ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19]),
         ('#00FF88', [ax_mode]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
@@ -6911,7 +8067,7 @@ def main():
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
                      ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift,
                      ax_btn_height_plane, ax_btn_metric_blocks, ax_btn_shared_plane,
-                     ax_btn_top2_geo, ax_btn_h_residual]),
+                     ax_btn_top2_geo, ax_btn_h_residual, ax_btn_rt_warp_view]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]
@@ -6994,6 +8150,7 @@ def main():
             view_state.get('show_temporal_specular_mask', False),
             wound_state.get('show', False),
             wound_state.get('corner_source'),
+            view_state.get('show_rt_warp_view', False),
         )
         if disp_key != display_cache['key']:
             if view_state['enable_clahe']:
@@ -7019,6 +8176,11 @@ def main():
                 disp_B = overlay_specular_mask_rgb(disp_B, spatial_B, temporal_B)
 
             disp_A, disp_B = apply_wound_overlay_if_enabled(disp_A, disp_B)
+            # Warp 模式只替換右上「顯示影像」。刻意放在所有正常疊圖之後，
+            # 避免把仍位於原始右圖座標的量測點/傷口框誤畫到左圖座標系。
+            if (view_state.get('show_rt_warp_view', False)
+                    and rt_warp_view_state.get('frame_rgb') is not None):
+                disp_B = rt_warp_view_state['frame_rgb'].copy()
             display_cache['key'] = disp_key
             display_cache['disp_A'] = disp_A
             display_cache['disp_B'] = disp_B
@@ -7028,8 +8190,31 @@ def main():
 
         # ---- Blit 渲染 ----
         if blit_state['needs_refresh'] or blit_state['bg'] is None:
-            fig.canvas.draw()
-            blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
+            # 右圖的點、線、ArUco 及傷口量測 artist 都使用原始右圖座標。
+            # 建立 warp 模式背景時暫時隱藏，畫完即恢復其內部狀態，關閉
+            # warp 後所有顯示選項仍能原樣回來。
+            hidden_right_artists = []
+            if view_state.get('show_rt_warp_view', False):
+                right_overlay_artists = (
+                    list(ax_B.collections)
+                    + list(ax_B.lines)
+                    + list(ax_B.texts)
+                    + [patch for patch in ax_B.patches if patch is not border_B]
+                )
+                seen_artist_ids = set()
+                for artist in right_overlay_artists:
+                    artist_id = id(artist)
+                    if artist_id in seen_artist_ids:
+                        continue
+                    seen_artist_ids.add(artist_id)
+                    hidden_right_artists.append((artist, artist.get_visible()))
+                    artist.set_visible(False)
+            try:
+                fig.canvas.draw()
+                blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
+            finally:
+                for artist, was_visible in hidden_right_artists:
+                    artist.set_visible(was_visible)
             blit_state['needs_refresh'] = False
         else:
             fig.canvas.restore_region(blit_state['bg'])
@@ -7049,32 +8234,37 @@ def main():
         
         if ax_B.get_visible():
             ax_B.draw_artist(im_B)
-            ax_B.draw_artist(scatter_B)
-            ax_B.draw_artist(scatter_B_reproj)
-            ax_B.draw_artist(scatter_grad_ref_B)
-            ax_B.draw_artist(scatter_mid_grad_ref_B)
-            ax_B.draw_artist(scatter_grad_match)
-            ax_B.draw_artist(scatter_mid_grad_match)
-            ax_B.draw_artist(scatter_rt_sift_B)
-            ax_B.draw_artist(epi_line)
-            ax_B.draw_artist(sift_rect)
-            ax_B.draw_artist(sift_rect_center)
-            
-            for line in view_state.get('grad_lines', []):
-                ax_B.draw_artist(line)
-            if view_state.get('highlighted_grad_line_artist'):
-                ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
+            if not view_state.get('show_rt_warp_view', False):
+                ax_B.draw_artist(scatter_B)
+                ax_B.draw_artist(scatter_B_reproj)
+                ax_B.draw_artist(scatter_grad_ref_B)
+                ax_B.draw_artist(scatter_mid_grad_ref_B)
+                ax_B.draw_artist(scatter_grad_match)
+                ax_B.draw_artist(scatter_mid_grad_match)
+                ax_B.draw_artist(scatter_rt_sift_B)
+                ax_B.draw_artist(epi_line)
+                ax_B.draw_artist(sift_rect)
+                ax_B.draw_artist(sift_rect_center)
+
+                for line in view_state.get('grad_lines', []):
+                    ax_B.draw_artist(line)
+                if view_state.get('highlighted_grad_line_artist'):
+                    ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
                 
         fig.draw_artist(depth_text)
 
         for ax in [ax_A, ax_B]:
             if hasattr(ax, 'art'):
-                if ax == ax_B and not ax_B.get_visible():
+                if (ax == ax_B and (
+                        not ax_B.get_visible()
+                        or view_state.get('show_rt_warp_view', False))):
                     continue
                 for a in ax.art:
                     ax.draw_artist(a)
             if hasattr(ax, 'reproj_art'):
-                if ax == ax_B and not ax_B.get_visible():
+                if (ax == ax_B and (
+                        not ax_B.get_visible()
+                        or view_state.get('show_rt_warp_view', False))):
                     continue
                 for a in ax.reproj_art:
                     ax.draw_artist(a)

@@ -58,7 +58,7 @@ _WOUND_DETECTOR_ERROR_LOGGED = False
 # ==================== 全局設定區 ====================
 VIDEO_PATH            = r"SU01"                    # 預設影片位置（UI 可另選）
 RECORD_SAVE_DIR       = "SU01"                     # 錄影儲存資料夾路徑
-CAMERA_INDEX          = 2                          # SU01 在 Windows 裝置清單中的索引
+CAMERA_INDEX          = 0                          # SU01 在 Windows 裝置清單中的索引
 CAMERA_BACKEND        = cv2.CAP_DSHOW              # 實際 backend/FOURCC 會在開啟後印出
 CAMERA_FPS            = 30
 STEREO_REFERENCE_FRAME_INDEX = 50                 # 相容舊介面；ROI 版目前會搜尋全部幀
