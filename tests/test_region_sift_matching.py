@@ -33,6 +33,41 @@ def _identity_candidate():
 
 
 class RegionSIFTMatchingTests(unittest.TestCase):
+    def test_timing_records_disjoint_stages_and_accumulates_batches(self):
+        image = np.random.default_rng(573).integers(0, 256, (180, 220), dtype=np.uint8)
+        config = with_config(DEFAULT_CONFIG, search_length_px=7, search_width_px=3,
+                             descriptor_batch_size=56)
+        result = run_region_sift_matching(
+            image, image, (110., 90.), _identity_candidate(), np.eye(3), config=config)
+        self.assertIsNone(result['reject_reason'])
+        np.testing.assert_allclose(result['m_pt'], (110., 90.))
+        debug = result['region_debug']
+        times = result['timing_ms']
+        self.assertTrue(all(np.isfinite(value) and value >= 0 for value in times.values()))
+        self.assertAlmostEqual(sum(times.values()), result['elapsed_ms'])
+        self.assertEqual(times, debug['timing_ms'])
+        self.assertEqual(result['elapsed_ms'], debug['elapsed_ms'])
+        self.assertIn('右圖尺度金字塔與響應圖', times)
+        self.assertIn('右圖尺度選擇與角度估計', times)
+        self.assertIn('右圖SIFT descriptor（各batch累計）', times)
+        self.assertIn('L2距離、群組評分與候選保存（累計）', times)
+        counts = result['timing_counts']
+        self.assertEqual(counts['right_descriptor_rows'], debug['valid_candidate_count'] * 28)
+        self.assertEqual(counts['right_descriptor_batches'],
+                         (debug['valid_candidate_count'] + 1) // 2)
+        self.assertGreater(counts['right_descriptor_batches'], 1)
+
+    def test_timing_is_available_when_match_fails_before_debug(self):
+        image = np.zeros((100, 100), dtype=np.uint8)
+        candidate = _identity_candidate()
+        candidate['F'] = None
+        result = run_region_sift_matching(image, image, (50, 50), candidate, np.eye(3))
+        self.assertIsNotNone(result['reject_reason'])
+        self.assertIsNone(result['region_debug'])
+        self.assertIn('初始化與快取檢查', result['timing_ms'])
+        self.assertAlmostEqual(sum(result['timing_ms'].values()), result['elapsed_ms'])
+        self.assertEqual(result['timing_counts']['right_descriptor_batches'], 0)
+
     def test_configuration_rejects_inconsistent_frame_boundaries(self):
         image = np.zeros((100, 100), dtype=np.uint8)
         for sigma in (0.5, float('nan'), float('inf')):
@@ -64,6 +99,10 @@ class RegionSIFTMatchingTests(unittest.TestCase):
             original = match(image, cache)
             duplicate = match(image.copy(), cache)
             self.assertEqual(sampler.call_count, 1)
+            self.assertFalse(original['timing_counts']['left_cache_hit'])
+            self.assertTrue(duplicate['timing_counts']['left_cache_hit'])
+            self.assertNotIn('左圖SIFT descriptor', duplicate['timing_ms'])
+            self.assertIn('左圖快取讀取', duplicate['timing_ms'])
             np.testing.assert_array_equal(original['left_descriptors'],
                                           duplicate['left_descriptors'])
             # Simulate a camera reusing the same ndarray for another frame.

@@ -509,11 +509,25 @@ def run_region_sift_matching(
 ) -> Dict[str, Any]:
     """Run Region-SIFT and return an original-right-image match plus debug data."""
     started = time.perf_counter()
+    timing_ms: Dict[str, float] = {}
+    timing_stage = '初始化與快取檢查'
+    timing_started = started
+
+    def timing_next(stage):
+        nonlocal timing_stage, timing_started
+        now = time.perf_counter()
+        if timing_stage is not None:
+            timing_ms[timing_stage] = timing_ms.get(timing_stage, 0.0) + (now - timing_started) * 1000.0
+        timing_stage, timing_started = stage, now
+
     base_result: Dict[str, Any] = {
         "m_pt": None,
         "method": "",
         "reject_reason": None,
         "region_debug": None,
+        "timing_ms": timing_ms,
+        "timing_counts": {'left_cache_hit': False, 'right_descriptor_batches': 0,
+                          'right_descriptor_rows': 0},
     }
     try:
         _validate_config(config)
@@ -542,6 +556,8 @@ def run_region_sift_matching(
         cached = left_cache.get("region_sift") if left_cache is not None else None
         if (cached is not None and cached.get("key") == cache_key
                 and "frames" in cached):
+            timing_next('左圖快取讀取')
+            base_result['timing_counts']['left_cache_hit'] = True
             left_points = cached["points"]
             point_metadata = [dict(item) for item in cached["metadata"]]
             left_descriptors = cached["descriptors"]
@@ -551,19 +567,26 @@ def run_region_sift_matching(
             }
             left_roi = cached["roi"]
         else:
+            timing_next('左圖梯度與28點取樣')
             left_points, point_metadata, _magnitude, left_roi = select_region_points(
                 left_gray, point_p, config)
+            timing_next('左圖尺度金字塔與響應圖')
+            left_context = dense_frames.create_frame_context(left_gray, config)
+            timing_next('左圖尺度選擇與角度估計')
             left_frames = estimate_dense_sift_frames(
-                left_gray, left_points, config)
+                left_gray, left_points, config, context=left_context)
+            del left_context
             if not np.all(left_frames['valid']):
                 raise RegionSIFTError(
                     'left anchors lack complete SIFT/scale-space support; '
                     'move the click inward or tune the support limit')
+            timing_next('左圖SIFT descriptor')
             left_descriptors = compute_descriptors_at_points(
                 left_gray, left_points, sift, config,
                 sizes_px=left_frames["size_px"],
                 angles_deg=left_frames["angle_deg"],
                 octaves=left_frames['octave'])
+            timing_next('左圖快取保存')
             if left_cache is not None:
                 left_cache["region_sift"] = {
                     "key": cache_key,
@@ -577,6 +600,7 @@ def run_region_sift_matching(
                     "roi": left_roi,
                 }
 
+        timing_next('右圖warp與有效遮罩')
         point_count = len(left_points)
         expected_count = config.grid_rows * config.grid_cols * config.points_per_cell + 1
         if left_descriptors.shape != (expected_count, 128):
@@ -600,6 +624,7 @@ def run_region_sift_matching(
             warped_valid, int(config.descriptor_border_margin_px),
             float(config.min_valid_warp_ratio))
 
+        timing_next('極線候選建立與初步篩選')
         band = build_epipolar_band(point_p, cand["F"], H_lr, config)
         p = np.asarray(point_p, dtype=np.float32).reshape(2)
         point_offsets = left_points - p
@@ -632,8 +657,14 @@ def run_region_sift_matching(
         candidate_descriptors: Dict[int, np.ndarray] = {}
         valid_positions = all_positions[valid_indices]
         flat_valid_positions = valid_positions.reshape(-1, 2)
+        timing_next('右圖尺度金字塔與響應圖')
+        right_context = dense_frames.create_frame_context(warped_right, config)
+        timing_next('右圖尺度選擇與角度估計')
         right_frames_flat = estimate_dense_sift_frames(
-            warped_right, flat_valid_positions, config, valid_mask=warped_valid)
+            warped_right, flat_valid_positions, config, context=right_context,
+            valid_mask=warped_valid)
+        del right_context
+        timing_next('候選完整support篩選')
         right_frames = {
             key: np.asarray(value).reshape(len(valid_indices), point_count)
             for key, value in right_frames_flat.items()
@@ -652,6 +683,7 @@ def run_region_sift_matching(
             1, int(config.descriptor_batch_size) // max(1, point_count))
 
         for start in range(0, len(valid_indices), candidates_per_batch):
+            timing_next('右圖SIFT descriptor（各batch累計）')
             batch_indices = valid_indices[start:start + candidates_per_batch]
             batch_points = all_positions[batch_indices].reshape(-1, 2)
             valid_rows = np.arange(start, start + len(batch_indices))
@@ -660,6 +692,9 @@ def run_region_sift_matching(
                 sizes_px=right_frames["size_px"][valid_rows].reshape(-1),
                 angles_deg=right_frames["angle_deg"][valid_rows].reshape(-1),
                 octaves=right_frames['octave'][valid_rows].reshape(-1))
+            base_result['timing_counts']['right_descriptor_batches'] += 1
+            base_result['timing_counts']['right_descriptor_rows'] += len(batch_descriptors)
+            timing_next('L2距離、群組評分與候選保存（累計）')
             expected_rows = len(batch_indices) * point_count
             if len(batch_descriptors) != expected_rows:
                 raise RegionSIFTError(
@@ -685,6 +720,7 @@ def run_region_sift_matching(
                 candidate_distances[ci] = distances[local_index].astype(np.float32)
                 candidate_descriptors[ci] = matrices[local_index].astype(np.float32)
 
+        timing_next('最佳候選、座標回轉與Debug整理')
         finite_indices = np.flatnonzero(np.isfinite(objective_scores))
         if len(finite_indices) == 0:
             raise RegionSIFTError("SIFT produced no scoreable search candidate")
@@ -938,6 +974,15 @@ def run_region_sift_matching(
     except (RegionSIFTError, cv2.error, KeyError, ValueError, np.linalg.LinAlgError) as exc:
         base_result["reject_reason"] = str(exc)
         return base_result
+    finally:
+        # Also report work completed before a rejected/invalid match. Stage
+        # durations are disjoint; repeated descriptor/scoring batches add up.
+        timing_next(None)
+        base_result['elapsed_ms'] = sum(timing_ms.values())
+        if base_result.get('region_debug') is not None:
+            base_result['region_debug']['timing_ms'] = dict(timing_ms)
+            base_result['region_debug']['timing_counts'] = dict(base_result['timing_counts'])
+            base_result['region_debug']['elapsed_ms'] = base_result['elapsed_ms']
 
 
 def with_config(config: RegionSIFTConfig = DEFAULT_CONFIG, **changes: Any) -> RegionSIFTConfig:

@@ -31,6 +31,10 @@ from Algorithm import camera_preprocess as camera_algo
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
 from Algorithm import video_pose_analysis_temporal_unified_pattern_guided_local_window as video_pose_algo
 from Algorithm.perf_timer import StageTimer
+from Algorithm.block_height_accuracy import (
+    BlockAccuracyConfig, BlockAccuracyReport, build_block_plan, measurement_record,
+    block_mae_color, summarize_block_records,
+)
 from Algorithm.specular_detection import (
     compute_specular_mask_bgr_wound_adaptive,
     compute_rt_aligned_temporal_specular_mask_bgr,
@@ -54,6 +58,10 @@ from Algorithm.stereo_matching import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
+# Stepped calibration model: 6 columns x 4 rows, row-major heights in mm.
+# 25/50/75% in each cell = nine anchor centers, inset 5 mm for a 20 mm cell.
+BLOCK_ACCURACY_CONFIG = BlockAccuracyConfig()
+BLOCK_ACCURACY_OUTPUT_DIR = BASE_DIR / 'measurement_accuracy'
 WOUND_DETECTION_DIR = BASE_DIR / "wound_detection_model"
 WOUND_MODEL_PATH = WOUND_DETECTION_DIR / "model" / "assets" / "v9-t-seg_320.onnx"
 WOUND_OVERLAY_ALPHA = 0.45
@@ -3121,10 +3129,10 @@ def main():
     
     # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
-    c1 = Button(ax_c1, "[X] 嚴格精細匹配", **btn_opt_style)
-    c2 = Button(ax_c2, "[X] 梯度 SIFT 匹配", **btn_opt_style)
-    c18 = Button(ax_c18, "[ ] Region-SIFT 匹配", **btn_opt_style)
-    c3 = Button(ax_c3, "[X] 強制極線對齊", **btn_opt_style)
+    c1 = Button(ax_c1, "[ ] 嚴格精細匹配", **btn_opt_style)
+    c2 = Button(ax_c2, "[ ] 梯度 SIFT 匹配", **btn_opt_style)
+    c18 = Button(ax_c18, "[X] Region-SIFT 匹配", **btn_opt_style)
+    c3 = Button(ax_c3, "[ ] 強制極線對齊", **btn_opt_style)
     c4 = Button(
         ax_c4,
         "[X] 啟用 ECC 精修" if ENABLE_ECC_REFINEMENT_DEFAULT else "[ ] 啟用 ECC 精修",
@@ -3144,8 +3152,8 @@ def main():
     c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
     c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
 
-    view_state = {'precise': True, 'grad_sift': True, 'region_sift': False,
-                  'enforce_epi': True,
+    view_state = {'precise': False, 'grad_sift': False, 'region_sift': True,
+                  'enforce_epi': False,
                   'ecc': ENABLE_ECC_REFINEMENT_DEFAULT, 'manual': False,
                   'use_hamming': False, 'enable_clahe': ENABLE_CLAHE_DEFAULT,
                   'use_improved_matching': ENABLE_IMPROVED_MATCHING_DEFAULT,
@@ -3182,8 +3190,12 @@ def main():
     # change when this state is toggled.
     height_plane_state = {
         'use_pose_plane': False,
-        'use_shared_plane': False,
+        'use_shared_plane': True,
     }
+    block_accuracy_state = {'mode': 'idle', 'corners': [], 'plan': None,
+                            'report': None, 'timer': None, 'artists': [],
+                            'disabled_widgets': [], 'started': None,
+                            'summaries': None, 'show_mae_colors': False}
 
     def get_selected_height_plane():
         """Return (normal, center, UI label) for the display-only height plane."""
@@ -4502,10 +4514,23 @@ def main():
                     _t_blk = time.perf_counter()
                     region_right_gray = preprocess_gray(
                         cand['gray'], snap_view_state.get('enable_clahe', False))
+                    t_prof['右圖灰階/CLAHE前處理'] = time.perf_counter() - _t_blk
+                    _t_blk = time.perf_counter()
                     region_result = run_region_sift_matching(
                         snap_imgA_gray, region_right_gray, (u, v), cand, KL,
                         sift=sift, config=REGION_SIFT_CONFIG,
                         left_cache=left_cache)
+                    t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
+                    _t_blk = time.perf_counter()
+                    _region_ms = region_result.get('elapsed_ms', 0.0)
+                    _region_counts = region_result.get('timing_counts', {})
+                    print(f"⏱️ [F{cand.get('idx')} Region-SIFT細分] {_region_ms:.1f} ms "
+                          f"| 左圖cache={'hit' if _region_counts.get('left_cache_hit') else 'miss'} "
+                          f"| 右圖descriptor={_region_counts.get('right_descriptor_rows', 0)} rows/"
+                          f"{_region_counts.get('right_descriptor_batches', 0)} batches")
+                    for _stage_name, _stage_ms in region_result.get('timing_ms', {}).items():
+                        _stage_pct = 100.0 * _stage_ms / _region_ms if _region_ms > 0 else 0.0
+                        print(f"   - {_stage_name}: {_stage_ms:.1f} ms ({_stage_pct:.1f}%)")
                     region_debug = region_result.get('region_debug')
                     m_pt = region_result.get('m_pt')
                     method = region_result.get('method', '')
@@ -4579,7 +4604,7 @@ def main():
                             f"absAngleDelta median/MAD="
                             f"{region_debug.get('kept_abs_angle_delta_median', float('nan')):.1f}/"
                             f"{region_debug.get('kept_abs_angle_delta_mad', float('nan')):.1f}deg")
-                    t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
+                    t_prof['Region-SIFT結果處理與log輸出'] = time.perf_counter() - _t_blk
 
                 if not region_mode:
                     for mid, cA in cand['cornersA'].items():
@@ -4949,8 +4974,13 @@ def main():
             print(f"📊 [品質評估] 極線偏差: {d_epi:.2f} px | ZNCC相似度: {zncc_score:.3f} | MaskedScore: {masked_score:.3f} | 信心度: {confidence_score:.3f}")
 
         t_prof['品質評估'] = time.perf_counter() - _t_blk
-        _detail = " | ".join(f"{k} {v * 1000.0:.0f}ms" for k, v in t_prof.items())
-        print(f"⏱️ [F{cand.get('idx')}] 單影格量測 {(time.perf_counter() - t_cm_start) * 1000.0:.0f} ms（{_detail}）")
+        _measure_seconds = time.perf_counter() - t_cm_start
+        t_prof['其他準備、幾何檢查與結果處理'] = max(
+            0.0, _measure_seconds - sum(t_prof.values()))
+        print(f"⏱️ [F{cand.get('idx')}] 匹配+三角化細分 {_measure_seconds * 1000.0:.1f} ms")
+        for _stage_name, _stage_seconds in t_prof.items():
+            _stage_pct = 100.0 * _stage_seconds / _measure_seconds if _measure_seconds > 0 else 0.0
+            print(f"   - {_stage_name}: {_stage_seconds * 1000.0:.1f} ms ({_stage_pct:.1f}%)")
         return {'pt': m_pt, 'pt_raw': m_pt_raw, 'p3d': p3d_val, 'p3d_w': p3d_w_val, 'd': d_val, 'depth': depth_z, 'error': reproj_err, 'method': method, 'neighbors': neighbors,
                 'g_ptsA': g_ptsA, 'g_ptsB': g_ptsB, 'g_groups': g_groups,
                 'g_refA': g_refA, 'g_refB': g_refB,
@@ -5082,8 +5112,11 @@ def main():
         l_B, = ax_B.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
         flow_line_artists.extend([l_A, l_B])
 
-    def do_measure(u, v, manual_match_pt=None):
+    def do_measure(u, v, manual_match_pt=None, *, accuracy_batch=False):
         """同步計算並立即更新 UI"""
+        if block_accuracy_state['mode'] != 'idle' and not accuracy_batch:
+            print('[Block Accuracy] Finish/cancel the block run before manual measurement')
+            return None
         if view_state.get('show_rt_warp_view', False):
             print(
                 "⚠️ [RT Warp View] 目前為純顯示模式，深度計算已停用；"
@@ -5265,15 +5298,18 @@ def main():
         summary = [f"F{current_cand['idx']}: {res['d']:.1f}" if res['d'] is not None else f"F{current_cand['idx']}: N/A"]
         
         # 存出數據至 txt 檔案
-        save_measurement_to_txt(
-            VIDEO_PATH, res, current_cand, wound_z_offset, 
-            custom_plane_n, custom_plane_c, custom_plane_fitted, MEASURE_MODE
-        )
+        if not accuracy_batch:
+            save_measurement_to_txt(
+                VIDEO_PATH, res, current_cand, wound_z_offset,
+                custom_plane_n, custom_plane_c, custom_plane_fitted, MEASURE_MODE
+            )
         click_timer.stage("結果整理+數據存檔")
         
-        apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
+        if not accuracy_batch:
+            apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
         click_timer.stage("UI 更新繪製")
         click_timer.report()
+        return res
 
 
     def apply_measure_result(res, avg, summary):
@@ -7034,6 +7070,8 @@ def main():
         return True
 
     def on_press(event):
+        if block_accuracy_state['mode'] in ('running', 'preview') and event.inaxes in (ax_A, ax_B):
+            return
         # Lower debug views: double-left-click or right-click resets the view.
         # Handle this before the left-button-only interaction below.
         if event.inaxes in (ax_debug_A, ax_debug_B):
@@ -7095,6 +7133,10 @@ def main():
                 request_blit_refresh()
                 return
             ux, vx = float(event.xdata), float(event.ydata)
+            if block_accuracy_state['mode'] == 'picking':
+                if pan_state['ax'] == ax_A and event.inaxes == ax_A:
+                    pick_block_accuracy_corner(ux, vx)
+                return
             
             # 自動吸附 ArUco 角點
             if pan_state['ax'] == ax_A:
@@ -7252,6 +7294,11 @@ def main():
     
     ax_btn_hide_R = fig.add_axes([0.78, control_row_y[0], 0.08, control_h])
     btn_hide_R = Button(ax_btn_hide_R, "顯示右圖", **btn_style)
+    if view_state['region_sift']:
+        ax_B.set_visible(True)
+        ax_debug_B.set_visible(True)
+        ax_debug_info_B.set_visible(True)
+        btn_hide_R.label.set_text('隱藏右圖')
     
     ax_btn_norm = fig.add_axes([0.88, control_row_y[0], 0.08, control_h])
     btn_norm_toggle = Button(ax_btn_norm, '使用 L2', **btn_style)
@@ -7303,7 +7350,8 @@ def main():
         **btn_style)
 
     ax_btn_shared_plane = fig.add_axes([0.58, control_row_y[5], 0.09, control_h])
-    btn_shared_plane = Button(ax_btn_shared_plane, "Shared: Off", **btn_style)
+    btn_shared_plane = Button(ax_btn_shared_plane, "Shared: On", **btn_style)
+    btn_shared_plane.ax.patch.set_facecolor('#145A32')
 
     ax_btn_top2_geo = fig.add_axes([0.68, control_row_y[5], 0.09, control_h])
     btn_top2_geo = Button(
@@ -7321,6 +7369,19 @@ def main():
 
     ax_btn_rt_warp_view = fig.add_axes([0.88, control_row_y[5], 0.09, control_h])
     btn_rt_warp_view = Button(ax_btn_rt_warp_view, "RT Warp: Off", **btn_style)
+
+    ax_btn_block_accuracy = fig.add_axes([0.58, control_row_y[6], 0.19, control_h])
+    btn_block_accuracy = Button(ax_btn_block_accuracy, "Block 誤差統計", **btn_style)
+    ax_btn_block_cancel = fig.add_axes([0.78, control_row_y[6], 0.09, control_h])
+    btn_block_cancel = Button(ax_btn_block_cancel, "取消統計", **btn_style)
+    ax_btn_block_mae = fig.add_axes([0.88, control_row_y[6], 0.09, control_h])
+    # The app owns full-figure blitting; this widget must not independently
+    # blit a stale Off label over the updated figure background.
+    btn_block_mae = Button(ax_btn_block_mae, "MAE 著色: Off", useblit=False, **btn_style)
+    for _button in (btn_block_accuracy, btn_block_cancel, btn_block_mae):
+        _button.label.set_color('#E0E0E0')
+        _button.label.set_fontsize(7)
+        _button.ax.patch.set_edgecolor('#D83B01')
 
     wound_z_offset = 0.0
     # 原本位於左下角，會壓到新的 Debug 資訊列；移入右側控制區空位。
@@ -7962,7 +8023,8 @@ def main():
             request_blit_refresh()
 
     def on_shared_plane_toggle(event):
-        if shared_height_plane_n is None or shared_height_plane_c is None:
+        if (not height_plane_state['use_shared_plane']
+                and (shared_height_plane_n is None or shared_height_plane_c is None)):
             print(
                 "[Shared Pattern Plane] unavailable; keeping current height plane: "
                 + shared_height_plane_diag.get('reason', 'unknown reason'))
@@ -8036,6 +8098,282 @@ def main():
             "matching and interpolation are unchanged")
         request_blit_refresh()
 
+    # Accuracy runs use one ordinary click calculation per timer tick on the
+    # main thread. No Matplotlib or shared matcher state is accessed by a worker.
+    # Controls are locked until completion/cancel to keep one run comparable.
+    def clear_block_accuracy_overlay():
+        for artist in block_accuracy_state['artists']:
+            artist.remove()
+        block_accuracy_state['artists'] = []
+
+    def lock_block_accuracy_controls():
+        widgets = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12,
+                   c13, c14, c15, c16, c17, c18, c19, radio_mode, text_box,
+                   btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle,
+                   btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane,
+                   btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu,
+                   btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay,
+                   btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
+                   btn_top2_geo, btn_h_residual, btn_rt_warp_view]
+        block_accuracy_state['disabled_widgets'] = [(widget, widget.active) for widget in widgets]
+        for widget in widgets:
+            # RadioButtons.set_active(index) SELECTS an option; it does not
+            # disable events. The inherited active property is the common
+            # event-enable API for Buttons, RadioButtons and TextBox alike.
+            widget.active = False
+
+    def draw_block_accuracy_plan(block_summaries=None):
+        clear_block_accuracy_overlay()
+        plan = block_accuracy_state['plan']
+        summaries = {row['block_id']: row for row in (block_summaries or [])}
+        for block in plan['blocks']:
+            row = summaries.get(block['block_id'])
+            color = (block_mae_color(row.get('mae_mm'))
+                     if block_accuracy_state['show_mae_colors'] and row and row['valid_count'] else None)
+            poly = Polygon(block['corners_px'], closed=True, fill=color is not None,
+                           facecolor=color or 'none', alpha=0.45 if color else 1.0,
+                           edgecolor='#00FFFF', linewidth=0.8, zorder=8)
+            ax_A.add_patch(poly)
+            block_accuracy_state['artists'].append(poly)
+            if block_accuracy_state['show_mae_colors']:
+                continue  # Keep the colored block unobstructed by labels.
+            label = f"B{block['block_id']:02d}\nT={block['true_height_mm']:g}mm"
+            if row:
+                if row['valid_count']:
+                    label += (f"\nH={row['mean_height_mm']:.2f}\nE={row['mean_height_error_mm']:+.2f}"
+                              f" ({row['valid_count']}/{row['expected_count']})")
+                else:
+                    label += '\nH=N/A'
+            x, y = block['center_px']
+            text = ax_A.text(x, y, label, ha='center', va='center', fontsize=6,
+                             color='yellow', zorder=10,
+                             bbox=dict(facecolor='black', alpha=0.45, edgecolor='none', pad=1))
+            block_accuracy_state['artists'].append(text)
+        if not block_accuracy_state['show_mae_colors']:
+            points = np.array([[point['u'], point['v']] for point in plan['samples']])
+            scatter = ax_A.scatter(points[:, 0], points[:, 1], s=5, c='#FF55FF', zorder=9)
+            block_accuracy_state['artists'].append(scatter)
+        if block_accuracy_state['show_mae_colors']:
+            legend = ax_A.text(
+                0.01, 0.99, 'MAE (mm): green <0.5 | orange 0.5-1.0 | red >1.0\n'
+                'Unfilled: no valid data. Toggle Off for labels / sample points.',
+                transform=ax_A.transAxes, ha='left', va='top', fontsize=7,
+                color='white', zorder=12,
+                bbox=dict(facecolor='black', alpha=0.65, edgecolor='none', pad=3))
+            block_accuracy_state['artists'].append(legend)
+
+    def on_block_mae_toggle(event):
+        if block_accuracy_state['mode'] != 'idle':
+            message = f"Block MAE: finish/cancel current operation ({block_accuracy_state['mode']}) first"
+            print(f'[Block MAE] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        # Reconstruct from the current in-memory point records, even if CSV
+        # export failed after measurement or finalization lost its return value.
+        report = block_accuracy_state.get('report')
+        if report is not None and report.records:
+            blocks, _ = summarize_block_records(report.plan, report.records)
+            block_accuracy_state['plan'] = report.plan
+            block_accuracy_state['summaries'] = blocks
+        if block_accuracy_state['summaries'] is None or block_accuracy_state['plan'] is None:
+            message = 'Block MAE: no statistics in this window. Run block accuracy first.'
+            print(f'[Block MAE] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        enabled = not block_accuracy_state['show_mae_colors']
+        block_accuracy_state['show_mae_colors'] = enabled
+        btn_block_mae.label.set_text('MAE 著色: On' if enabled else 'MAE 著色: Off')
+        draw_block_accuracy_plan(block_accuracy_state['summaries'])
+        count = sum(row['valid_count'] > 0 for row in block_accuracy_state['summaries'])
+        print(f"[Block MAE] {'On' if enabled else 'Off'}; valid blocks={count}/"
+              f"{len(block_accuracy_state['summaries'])}; green <0.5, orange 0.5-1.0, red >1.0 mm")
+        request_blit_refresh()
+
+    def pick_block_accuracy_corner(u, v):
+        image_h, image_w = locked_L_clean.shape[:2]
+        if not (0 <= u <= image_w - 1 and 0 <= v <= image_h - 1):
+            return
+        corners = block_accuracy_state['corners']
+        corners.append((float(u), float(v)))
+        dot, = ax_A.plot(u, v, 'yo', markersize=5, zorder=10)
+        label = ax_A.text(u + 3, v - 3, ('TL', 'TR', 'BR', 'BL')[len(corners) - 1],
+                          color='yellow', fontsize=9, zorder=10)
+        block_accuracy_state['artists'].extend([dot, label])
+        if len(corners) < 4:
+            depth_text.set_text('Block accuracy: select ' + ('TL', 'TR', 'BR', 'BL')[len(corners)])
+        else:
+            try:
+                plan = build_block_plan(corners, locked_L_clean.shape, BLOCK_ACCURACY_CONFIG)
+            except ValueError as exc:
+                print(f'[Block Accuracy] Invalid corners: {exc}; select all four again')
+                block_accuracy_state['corners'] = []
+                clear_block_accuracy_overlay()
+                depth_text.set_text('Invalid quadrilateral. Select TL, TR, BR, BL again')
+                request_blit_refresh()
+                return
+            block_accuracy_state['plan'] = plan
+            block_accuracy_state['mode'] = 'preview'
+            draw_block_accuracy_plan()
+            btn_block_accuracy.label.set_text(f"開始 {len(plan['samples'])} 點統計")
+            depth_text.set_text('Check grid / sample points on EACH block top.\n'
+                                'Heights: row-major, in mm. Press Start or Cancel.\n'
+                                'Stepped surfaces: four-corner mapping is approximate.')
+            print('[Block Accuracy] Preview ready. Verify every grid cell and all sample centers; '
+                  'an inset anchor does not guarantee its Region-SIFT support stays inside a block.')
+        request_blit_refresh()
+
+    def finish_block_accuracy(status='cancelled', reason='', redraw=True):
+        timer = block_accuracy_state['timer']
+        if timer is not None:
+            timer.stop()
+        report = block_accuracy_state['report']
+        try:
+            if report is not None and not report.closed:
+                # Display data must not depend on successful disk export.
+                blocks, _ = summarize_block_records(report.plan, report.records)
+                block_accuracy_state['summaries'] = blocks
+                blocks, summary = report.finish(status, reason)
+                block_accuracy_state['summaries'] = blocks
+                if redraw:
+                    draw_block_accuracy_plan(blocks)
+                print(f"\n[Block Accuracy] {status}: {report.directory}")
+                print(f"  Valid={summary['valid_count']}/{summary['expected_count']}, "
+                      f"failed={summary['failed_count']}, unmeasured={summary['unmeasured_count']}")
+                for row in blocks:
+                    values = (f"mean={row['mean_height_mm']:.3f} mm, "
+                              f"error={row['mean_height_error_mm']:+.3f} mm"
+                              if row['valid_count'] else 'mean=N/A, error=N/A')
+                    print(f"  B{row['block_id']:02d} true={row['true_height_mm']:g} mm: "
+                          f"{values}, valid={row['valid_count']}/{row['expected_count']}")
+                metric = summary['block_mean_mae_mm']
+                metric_text = f'{metric:.3f} mm' if metric is not None else 'N/A'
+                depth_text.set_text(f"Block accuracy: {status}\n"
+                                    f"Valid {summary['valid_count']}/{summary['expected_count']} | "
+                                    f"Block-mean MAE: {metric_text}\n"
+                                    f"Saved: {report.directory.name}")
+            elif redraw:
+                clear_block_accuracy_overlay()
+                depth_text.set_text('Block accuracy cancelled')
+        except Exception as exc:
+            print(f'[Block Accuracy] Report finalization failed: {exc}; '
+                  f'already flushed point data: {report.directory if report else "N/A"}')
+            if redraw:
+                depth_text.set_text(f'Block report save failed: {exc}')
+        finally:
+            for widget, was_active in block_accuracy_state['disabled_widgets']:
+                widget.active = was_active
+            block_accuracy_state['disabled_widgets'] = []
+            block_accuracy_state['mode'] = 'idle'
+            block_accuracy_state['timer'] = None
+            btn_block_mae.set_active(True)
+            btn_block_mae.eventson = True
+            btn_block_accuracy.label.set_text('Block 誤差統計')
+            if redraw:
+                request_blit_refresh()
+
+    def run_next_block_accuracy_point():
+        if block_accuracy_state['mode'] != 'running':
+            return
+        report = block_accuracy_state['report']
+        sample = report.plan['samples'][len(report.records)]
+        started = time.perf_counter()
+        try:
+            # Match the ordinary left-click pixel rounding. CSV keeps BOTH
+            # the projected grid center and the actual measured pixel.
+            result = do_measure(int(round(sample['u'])), int(round(sample['v'])),
+                                accuracy_batch=True)
+        except Exception as exc:
+            result = {'fail_reason': f'{type(exc).__name__}: {exc}',
+                      'u': int(round(sample['u'])), 'v': int(round(sample['v']))}
+        try:
+            record = measurement_record(sample, result, time.perf_counter() - started)
+            report.append(record)
+        except Exception as exc:
+            finish_block_accuracy('error', str(exc))
+            return
+        done, total = len(report.records), len(report.plan['samples'])
+        scatter_A.set_offsets([[sample['u'], sample['v']]])
+        elapsed = time.perf_counter() - block_accuracy_state['started']
+        remaining = elapsed / done * (total - done)
+        print(f"[Block Accuracy] {done}/{total}, B{sample['block_id']:02d}, "
+              f"height={record['wound_height_mm']}, error={record['error_mm']}, {record['status']}")
+        btn_block_accuracy.label.set_text(f'統計中 {done}/{total}')
+        depth_text.set_text(f"Block accuracy {done}/{total} | B{sample['block_id']:02d}\n"
+                            f"Height={record['wound_height_mm']} mm, error={record['error_mm']} mm\n"
+                            f"ETA ~{remaining / 60:.1f} min | Cancel between points")
+        request_blit_refresh()
+        if done == total:
+            finish_block_accuracy('completed')
+
+    def on_block_accuracy(event):
+        nonlocal auto_calc_active
+        mode = block_accuracy_state['mode']
+        if mode in ('running', 'picking'):
+            return
+        if mode == 'preview':
+            n, c, source = get_selected_height_plane()
+            if custom_plane_fitted:
+                n, c, source = custom_plane_n, custom_plane_c, 'Custom Plane'
+            if n is None or c is None:
+                print('[Block Accuracy] No valid height reference plane; cancel and select a reference')
+                return
+            metadata = dict(video_path=str(VIDEO_PATH), measure_mode=MEASURE_MODE,
+                            best_right_frame=current_cand['idx'],
+                            right_frames=[cand['idx'] for cand in [current_cand] + extra_candidates_list],
+                            height_reference_source=source, plane_normal=n, plane_center=c,
+                            height_offset_mm=0.0 if custom_plane_fitted else DEFAULT_WOUND_HEIGHT_OFFSET_MM,
+                            shared_pattern_plane_diag=shared_height_plane_diag,
+                            options={key: value for key, value in view_state.items()
+                                     if isinstance(value, (bool, int, float, str))},
+                            region_sift_config=vars(REGION_SIFT_CONFIG),
+                            camera_matrix_left=KL,
+                            right_geometry=[{key: cand.get(key) for key in
+                                             ('idx', 'K_R', 'R_rel', 't_rel', 'F', 'plane_n', 'plane_c')}
+                                            for cand in [current_cand] + extra_candidates_list],
+                            sample_coordinate_policy='projective grid centers rounded to nearest image pixel; no ArUco snapping',
+                            error_definition='measured Wound Height minus true height (mm); no outlier removal',
+                            std_definition='population standard deviation, valid points only')
+            try:
+                report = BlockAccuracyReport(BLOCK_ACCURACY_OUTPUT_DIR,
+                                             block_accuracy_state['plan'], metadata)
+            except Exception as exc:
+                print(f'[Block Accuracy] Cannot create report: {exc}')
+                return
+            block_accuracy_state.update(mode='running', report=report, started=time.perf_counter())
+            timer = fig.canvas.new_timer(interval=100)
+            timer.add_callback(run_next_block_accuracy_point)
+            block_accuracy_state['timer'] = timer
+            timer.start()
+            print(f'[Block Accuracy] Starting {len(report.plan["samples"])} points; output: {report.directory}')
+            return
+        if custom_plane_mode or view_state['manual'] or view_state.get('show_rt_warp_view'):
+            print('[Block Accuracy] Exit Custom Plane picking, manual matching and RT Warp display before starting')
+            return
+        auto_calc_active = False
+        btn_auto_calc.label.set_text('連續計算: 關')
+        clear_block_accuracy_overlay()
+        block_accuracy_state.update(mode='picking', corners=[], plan=None, report=None)
+        block_accuracy_state.update(summaries=None, show_mae_colors=False)
+        btn_block_mae.label.set_text('MAE 著色: Off')
+        lock_block_accuracy_controls()
+        btn_block_accuracy.label.set_text('左圖選四角…')
+        depth_text.set_text('Block accuracy: select TL, TR, BR, BL on LEFT image.\n'
+                            '6 columns x 4 rows; 12.5 to 1.0 mm, row-major.\n'
+                            'Then inspect preview and press Start.')
+        request_blit_refresh()
+
+    def on_block_accuracy_close(event):
+        if block_accuracy_state['mode'] != 'idle':
+            finish_block_accuracy('cancelled', 'window closed', redraw=False)
+
+    btn_block_accuracy.on_clicked(on_block_accuracy)
+    btn_block_mae.on_clicked(on_block_mae_toggle)
+    btn_block_cancel.on_clicked(lambda event: finish_block_accuracy('cancelled', 'user cancelled')
+                                if block_accuracy_state['mode'] != 'idle' else None)
+    fig.canvas.mpl_connect('close_event', on_block_accuracy_close)
+
     btn_height_plane.on_clicked(on_height_plane_toggle)
     btn_shared_plane.on_clicked(on_shared_plane_toggle)
     btn_top2_geo.on_clicked(on_top2_geometry_toggle)
@@ -8067,7 +8405,8 @@ def main():
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
                      ax_btn_wound, ax_btn_wound_pts, ax_btn_aruco_overlay, ax_btn_rt_sift,
                      ax_btn_height_plane, ax_btn_metric_blocks, ax_btn_shared_plane,
-                     ax_btn_top2_geo, ax_btn_h_residual, ax_btn_rt_warp_view]),
+                     ax_btn_top2_geo, ax_btn_h_residual, ax_btn_rt_warp_view,
+                     ax_btn_block_accuracy, ax_btn_block_cancel, ax_btn_block_mae]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
     panel_visible = [False, False, False, False]
@@ -8229,6 +8568,8 @@ def main():
         ax_A.draw_artist(scatter_grad_inject)
         ax_A.draw_artist(scatter_mid_grad_inject)
         ax_A.draw_artist(scatter_rt_sift_A)
+        for artist in block_accuracy_state['artists']:
+            ax_A.draw_artist(artist)
         for a in custom_plane_artists:
             ax_A.draw_artist(a)
         
