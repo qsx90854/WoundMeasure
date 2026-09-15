@@ -31,11 +31,14 @@ from Algorithm import camera_preprocess as camera_algo
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
 from Algorithm import video_pose_analysis_temporal_unified_pattern_guided_local_window as video_pose_algo
 from Algorithm.perf_timer import StageTimer
+from Algorithm.lossless_recording import open_lossless_writer
 from Algorithm.block_height_accuracy import (
     BlockAccuracyConfig, BlockAccuracyReport, build_block_plan, measurement_record,
     block_mae_color, summarize_block_records,
 )
 from Algorithm.specular_detection import (
+    BlockSpatialSpecularConfig,
+    compute_specular_mask_bgr_block_adaptive,
     compute_specular_mask_bgr_wound_adaptive,
     compute_rt_aligned_temporal_specular_mask_bgr,
     overlay_specular_mask_rgb,
@@ -45,6 +48,8 @@ from Algorithm.Region_SIFT_Matching import (
     RegionSIFTConfig,
     run_region_sift_matching,
 )
+from Algorithm.region_sift_settings import show_region_sift_settings
+from Algorithm.region_sift_diagnostics import RegionSIFTDiagnostics
 from Algorithm.stereo_matching import (
     get_patch, score_patch_match, score_zncc_patch_match,
     score_warped_patch_match, score_warped_zncc_patch_match,
@@ -66,6 +71,24 @@ WOUND_DETECTION_DIR = BASE_DIR / "wound_detection_model"
 WOUND_MODEL_PATH = WOUND_DETECTION_DIR / "model" / "assets" / "v9-t-seg_320.onnx"
 WOUND_OVERLAY_ALPHA = 0.45
 ENABLE_WOUND_AI = False                           # False: 不載入傷口 AI 模型，也不執行推論
+# Adaptive Spatial 開啟但無有效傷口遮罩時，全圖按影像小區塊調整門檻。
+# 與手動圈選的 6x4 高度模型無關；其餘可調欄位見 BlockSpatialSpecularConfig。
+SPATIAL_BLOCK_CONFIG = BlockSpatialSpecularConfig(
+    block_width_px=64,
+    block_height_px=64,
+    v_percentile= 10,#90.0,
+    rgb_percentile=5.0, #92
+    local_hot_percentile=10,#85.0,
+    interpolate_thresholds=True,
+    dilate_px=0,
+    enable_prominence_gate=True,           # False 回到原本三條分支 OR 的結果
+    prominence_min=3.0,                    # 局部亮度突出門檻下限；降低較寬鬆
+    prominence_mad_multiplier=2.0,         # 區塊亮度差 MAD 倍數；降低較寬鬆
+    enable_strong_highlight_exception=True,
+    strong_v_min=250.0,                    # 強反光例外：近飽和 + 同時符合兩項顏色限制
+    strong_s_max=30.0,
+    strong_whiteness_max=20.0,
+)
 _WOUND_DETECTOR = None
 _WOUND_DETECTOR_ERROR_LOGGED = False
 
@@ -202,13 +225,14 @@ REGION_SIFT_CONFIG = RegionSIFTConfig(
     keypoint_angle_deg=0.0,
     require_all_descriptors=True,
     normalize_descriptors=False,
-    search_length_px=75.0,
+    search_length_px=95.0,
     search_width_px=5.0,
     search_along_step_px=1.0,
     search_across_step_px=1.0,
     keep_best_ratio=0.75,
     keep_best_count=None,
-    max_group_score=None,
+    max_group_score=500.0,           # BestG > 500 時匹配失敗；None 關閉
+    max_objective_score_ratio=0.95,  # ObjRatio > 0.95 時匹配失敗；None 關閉
     epipolar_penalty_weight=0.0,
     second_best_exclusion_radius_px=3.0,
     group_balance_weight=0.35,  # G = 0.65 * Trim21 + 0.35 * CellAll
@@ -223,6 +247,7 @@ REGION_SIFT_CONFIG = RegionSIFTConfig(
     min_valid_warp_ratio=1.0,
     descriptor_border_margin_px=8,
     descriptor_batch_size=4096,
+    specular_check_support=False,  # Reject SpecPts: 完整 support 避反光；False 只避中心點
 )
 # Debug-only alternative to the original guided fallback.  Ratio-rejected
 # points may select only their original Global Top-1/Top-2 using exact H(pL).
@@ -1756,6 +1781,8 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     print(f"📷 目前接收到的串流解析度: {width} x {height}")
+    camera_algo.log_camera_stream_settings(cap)
+    print('🎞️ 錄影格式: FFV1 / AVI 無損（保留 cap.read() 的 BGR 像素；檔案較大）')
     print("操作說明：")
     print("  按下 's' 鍵 - 開始/停止錄影")
     print("  按下 'q' 鍵 - 當錄影完成後，結束預覽並載入影片")
@@ -1764,6 +1791,8 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
     video_writer = None
     video_name = None
     has_recorded = False
+    recorded_frames = 0
+    recording_size = None
 
     # The preview estimates distance only; overlays are not written to video.
     preview_detector = None
@@ -1783,7 +1812,11 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
 
         # 錄影寫入
         if is_recording and video_writer is not None:
+            if (frame.shape[1], frame.shape[0]) != recording_size:
+                print('❌ 相機畫面尺寸改變，停止錄影以避免遺失或裁切影格')
+                break
             video_writer.write(frame)
+            recorded_frames += 1
 
         display_frame = frame.copy()
         h, w = display_frame.shape[:2]
@@ -1860,29 +1893,39 @@ def record_video_from_camera(camera_matrix=None, distortion=None,
         
         elif key == ord('s'):
             if not is_recording:
-                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                video_name = os.path.join(save_path, f"video_{now_str}.mp4")
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                next_video_name = os.path.join(save_path, f"video_{now_str}_lossless.avi")
                 fps = cap.get(cv2.CAP_PROP_FPS)
-                if fps <= 0 or fps > 100: fps = 25.0  # 保底 FPS
-                video_writer = cv2.VideoWriter(video_name, fourcc, fps, (w, h))
+                if not np.isfinite(fps) or fps <= 0 or fps > 100: fps = 25.0  # 保底 FPS
+                try:
+                    video_writer = open_lossless_writer(next_video_name, fps, (w, h))
+                except (ValueError, RuntimeError, cv2.error) as exc:
+                    print(f'❌ 無損錄影未開始: {exc}')
+                    continue
+                video_name = next_video_name
+                recording_size = (w, h)
+                recorded_frames = 0
                 is_recording = True
-                has_recorded = True
-                print(f"🎬 開始錄影：{video_name}")
+                has_recorded = False
+                print(f"🎬 開始無損錄影：{video_name} | FFV1 | {w}x{h} | {fps:g} fps")
             else:
                 is_recording = False
                 if video_writer is not None:
                     video_writer.release()
                     video_writer = None
-                print("🛑 錄影結束")
+                has_recorded = recorded_frames > 0
+                print(f"🛑 無損錄影結束，共 {recorded_frames} frames")
         
         # 縮放預覽，避免影像太大
         display_small = cv2.resize(display_frame, (int(w//2), int(h//2)))
         cv2.imshow('Camera Recording Window', display_small)
 
+    if video_writer is not None:
+        video_writer.release()  # Finalize the AVI even if the camera disconnects.
+        has_recorded = recorded_frames > 0
     cap.release()
     cv2.destroyAllWindows()
-    return video_name
+    return video_name if has_recorded else None
 
 def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_n, custom_plane_c, custom_plane_fitted, measure_mode):
     import datetime
@@ -2435,18 +2478,26 @@ def main():
     startup_timer.stage("影片分析(ArUco配對+RT解算)")
 
     use_wound_adaptive_spatial_specular = True
+    log_and_print(
+        f'[Specular] Adaptive Spatial: valid wound mask when available; otherwise '
+        f'full-image {SPATIAL_BLOCK_CONFIG.block_width_px}x{SPATIAL_BLOCK_CONFIG.block_height_px}px tiles '
+        f'(AI enabled={ENABLE_WOUND_AI})')
 
     def compute_wound_adaptive_spatial_mask(bgr, wound_prediction=None):
-        if use_wound_adaptive_spatial_specular and wound_prediction is not None:
+        if not use_wound_adaptive_spatial_specular or bgr is None or bgr.size == 0:
+            return None
+        if wound_prediction is not None:
             wound_mask = prediction_to_wound_mask(wound_prediction, bgr.shape)
-            return compute_specular_mask_bgr_wound_adaptive(bgr, wound_mask)
-        return None
+            if wound_mask is not None and np.count_nonzero(wound_mask) >= 20:
+                return compute_specular_mask_bgr_wound_adaptive(bgr, wound_mask)
+        return compute_specular_mask_bgr_block_adaptive(bgr, SPATIAL_BLOCK_CONFIG)
 
     def compute_locked_spec_mask(bgr, frame_idx=None, wound_prediction=None):
         combined_mask, spatial_mask, temporal_mask = compute_locked_spec_masks(bgr, frame_idx, wound_prediction)
         return combined_mask
 
     def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None):
+        adaptive_spatial_mask = compute_wound_adaptive_spatial_mask(bgr, wound_prediction)
         combined_mask, spatial_mask, temporal_mask = compute_rt_aligned_temporal_specular_mask_bgr(
             bgr,
             frame_idx,
@@ -2456,14 +2507,8 @@ def main():
             process_view,
             return_parts=True,
             preprocess_gray_fn=preprocess_gray,
+            base_mask=adaptive_spatial_mask,
         )
-        adaptive_spatial_mask = compute_wound_adaptive_spatial_mask(bgr, wound_prediction)
-        if adaptive_spatial_mask is not None:
-            spatial_mask = adaptive_spatial_mask
-            if temporal_mask is None:
-                combined_mask = spatial_mask
-            else:
-                combined_mask = cv2.bitwise_or(spatial_mask, temporal_mask)
         return combined_mask, spatial_mask, temporal_mask
         
     # 去畸變處理挑選出的最優左右圖
@@ -2922,6 +2967,8 @@ def main():
     # Region-SIFT uses the same lower axes but keeps its dynamic 3x3 grid,
     # rotated search band and numbered point annotations separate.
     debug_region_artists = []
+    region_diagnostics = RegionSIFTDiagnostics()
+    region_diagnostic_latest = {'result': None}
     debug_region_state = {
         'records': [], 'selected_index': None,
         'base_left_text': '', 'base_right_text': '',
@@ -3060,8 +3107,14 @@ def main():
         current_cand['spec_mask'] = locked_R_spec_mask
         current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
         current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
+        # Extra right frames were precomputed under the previous spatial mode.
+        # Invalidate them so matching lazily rebuilds consistent masks.
+        for extra in extra_candidates_list:
+            extra['spec_mask'] = None
+            extra['spec_spatial_mask'] = None
+            extra['spec_temporal_mask'] = None
         print(
-            f"[Specular] {'Adaptive wound spatial' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
+            f"[Specular] {'Adaptive spatial (wound mask or full-image tiles)' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
             f"masks refreshed ({reason})"
         )
         mark_display_dirty()
@@ -3324,7 +3377,8 @@ def main():
         view_state['adaptive_spatial_specular'] = not view_state['adaptive_spatial_specular']
         use_wound_adaptive_spatial_specular = view_state['adaptive_spatial_specular']
         c19.label.set_text("[X] Adaptive Spatial" if use_wound_adaptive_spatial_specular else "[ ] Adaptive Spatial")
-        if wound_state.get('left_pred') is None and wound_state.get('right_pred') is None:
+        if (ENABLE_WOUND_AI and use_wound_adaptive_spatial_specular
+                and wound_state.get('left_pred') is None and wound_state.get('right_pred') is None):
             refresh_wound_predictions("adaptive spatial toggle")
         else:
             recompute_locked_spec_masks_from_wound("adaptive spatial toggle")
@@ -4462,6 +4516,7 @@ def main():
         """純計算版 do_measure，回傳結果 dict，不更新任何 UI 元件。"""
         nonlocal locked_L, locked_R, locked_L_spec_mask, locked_R_spec_mask, current_cand
         cand = snap_cand
+        region_config = REGION_SIFT_CONFIG  # Immutable snapshot for this computation.
         t_cm_start = time.perf_counter()
         t_prof = {}
         left_spec_mask = locked_L_spec_mask
@@ -4518,12 +4573,18 @@ def main():
                     _t_blk = time.perf_counter()
                     region_result = run_region_sift_matching(
                         snap_imgA_gray, region_right_gray, (u, v), cand, KL,
-                        sift=sift, config=REGION_SIFT_CONFIG,
-                        left_cache=left_cache)
+                        sift=None, config=region_config,
+                        left_cache=left_cache,
+                        reject_specular=snap_view_state.get('reject_specular_candidates', False),
+                        left_spec_mask=left_spec_mask, right_spec_mask=right_spec_mask)
                     t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
                     _t_blk = time.perf_counter()
                     _region_ms = region_result.get('elapsed_ms', 0.0)
                     _region_counts = region_result.get('timing_counts', {})
+                    print(f"[Region-SIFT Specular] enabled={_region_counts.get('reject_specular', False)} "
+                          f"| support={_region_counts.get('specular_check_support', False)} "
+                          f"| center rejects={_region_counts.get('specular_center_rejected_candidates', 0)} "
+                          f"| incomplete support rejects={_region_counts.get('incomplete_support_rejected_candidates', 0)}")
                     print(f"⏱️ [F{cand.get('idx')} Region-SIFT細分] {_region_ms:.1f} ms "
                           f"| 左圖cache={'hit' if _region_counts.get('left_cache_hit') else 'miss'} "
                           f"| 右圖descriptor={_region_counts.get('right_descriptor_rows', 0)} rows/"
@@ -4532,6 +4593,31 @@ def main():
                         _stage_pct = 100.0 * _stage_ms / _region_ms if _region_ms > 0 else 0.0
                         print(f"   - {_stage_name}: {_stage_ms:.1f} ms ({_stage_pct:.1f}%)")
                     region_debug = region_result.get('region_debug')
+                    if region_debug is not None:
+                        region_debug['diagnostic_match_status'] = (
+                            region_result.get('reject_reason') or 'accepted')
+                        region_debug['diagnostic_frame_index'] = cand.get('idx')
+                        region_debug['diagnostic_geometry'] = {
+                            'K_L': np.asarray(KL).copy(), 'K_R': np.asarray(cand['K_R']).copy(),
+                            'R': np.asarray(cand['R_rel']).copy(), 't': np.asarray(cand['t_rel']).copy()}
+                        second_candidate = region_debug.get('second_candidate')
+                        candidate_p3ds = []
+                        for candidate_pt in (region_debug['best_center_right'],
+                                             None if second_candidate is None else second_candidate['center_right']):
+                            xyz = None
+                            if candidate_pt is not None:
+                                try:
+                                    value = triangulate_point_3d(
+                                        (u, v), candidate_pt, KL, cand['K_R'],
+                                        cand['R_rel'], cand['t_rel'], F=cand.get('F'))
+                                    right_value = cand['R_rel'] @ value + np.asarray(cand['t_rel']).reshape(3)
+                                    if (np.all(np.isfinite(value)) and 0 < value[2] <= MAX_DEPTH_MM
+                                            and right_value[2] > 0):
+                                        xyz = value
+                                except (ValueError, cv2.error, FloatingPointError):
+                                    pass
+                            candidate_p3ds.append(xyz)
+                        region_debug['diagnostic_candidate_p3ds'] = candidate_p3ds
                     m_pt = region_result.get('m_pt')
                     method = region_result.get('method', '')
                     if region_result.get('reject_reason'):
@@ -4554,11 +4640,11 @@ def main():
                             f"   [Region-SIFT score] "
                             f"Trim{region_debug['keep_count']}={region_debug['trimmed_score']:.3f}, "
                             f"CellAll={region_debug['balanced_score']:.3f}, "
-                            f"balanceWeight={REGION_SIFT_CONFIG.group_balance_weight:.2f}, "
+                            f"balanceWeight={region_config.group_balance_weight:.2f}, "
                             f"FramePenalty={region_debug['frame_penalty']:.3f}, "
                             f"Total={region_debug['objective_score']:.3f}; "
                             + (f"all {region_debug['point_count']} rows contribute to CellAll"
-                               if REGION_SIFT_CONFIG.group_balance_weight > 0 else
+                               if region_config.group_balance_weight > 0 else
                                "CellAll diagnostic only (weight=0)"))
                         print(
                             f"   [Region-SIFT frame/support] "
@@ -6254,7 +6340,9 @@ def main():
                 np.asarray(debug_left_gray), cv2.COLOR_GRAY2RGB))
 
         debug = res.get('region_debug')
+        region_diagnostic_latest['result'] = res
         if not isinstance(debug, dict):
+            region_diagnostics.show(res)
             debug_right_gray = res.get('debug_right_gray')
             if debug_right_gray is not None:
                 im_debug_B.set_data(cv2.cvtColor(
@@ -6457,6 +6545,30 @@ def main():
         dbg_info_B.set_text(base_right_text)
         # Default to P so its descriptor contribution is visible immediately.
         select_region_sift_debug_point(index=len(records) - 1)
+
+        if block_accuracy_state['mode'] == 'idle' and not auto_calc_active:
+            show_region_diagnostics()
+
+    def show_region_diagnostics(event=None):
+        res = region_diagnostic_latest['result']
+        if res is None or not isinstance(res.get('region_debug'), dict):
+            print('[Region-SIFT Debug] No candidate scores; first measure a Region-SIFT point.')
+            return
+        debug = res['region_debug']
+        n, c, label = get_selected_height_plane()
+        offset = DEFAULT_WOUND_HEIGHT_OFFSET_MM
+        if custom_plane_fitted:
+            n, c, label = custom_plane_n, custom_plane_c, 'Custom Plane'
+            offset = 0.0
+        debug['diagnostic_heights_mm'] = [
+            float(np.dot(n, xyz-c)) - offset
+            if xyz is not None and n is not None and c is not None else float('nan')
+            for xyz in debug.get('diagnostic_candidate_p3ds', [None, None])]
+        debug['diagnostic_plane_label'] = f'{label}; F{debug.get("diagnostic_frame_index")}; no temporal fusion'
+        debug['diagnostic_height_plane'] = {
+            'n': None if n is None else np.asarray(n).reshape(3).copy(),
+            'c': None if c is None else np.asarray(c).reshape(3).copy(), 'offset': offset}
+        region_diagnostics.show(res)
 
     def update_grad_match_debug_views(res, u, v):
         """Update the lower zoomed views without changing any matching decision."""
@@ -7383,6 +7495,102 @@ def main():
         _button.label.set_fontsize(7)
         _button.ax.patch.set_edgecolor('#D83B01')
 
+    # Region-SIFT coordinate replay.  Values copied from points.csv are
+    # rounded exactly like the block-accuracy batch before entering do_measure.
+    ax_region_u = fig.add_axes([0.185, control_row_y[6], 0.045, control_h])
+    ax_region_v = fig.add_axes([0.255, control_row_y[6], 0.045, control_h])
+    ax_btn_region_replay = fig.add_axes([0.315, control_row_y[6], 0.085, control_h])
+    text_region_u = TextBox(
+        ax_region_u, 'U ', initial='', color='#1A1A1A', hovercolor='#333333')
+    text_region_v = TextBox(
+        ax_region_v, 'V ', initial='', color='#1A1A1A', hovercolor='#333333')
+    btn_region_replay = Button(ax_btn_region_replay, '座標重現', **btn_opt_style)
+    for _coordinate_box in (text_region_u, text_region_v):
+        _coordinate_box.label.set_color('#E0E0E0')
+        _coordinate_box.label.set_fontsize(7)
+        _coordinate_box.text_disp.set_color('#E0E0E0')
+        _coordinate_box.text_disp.set_fontsize(7)
+        _coordinate_box.ax.patch.set_linewidth(1.0)
+        _coordinate_box.ax.patch.set_edgecolor('#00BFFF')
+    btn_region_replay.label.set_color('#E0E0E0')
+    btn_region_replay.label.set_fontsize(7)
+    btn_region_replay.ax.patch.set_edgecolor('#00BFFF')
+    btn_region_replay.ax.patch.set_linewidth(1.0)
+
+    ax_btn_region_settings = fig.add_axes([0.410, control_row_y[6], 0.075, control_h])
+    btn_region_settings = Button(ax_btn_region_settings, 'SIFT 參數', **btn_opt_style)
+    btn_region_settings.label.set_color('#E0E0E0')
+    btn_region_settings.label.set_fontsize(7)
+    btn_region_settings.ax.patch.set_edgecolor('#00BFFF')
+    ax_btn_region_diagnostics = fig.add_axes([0.495, control_row_y[6], 0.075, control_h])
+    btn_region_diagnostics = Button(ax_btn_region_diagnostics, 'SIFT Debug', **btn_opt_style)
+    btn_region_diagnostics.label.set_color('#E0E0E0')
+    btn_region_diagnostics.label.set_fontsize(7)
+    btn_region_diagnostics.on_clicked(show_region_diagnostics)
+
+    def apply_region_settings(updated):
+        global REGION_SIFT_CONFIG
+        if block_accuracy_state['mode'] != 'idle':
+            raise ValueError('請先完成或取消 Block 誤差統計，再修改參數')
+        previous = REGION_SIFT_CONFIG
+        REGION_SIFT_CONFIG = updated
+        # Left descriptor cache keys include the whole immutable config;
+        # the next measurement also creates a new click-local cache.
+        for name, value in vars(updated).items():
+            if getattr(previous, name) != value:
+                print(f'[Region-SIFT Settings] {name}: {getattr(previous, name)} -> {value}')
+        depth_text.set_text('Region-SIFT 參數已套用；請重新點選或按座標重現')
+        request_blit_refresh()
+
+    def on_region_settings(event):
+        if block_accuracy_state['mode'] != 'idle':
+            depth_text.set_text('請先完成或取消 Block 誤差統計，再修改參數')
+            request_blit_refresh()
+            return
+        show_region_sift_settings(fig.canvas.manager.window, REGION_SIFT_CONFIG,
+                                  apply_region_settings)
+
+    def on_region_coordinate_replay(event):
+        if not view_state.get('region_sift', False):
+            message = '座標重現需要先啟用 Region-SIFT 匹配'
+            print(f'[Region-SIFT Replay] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        if block_accuracy_state['mode'] != 'idle':
+            message = '請先完成或取消 Block 誤差統計'
+            print(f'[Region-SIFT Replay] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        try:
+            input_u = float(text_region_u.text.strip())
+            input_v = float(text_region_v.text.strip())
+        except (TypeError, ValueError):
+            message = 'U、V 必須是有效數字'
+            print(f'[Region-SIFT Replay] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        if not np.isfinite(input_u) or not np.isfinite(input_v):
+            message = 'U、V 必須是有限數字'
+            print(f'[Region-SIFT Replay] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        measured_u, measured_v = int(round(input_u)), int(round(input_v))
+        image_h, image_w = locked_L_clean.shape[:2]
+        if not (0 <= measured_u < image_w and 0 <= measured_v < image_h):
+            message = (f'座標超出左圖範圍：U=0..{image_w - 1}, '
+                       f'V=0..{image_h - 1}')
+            print(f'[Region-SIFT Replay] {message}')
+            depth_text.set_text(message)
+            request_blit_refresh()
+            return
+        print(f'[Region-SIFT Replay] CSV input=({input_u:.6f}, {input_v:.6f}) '
+              f'-> measured=({measured_u}, {measured_v})')
+        do_measure(measured_u, measured_v)
+
     wound_z_offset = 0.0
     # 原本位於左下角，會壓到新的 Debug 資訊列；移入右側控制區空位。
     ax_box = fig.add_axes([0.78, control_row_y[4], 0.08, control_h])
@@ -8115,6 +8323,7 @@ def main():
                    btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay,
                    btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
                    btn_top2_geo, btn_h_residual, btn_rt_warp_view]
+        widgets.extend([text_region_u, text_region_v, btn_region_replay, btn_region_settings])
         block_accuracy_state['disabled_widgets'] = [(widget, widget.active) for widget in widgets]
         for widget in widgets:
             # RadioButtons.set_active(index) SELECTS an option; it does not
@@ -8370,6 +8579,8 @@ def main():
 
     btn_block_accuracy.on_clicked(on_block_accuracy)
     btn_block_mae.on_clicked(on_block_mae_toggle)
+    btn_region_replay.on_clicked(on_region_coordinate_replay)
+    btn_region_settings.on_clicked(on_region_settings)
     btn_block_cancel.on_clicked(lambda event: finish_block_accuracy('cancelled', 'user cancelled')
                                 if block_accuracy_state['mode'] != 'idle' else None)
     fig.canvas.mpl_connect('close_event', on_block_accuracy_close)
@@ -8398,7 +8609,9 @@ def main():
     # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單與自訂傷口平面不受影響）----
     panel_defs = [
         ('#00BFFF', [ax_c1, ax_c2, ax_c18, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
-                     ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19]),
+                     ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19,
+                     ax_region_u, ax_region_v, ax_btn_region_replay, ax_btn_region_settings,
+                     ax_btn_region_diagnostics]),
         ('#00FF88', [ax_mode]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
@@ -8409,7 +8622,7 @@ def main():
                      ax_btn_block_accuracy, ax_btn_block_cancel, ax_btn_block_mae]),
         ('#FF6688', [pose_status_text]),  # 右下角姿態估計狀態 label (set_visible 對 Text artist 同樣有效)
     ]
-    panel_visible = [False, False, False, False]
+    panel_visible = [True, True, True, True]
     panel_dot_buttons = []
 
     def make_panel_toggle(idx):

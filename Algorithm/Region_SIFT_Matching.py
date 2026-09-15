@@ -71,7 +71,9 @@ class RegionSIFTConfig:
     # Robust group score.  keep_best_count, when set, overrides the ratio.
     keep_best_ratio: float = 0.75
     keep_best_count: Optional[int] = None
-    max_group_score: Optional[float] = None
+    max_group_score: Optional[float] = 500.0
+    # Best / spatially distinct second-best Objective; None disables the gate.
+    max_objective_score_ratio: Optional[float] = 0.95
     epipolar_penalty_weight: float = 0.0
     second_best_exclusion_radius_px: float = 3.0
 
@@ -91,6 +93,7 @@ class RegionSIFTConfig:
     min_valid_warp_ratio: float = 1.0
     descriptor_border_margin_px: int = 8
     descriptor_batch_size: int = 4096
+    specular_check_support: bool = True
 
 
 DEFAULT_CONFIG = RegionSIFTConfig()
@@ -158,6 +161,13 @@ def _validate_config(config: RegionSIFTConfig) -> None:
         raise RegionSIFTError("keep_best_ratio must be in (0, 1]")
     if config.second_best_exclusion_radius_px < 0:
         raise RegionSIFTError("second_best_exclusion_radius_px cannot be negative")
+    if (config.max_objective_score_ratio is not None
+            and (not np.isfinite(config.max_objective_score_ratio)
+                 or not 0.0 <= config.max_objective_score_ratio <= 1.0)):
+        raise RegionSIFTError("max_objective_score_ratio must be in [0, 1] or None")
+    if (config.max_group_score is not None
+            and (not np.isfinite(config.max_group_score) or config.max_group_score < 0)):
+        raise RegionSIFTError("max_group_score must be finite and nonnegative or None")
     if not 0.0 <= config.min_valid_warp_ratio <= 1.0:
         raise RegionSIFTError("min_valid_warp_ratio must be in [0, 1]")
     if config.descriptor_border_margin_px < 0:
@@ -191,6 +201,7 @@ def select_region_points(
     image_gray: np.ndarray,
     point_p: Sequence[float],
     config: RegionSIFTConfig = DEFAULT_CONFIG,
+    exclusion_mask: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, List[Dict[str, Any]], np.ndarray, Tuple[int, int, int, int]]:
     """Select gradient-ranked cell points plus P.
 
@@ -215,6 +226,14 @@ def select_region_points(
         raise RegionSIFTError(
             f"{roi_w}x{roi_h} region plus {margin}px descriptor margin is outside the left image")
 
+    excluded = None
+    if exclusion_mask is not None:
+        excluded = np.asarray(exclusion_mask) > 0
+        if excluded.shape != gray.shape:
+            raise RegionSIFTError('left exclusion mask shape differs from image')
+        if excluded[center_y, center_x]:
+            raise RegionSIFTError('匹配失敗: P overlaps specular pixels or lacks reflection-free support')
+
     gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=config.sobel_ksize)
     gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=config.sobel_ksize)
     magnitude = cv2.magnitude(gx, gy)
@@ -234,12 +253,20 @@ def select_region_points(
             yy, xx = np.mgrid[cy0:cy1, cx0:cx1]
             coords = np.column_stack([xx.ravel(), yy.ravel()]).astype(np.int32)
             values = magnitude[cy0:cy1, cx0:cx1].ravel().astype(np.float64)
+            if excluded is not None:
+                clean = ~excluded[cy0:cy1, cx0:cx1].ravel()
+                coords, values = coords[clean], values[clean]
 
             is_center_cell = cell_row == center_row and cell_col == center_col
             if is_center_cell and config.exclude_click_from_cell_points:
                 keep = np.logical_or(coords[:, 0] != click_pixel[0],
                                      coords[:, 1] != click_pixel[1])
                 coords, values = coords[keep], values[keep]
+
+            if excluded is not None and len(coords) < config.points_per_cell:
+                raise RegionSIFTError(
+                    f'匹配失敗: cell ({cell_row + 1},{cell_col + 1}) has only '
+                    f'{len(coords)} reflection-free pixels; needs {config.points_per_cell}')
 
             order = np.argsort(values, kind="mergesort")
             rank_indices = _sample_spaced_ranks(len(order), config.points_per_cell)
@@ -506,6 +533,10 @@ def run_region_sift_matching(
     sift: Optional[Any] = None,
     config: RegionSIFTConfig = DEFAULT_CONFIG,
     left_cache: Optional[Dict[str, Any]] = None,
+    *,
+    reject_specular: bool = False,
+    left_spec_mask: Optional[np.ndarray] = None,
+    right_spec_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Run Region-SIFT and return an original-right-image match plus debug data."""
     started = time.perf_counter()
@@ -535,6 +566,19 @@ def run_region_sift_matching(
         right_gray = np.asarray(img_right_gray)
         if left_gray.ndim != 2 or right_gray.ndim != 2:
             raise RegionSIFTError("Region-SIFT requires grayscale left/right images")
+        base_result['timing_counts']['reject_specular'] = bool(reject_specular)
+        base_result['timing_counts']['specular_check_support'] = bool(config.specular_check_support)
+        if reject_specular:
+            for label, mask, gray in (('left', left_spec_mask, left_gray),
+                                      ('right', right_spec_mask, right_gray)):
+                if mask is None or np.asarray(mask).shape != gray.shape:
+                    raise RegionSIFTError(f'匹配失敗: {label} specular mask missing or shape mismatch')
+                if not np.all(np.isfinite(mask)):
+                    raise RegionSIFTError(f'匹配失敗: {label} specular mask is non-finite')
+            left_spec_mask = (np.asarray(left_spec_mask) > 0).astype(np.uint8)
+            right_spec_mask = (np.asarray(right_spec_mask) > 0).astype(np.uint8)
+        else:
+            left_spec_mask = right_spec_mask = None
         if cand.get("F") is None:
             raise RegionSIFTError("Region-SIFT requires a fundamental matrix")
         if sift is None:
@@ -552,6 +596,8 @@ def run_region_sift_matching(
             left_gray.dtype.str,
             image_digest,
             config,
+            hashlib.blake2b(left_spec_mask.tobytes(), digest_size=16).digest()
+            if left_spec_mask is not None else None,
         )
         cached = left_cache.get("region_sift") if left_cache is not None else None
         if (cached is not None and cached.get("key") == cache_key
@@ -567,18 +613,33 @@ def run_region_sift_matching(
             }
             left_roi = cached["roi"]
         else:
+            left_context = None
+            left_excluded = left_spec_mask
+            left_frame_config = config
+            if reject_specular and config.specular_check_support:
+                timing_next('左圖尺度金字塔與響應圖')
+                left_context = dense_frames.create_frame_context(left_gray, config)
+                # Pre-filter sampling positions at the smallest possible support;
+                # scale selection below checks every actual support independently.
+                radius = int(np.ceil(min(entry['support'] for entry in left_context['entries'])
+                                     + config.frame_coordinate_quantization_px)) + 1
+                left_excluded = 1 - _eroded_valid_mask(1 - left_spec_mask, radius, 1.0)
+                left_frame_config = replace(config, min_valid_warp_ratio=1.0)
             timing_next('左圖梯度與28點取樣')
             left_points, point_metadata, _magnitude, left_roi = select_region_points(
-                left_gray, point_p, config)
+                left_gray, point_p, config, exclusion_mask=left_excluded)
             timing_next('左圖尺度金字塔與響應圖')
-            left_context = dense_frames.create_frame_context(left_gray, config)
+            if left_context is None:
+                left_context = dense_frames.create_frame_context(left_gray, config)
             timing_next('左圖尺度選擇與角度估計')
             left_frames = estimate_dense_sift_frames(
-                left_gray, left_points, config, context=left_context)
+                left_gray, left_points, left_frame_config, context=left_context,
+                valid_mask=(1 - left_spec_mask)
+                if reject_specular and config.specular_check_support else None)
             del left_context
             if not np.all(left_frames['valid']):
                 raise RegionSIFTError(
-                    'left anchors lack complete SIFT/scale-space support; '
+                    'left anchors lack complete reflection-free SIFT/scale-space support; '
                     'move the click inward or tune the support limit')
             timing_next('左圖SIFT descriptor')
             left_descriptors = compute_descriptors_at_points(
@@ -620,6 +681,18 @@ def run_region_sift_matching(
             flags=int(config.warp_interpolation),
             borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         warped_valid = (warped_fraction >= 1.0 - 1e-6).astype(np.uint8) * 255
+        warped_specular = None
+        if reject_specular:
+            source_specular = right_spec_mask
+            if config.specular_check_support:
+                # Conservatively include the source interpolation footprint.
+                radius = {cv2.INTER_NEAREST: 0, cv2.INTER_LINEAR: 1,
+                          cv2.INTER_CUBIC: 2, cv2.INTER_LANCZOS4: 4}.get(int(config.warp_interpolation), 4)
+                if radius:
+                    source_specular = cv2.dilate(source_specular, np.ones((2 * radius + 1,) * 2, np.uint8))
+            warped_specular = cv2.warpPerspective(
+                source_specular, H_rl, (width, height), flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
         support_valid = _eroded_valid_mask(
             warped_valid, int(config.descriptor_border_margin_px),
             float(config.min_valid_warp_ratio))
@@ -644,9 +717,16 @@ def run_region_sift_matching(
         for candidate_index in in_bound_indices:
             valid_candidates[candidate_index] = bool(np.all(
                 support_valid[ys[candidate_index], xs[candidate_index]] > 0))
+        before_specular = int(np.count_nonzero(valid_candidates))
+        if warped_specular is not None:
+            for candidate_index in np.flatnonzero(valid_candidates):
+                valid_candidates[candidate_index] &= not np.any(
+                    warped_specular[ys[candidate_index], xs[candidate_index]])
+        base_result['timing_counts']['specular_center_rejected_candidates'] = (
+            before_specular - int(np.count_nonzero(valid_candidates)))
         valid_indices = np.flatnonzero(valid_candidates)
         if len(valid_indices) == 0:
-            raise RegionSIFTError("no search candidate has complete valid warp support")
+            raise RegionSIFTError("匹配失敗: no search candidate has valid warp support and reflection-free anchors")
 
         group_scores = np.full(len(centers), np.inf, dtype=np.float64)
         objective_scores = np.full(len(centers), np.inf, dtype=np.float64)
@@ -661,8 +741,12 @@ def run_region_sift_matching(
         right_context = dense_frames.create_frame_context(warped_right, config)
         timing_next('右圖尺度選擇與角度估計')
         right_frames_flat = estimate_dense_sift_frames(
-            warped_right, flat_valid_positions, config, context=right_context,
-            valid_mask=warped_valid)
+            warped_right, flat_valid_positions,
+            replace(config, min_valid_warp_ratio=1.0)
+            if reject_specular and config.specular_check_support else config,
+            context=right_context,
+            valid_mask=np.where(warped_specular > 0, 0, warped_valid).astype(np.uint8)
+            if reject_specular and config.specular_check_support else warped_valid)
         del right_context
         timing_next('候選完整support篩選')
         right_frames = {
@@ -670,11 +754,12 @@ def run_region_sift_matching(
             for key, value in right_frames_flat.items()
         }
         complete_support = np.all(right_frames['valid'], axis=1)
+        base_result['timing_counts']['incomplete_support_rejected_candidates'] = int(np.count_nonzero(~complete_support))
         valid_indices = valid_indices[complete_support]
         right_frames = {key: value[complete_support]
                         for key, value in right_frames.items()}
         if len(valid_indices) == 0:
-            raise RegionSIFTError('no search candidate has complete per-scale SIFT support')
+            raise RegionSIFTError('匹配失敗: no search candidate has complete reflection-free per-scale SIFT support')
         valid_row_by_candidate = {
             int(candidate_index): row_index
             for row_index, candidate_index in enumerate(valid_indices)
@@ -857,7 +942,23 @@ def run_region_sift_matching(
                 'angle_residual_deg': float(best_components['frame_angle_residual_deg'][0, index]),
             })
 
+        second_debug = None
+        if second_index is not None:
+            second_row = valid_row_by_candidate[second_index]
+            second_distances = candidate_distances[second_index].copy()
+            second_keep = np.zeros(point_count, dtype=bool)
+            second_keep[np.argsort(second_distances, kind='stable')[:keep_count]] = True
+            second_debug = {
+                'points_warp': all_positions[second_index].copy(),
+                'center_right': _transform_points(centers[second_index].reshape(1, 2), H_lr)[0],
+                'distances': second_distances,
+                'keep_mask': second_keep,
+                'frames': {key: np.asarray(value[second_row]).copy()
+                           for key, value in right_frames.items()},
+            }
+
         debug = {
+            'second_candidate': second_debug,
             "config": config,
             "point_count": point_count,
             "auto_point_count": point_count - 1,
@@ -877,6 +978,9 @@ def run_region_sift_matching(
             "H_rl": H_rl,
             "warped_right_gray": warped_right,
             "warped_valid_mask": warped_valid,
+            "warped_specular_mask": warped_specular,
+            "reject_specular": bool(reject_specular),
+            "specular_check_support": bool(config.specular_check_support),
             "line_right": band["line_right"],
             "line_warp": band["line_warp"],
             "tangent": band["tangent"],
@@ -960,8 +1064,17 @@ def run_region_sift_matching(
         if (config.max_group_score is not None
                 and best_group_score > float(config.max_group_score)):
             base_result["reject_reason"] = (
-                f"Region-SIFT GroupScore {best_group_score:.3f} exceeds "
+                f"Region-SIFT 匹配失敗: BestG (GroupScore) {best_group_score:.3f} exceeds "
                 f"{float(config.max_group_score):.3f}")
+            base_result["region_debug"] = debug
+            return base_result
+
+        if (config.max_objective_score_ratio is not None
+                and np.isfinite(objective_score_ratio)
+                and objective_score_ratio > float(config.max_objective_score_ratio)):
+            base_result["reject_reason"] = (
+                f"Region-SIFT 匹配失敗: ObjRatio {objective_score_ratio:.6f} exceeds "
+                f"{float(config.max_objective_score_ratio):.6f}; ambiguous match")
             base_result["region_debug"] = debug
             return base_result
 

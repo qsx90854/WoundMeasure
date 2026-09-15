@@ -31,7 +31,7 @@ def generate_aruco_marker(dictionary_type, marker_id, marker_size, output_filena
 if __name__ == "__main__":
     # 設定參數：使用 4x4 字典，ID 為 12，主體大小 500x500 像素
     ARUCO_DICT = cv2.aruco.DICT_4X4_100
-    MARKER_ID = 2
+    MARKER_ID = 12
     SIZE_PIXELS = 500
     FILENAME = f"aruco_dict4x4_id{MARKER_ID}.png"
 

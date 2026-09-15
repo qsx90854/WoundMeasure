@@ -56,6 +56,8 @@ CSV 浮點數輸出最多 15 位有效數字，以相容 Excel 的數值精度�
 `block_mean_mae_mm` 只對至少有一個有效點的格等權平均；須連同 `valid_block_count`、`complete_block_count` 判讀，不能將缺失格視為零誤差。
 取消時仍輸出全部格，但未量格的平均為空值。時間戳加唯一識別避免覆寫上一輪資料。
 
+若要重現 `points.csv` 中的異常點，展開藍色 Region-SIFT 控制區，將該列的 `u`、`v` 貼入 U/V 欄位後按 **座標重現**。程式會採用與批次相同的像素四捨五入，再以目前鎖定影像及當前 Region-SIFT 設定執行一般單點量測並更新 Debug 畫面。此功能僅在 Region-SIFT 啟用且 Block 統計不在執行中時可用；輸入座標屬於去畸變後左圖的像素座標。
+
 ## 驗證
 
 執行 `Scripts/python.exe -B -m unittest tests.test_block_height_accuracy tests.test_block_height_accuracy_ui`。

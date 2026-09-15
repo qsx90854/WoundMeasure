@@ -2283,8 +2283,8 @@ def _local_klt_track_pair(gray_prev, gray_curr, camera_matrix, marker_corners=No
     g1 = np.asarray(gray_curr)
     scale = float(cfg['klt_scale'])
     if scale != 1.0:
-        g0s = cv2.resize(g0, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        g1s = cv2.resize(g1, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        g0s = cv2.resize(g0, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+        g1s = cv2.resize(g1, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
     else:
         g0s, g1s = g0, g1
     mask = np.full(g0s.shape[:2], 255, np.uint8)
@@ -3703,7 +3703,7 @@ def analyze_video_frames(
             if scale <= 0.0:
                 raise ValueError("FEATURE_IMAGE_SCALE must be greater than zero")
             if scale != 1.0:
-                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+                gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
             if idx not in detected_cache:
                 detected_cache[idx] = detect_frame_markers(idx)
             frame_feature_bounds = feature_roi_bounds_for_frame(idx)

@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import unittest
 from unittest.mock import patch
+from Algorithm.region_sift_scoring import score_candidate_groups
 
 from Algorithm.Region_SIFT_Matching import (
     DEFAULT_CONFIG,
@@ -33,6 +34,44 @@ def _identity_candidate():
 
 
 class RegionSIFTMatchingTests(unittest.TestCase):
+    def test_quality_gates_reject_before_returning_match_and_keep_debug(self):
+        image = np.random.default_rng(573).integers(0, 256, (180, 220), dtype=np.uint8)
+        config = with_config(DEFAULT_CONFIG, search_length_px=9, search_width_px=1,
+                             auto_scale_orientation=False, keypoint_size_px=3.2)
+        # Controlled scoring isolates the strict thresholds from image/float noise.
+        cases = [
+            (94.9, 100., None),
+            (95., 100., None),
+            (95.1, 100., 'ObjRatio'),
+            (500., 1000., None),
+            (500.1, 1000., 'BestG'),
+        ]
+        for best, second, reason in cases:
+            with self.subTest(best=best, second=second):
+                def controlled_scores(*args, **kwargs):
+                    components = score_candidate_groups(*args, **kwargs)
+                    scores = np.full(len(components['group_score']), second)
+                    scores[0] = best
+                    components['group_score'] = scores
+                    components['objective_without_epi'] = scores.copy()
+                    return components
+
+                with patch('Algorithm.Region_SIFT_Matching.score_candidate_groups',
+                           side_effect=controlled_scores):
+                    result = run_region_sift_matching(
+                        image, image, (110., 90.), _identity_candidate(), np.eye(3),
+                        config=config)
+                debug = result['region_debug']
+                self.assertIsNotNone(debug, result['reject_reason'])
+                self.assertAlmostEqual(debug['group_score'], best)
+                self.assertAlmostEqual(debug['objective_score_ratio'], best / second)
+                if reason is None:
+                    self.assertIsNone(result['reject_reason'])
+                    self.assertIsNotNone(result['m_pt'])
+                else:
+                    self.assertIn(reason, result['reject_reason'])
+                    self.assertIsNone(result['m_pt'])
+
     def test_timing_records_disjoint_stages_and_accumulates_batches(self):
         image = np.random.default_rng(573).integers(0, 256, (180, 220), dtype=np.uint8)
         config = with_config(DEFAULT_CONFIG, search_length_px=7, search_width_px=3,

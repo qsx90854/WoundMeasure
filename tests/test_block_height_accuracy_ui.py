@@ -33,6 +33,7 @@ SOURCE = Path(__file__).resolve().parents[1] / 'depth_measure_multi_aruco_sbs_ca
 class FakeWidget:
     def __init__(self):
         self.active = True
+        self.text = ''
         self.label = SimpleNamespace(set_text=Mock())
 
     def set_active(self, active):
@@ -75,10 +76,12 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
             'btn_mid_grad_pts', 'btn_rt_diff', 'btn_return_menu', 'btn_wound_toggle',
             'btn_wound_pts_toggle', 'btn_aruco_overlay', 'btn_rt_sift', 'btn_height_plane',
             'btn_metric_blocks', 'btn_shared_plane', 'btn_top2_geo', 'btn_h_residual',
-            'btn_rt_warp_view', 'btn_block_accuracy', 'btn_block_cancel', 'btn_block_mae']
+            'btn_rt_warp_view', 'btn_block_accuracy', 'btn_block_cancel', 'btn_block_mae',
+            'text_region_u', 'text_region_v', 'btn_region_replay', 'btn_region_settings']
         self.ns.update({name: FakeWidget() for name in widget_names})
         tree = ast.parse(SOURCE.read_text(encoding='utf-8-sig'))
-        names = ['clear_block_accuracy_overlay', 'lock_block_accuracy_controls',
+        names = ['on_region_coordinate_replay', 'apply_region_settings',
+                 'clear_block_accuracy_overlay', 'lock_block_accuracy_controls',
                  'draw_block_accuracy_plan', 'pick_block_accuracy_corner', 'finish_block_accuracy',
                  'run_next_block_accuracy_point', 'on_block_accuracy', 'on_block_accuracy_close',
                  'on_block_mae_toggle']
@@ -105,6 +108,10 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
     def test_preview_confirm_measure_cancel_and_restore_controls(self):
         self.start_preview()
         self.assertFalse(self.ns['c18'].active)
+        self.assertFalse(self.ns['text_region_u'].active)
+        self.assertFalse(self.ns['text_region_v'].active)
+        self.assertFalse(self.ns['btn_region_replay'].active)
+        self.assertFalse(self.ns['btn_region_settings'].active)
         self.callbacks['on_block_accuracy'](None)
         self.assertEqual(self.state['mode'], 'running')
         self.timer.start.assert_called_once()
@@ -114,6 +121,10 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.callbacks['finish_block_accuracy']('cancelled', 'test')
         self.assertEqual(self.state['mode'], 'idle')
         self.assertTrue(self.ns['c18'].active)
+        self.assertTrue(self.ns['text_region_u'].active)
+        self.assertTrue(self.ns['text_region_v'].active)
+        self.assertTrue(self.ns['btn_region_replay'].active)
+        self.assertTrue(self.ns['btn_region_settings'].active)
         self.assertTrue(self.state['report'].closed)
         self.assertTrue((self.state['report'].directory / 'blocks.csv').exists())
 
@@ -122,6 +133,43 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.callbacks['on_block_accuracy'](None)
         self.callbacks['finish_block_accuracy']()
         self.assertTrue(self.ns['c1'].active)
+
+    def test_region_coordinate_replay_uses_batch_pixel_rounding(self):
+        self.ns['text_region_u'].text = '320.6'
+        self.ns['text_region_v'].text = '123.4'
+        self.callbacks['on_region_coordinate_replay'](None)
+        self.ns['do_measure'].assert_called_once_with(321, 123)
+
+    def test_region_settings_apply_is_atomic_and_blocked_during_batch(self):
+        previous = self.ns['REGION_SIFT_CONFIG']
+        updated = SimpleNamespace(group_balance_weight=0.5)
+        self.state['mode'] = 'running'
+        with self.assertRaises(ValueError):
+            self.callbacks['apply_region_settings'](updated)
+        self.assertIs(self.ns['REGION_SIFT_CONFIG'], previous)
+        self.state['mode'] = 'idle'
+        self.callbacks['apply_region_settings'](updated)
+        self.assertIs(self.ns['REGION_SIFT_CONFIG'], updated)
+        self.ns['do_measure'].assert_not_called()
+
+    def test_region_coordinate_replay_rejects_invalid_mode_and_coordinates(self):
+        self.ns['text_region_u'].text = '10'
+        self.ns['text_region_v'].text = '20'
+        self.state['mode'] = 'running'
+        self.callbacks['on_region_coordinate_replay'](None)
+        self.ns['do_measure'].assert_not_called()
+
+        self.state['mode'] = 'idle'
+        self.ns['view_state']['region_sift'] = False
+        self.callbacks['on_region_coordinate_replay'](None)
+        self.ns['do_measure'].assert_not_called()
+
+        self.ns['view_state']['region_sift'] = True
+        for u, v in (('', '20'), ('nan', '20'), ('800', '20'), ('10', '600')):
+            self.ns['text_region_u'].text = u
+            self.ns['text_region_v'].text = v
+            self.callbacks['on_region_coordinate_replay'](None)
+        self.ns['do_measure'].assert_not_called()
 
     def test_mae_toggle_colors_actual_polygons_without_remeasurement(self):
         self.start_preview()

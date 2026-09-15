@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from dataclasses import dataclass
 
 from .aruco_pose import (
     detect_aruco_corners_bgr_for_pose,
@@ -9,14 +10,157 @@ from .aruco_pose import (
 
 
 SPEC_MASK_V_THRESHOLD = 210
-SPEC_MASK_S_THRESHOLD = 80
+SPEC_MASK_S_THRESHOLD = 110 # 原本 80，容許比較偏色
 SPEC_MASK_RGB_HIGH_THRESHOLD = 235
-SPEC_MASK_WHITENESS_THRESHOLD = 36
+SPEC_MASK_WHITENESS_THRESHOLD = 60 # 原本 36，容許 RGB 差異較大
 SPEC_MASK_DILATE = 5
 SPEC_TEMPORAL_OFFSETS = (-6, -3, 3, 6)
 SPEC_TEMPORAL_STD_THRESHOLD = 16.0
 SPEC_TEMPORAL_RESIDUAL_THRESHOLD = 24.0
 SPEC_TEMPORAL_BRIGHT_THRESHOLD = 150
+
+
+@dataclass(frozen=True)
+class BlockSpatialSpecularConfig:
+    """Image tiles, unrelated to the manually selected physical block model."""
+    block_width_px: int = 64
+    block_height_px: int = 64
+    v_percentile: float = 80#90.0
+    rgb_percentile: float = 80#92.0
+    local_hot_percentile: float = 80#85.0
+    v_min: float = 100.0 #170
+    v_max: float = 245.0
+    rgb_min: float = 100.0 # 180
+    rgb_max: float = 250.0
+    local_hot_min: float = 3.0#10.0
+    local_hot_max: float = 45.0
+    gray_min: float = 120.0
+    gray_below_v: float = 40.0 # 原本 20，降低局部亮點分支的亮度要求
+    s_max: float = SPEC_MASK_S_THRESHOLD
+    whiteness_max: float = SPEC_MASK_WHITENESS_THRESHOLD # 原本 36，容許 RGB 差異較大
+    background_sigma: float = 9.0
+    enable_prominence_gate: bool = True
+    prominence_min: float = 3.0
+    prominence_mad_multiplier: float = 2.0
+    enable_strong_highlight_exception: bool = True
+    strong_v_min: float = 250.0
+    strong_s_max: float = 30.0
+    strong_whiteness_max: float = 20.0
+    interpolate_thresholds: bool = True
+    open_kernel_px: int = 1
+    close_kernel_px: int = 5
+    dilate_px: int = SPEC_MASK_DILATE
+
+
+def compute_specular_mask_bgr_block_adaptive(
+    bgr, config=BlockSpatialSpecularConfig(), *, return_debug=False,
+):
+    """Estimate thresholds per tile, optionally interpolate at true tile centers.
+
+    Work on the source BGR image, without CLAHE or an AI mask. Morphology runs
+    once on the assembled full-image mask, not independently at tile borders.
+    """
+    if bgr is None or bgr.size == 0:
+        return (None, None) if return_debug else None
+    for name in ('block_width_px', 'block_height_px', 'open_kernel_px', 'close_kernel_px'):
+        value = getattr(config, name)
+        if not isinstance(value, (int, np.integer)) or value <= 0:
+            raise ValueError(f'{name} must be a positive integer')
+    for name in ('open_kernel_px', 'close_kernel_px'):
+        if getattr(config, name) % 2 == 0:
+            raise ValueError(f'{name} must be odd')
+    if not isinstance(config.dilate_px, (int, np.integer)) or config.dilate_px < 0:
+        raise ValueError('dilate_px must be a nonnegative integer')
+    for name, value in vars(config).items():
+        if not np.isfinite(value):
+            raise ValueError(f'{name} must be finite')
+    for name in ('v_percentile', 'rgb_percentile', 'local_hot_percentile'):
+        if not 0 <= getattr(config, name) <= 100:
+            raise ValueError(f'{name} must be in [0, 100]')
+    for prefix in ('v', 'rgb', 'local_hot'):
+        if not 0 <= getattr(config, prefix + '_min') <= getattr(config, prefix + '_max') <= 255:
+            raise ValueError(f'{prefix} bounds must satisfy 0 <= min <= max <= 255')
+    if config.background_sigma <= 0:
+        raise ValueError('background_sigma must be positive')
+    for name in ('gray_min', 'gray_below_v', 's_max', 'whiteness_max',
+                 'prominence_min', 'strong_v_min', 'strong_s_max', 'strong_whiteness_max'):
+        if not 0 <= getattr(config, name) <= 255:
+            raise ValueError(f'{name} must be in [0, 255]')
+    if config.prominence_mad_multiplier < 0:
+        raise ValueError('prominence_mad_multiplier must be nonnegative')
+    if bgr.dtype != np.uint8 or bgr.ndim != 3 or bgr.shape[2] != 3:
+        raise ValueError('Expected a uint8 BGR image')
+
+    h, w = bgr.shape[:2]
+    ys = list(range(0, h, config.block_height_px)) + [h]
+    xs = list(range(0, w, config.block_width_px)) + [w]
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    s, v = hsv[:, :, 1], hsv[:, :, 2]
+    max_rgb = bgr.max(axis=2)
+    whiteness = max_rgb.astype(np.int16) - bgr.min(axis=2).astype(np.int16)
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    background = cv2.GaussianBlur(gray, (0, 0), config.background_sigma)
+    local_hot = gray.astype(np.int16) - background.astype(np.int16)
+    grids = np.empty((4 if config.enable_prominence_gate else 3,
+                      len(ys) - 1, len(xs) - 1), np.float32)
+    for row, (y0, y1) in enumerate(zip(ys[:-1], ys[1:])):
+        for col, (x0, x1) in enumerate(zip(xs[:-1], xs[1:])):
+            for index, channel, percentile, lo, hi in (
+                (0, v, config.v_percentile, config.v_min, config.v_max),
+                (1, max_rgb, config.rgb_percentile, config.rgb_min, config.rgb_max),
+                (2, local_hot, config.local_hot_percentile, config.local_hot_min, config.local_hot_max),
+            ):
+                grids[index, row, col] = np.clip(
+                    np.percentile(channel[y0:y1, x0:x1], percentile), lo, hi)
+            if config.enable_prominence_gate:
+                differences = local_hot[y0:y1, x0:x1].astype(np.float32)
+                median = float(np.median(differences))
+                mad = float(np.median(np.abs(differences - median)))
+                grids[3, row, col] = max(
+                    config.prominence_min, median + config.prominence_mad_multiplier * mad)
+
+    if config.interpolate_thresholds:
+        # Handle partial last tiles using their actual centers, not uniform resize.
+        centers_x = (np.asarray(xs[:-1]) + np.asarray(xs[1:]) - 1) / 2
+        centers_y = (np.asarray(ys[:-1]) + np.asarray(ys[1:]) - 1) / 2
+        map_x, map_y = np.meshgrid(
+            np.interp(np.arange(w), centers_x, np.arange(len(centers_x))).astype(np.float32),
+            np.interp(np.arange(h), centers_y, np.arange(len(centers_y))).astype(np.float32))
+        thresholds = [cv2.remap(grid, map_x, map_y, cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_REPLICATE) for grid in grids]
+    else:
+        row_ids = np.minimum(np.arange(h) // config.block_height_px, len(ys) - 2)
+        col_ids = np.minimum(np.arange(w) // config.block_width_px, len(xs) - 2)
+        thresholds = [grid[row_ids[:, None], col_ids[None, :]] for grid in grids]
+    threshold_v, threshold_rgb, threshold_hot = thresholds[:3]
+    bright_low_sat = (v >= threshold_v) & (s <= config.s_max)
+    near_white = (max_rgb >= threshold_rgb) & (whiteness <= config.whiteness_max)
+    hot = (gray >= np.maximum(config.gray_min, threshold_v - config.gray_below_v)) & (local_hot >= threshold_hot)
+    candidates = bright_low_sat | near_white | hot
+    selected = candidates
+    strong = np.zeros((h, w), dtype=bool)
+    if config.enable_prominence_gate:
+        selected = candidates & (local_hot >= thresholds[3])
+        # Broad saturated highlights need not rise above their local background.
+        # Require BOTH nearly neutral color checks, unlike the ordinary OR branches.
+        if config.enable_strong_highlight_exception:
+            strong = ((v >= config.strong_v_min) & (s <= config.strong_s_max)
+                      & (whiteness <= config.strong_whiteness_max))
+            selected = selected | strong
+    mask = selected.astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((config.open_kernel_px,) * 2, np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((config.close_kernel_px,) * 2, np.uint8))
+    if config.dilate_px:
+        mask = cv2.dilate(mask, np.ones((2 * config.dilate_px + 1,) * 2, np.uint8))
+    if return_debug:
+        return mask, {'x_edges': xs, 'y_edges': ys, 'threshold_grids': grids[:3],
+                      'threshold_maps': np.asarray(thresholds[:3]),
+                      'prominence_threshold_grid': grids[3] if config.enable_prominence_gate else None,
+                      'prominence_threshold_map': thresholds[3] if config.enable_prominence_gate else None,
+                      'candidate_mask': candidates.astype(np.uint8) * 255,
+                      'strong_highlight_mask': strong.astype(np.uint8) * 255,
+                      'selected_before_morphology': selected.astype(np.uint8) * 255}
+    return mask
 
 
 def compute_specular_mask_bgr(
