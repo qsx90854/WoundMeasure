@@ -32,28 +32,76 @@ class RegionSIFTDiagnostics:
         self.gt_text = ''
         self.gt_error = ''
 
+    def _disconnect_widgets(self):
+        """Detach callbacks before clearing axes; TextBox.stop_typing draws."""
+        widgets = [getattr(self, name, None)
+                   for name in ('checks', 'radio', 'gt_box', 'gt_button')]
+        for widget in widgets:
+            if widget is not None:
+                widget.eventson = False
+                widget.active = False
+                widget.disconnect_events()
+                if widget.canvas.mouse_grabber is widget.ax:
+                    widget.canvas.release_mouse(widget.ax)
+        box = getattr(self, 'gt_box', None)
+        if box is not None and box.capturekeystrokes:
+            box.stop_typing()
+        for name in ('checks', 'radio', 'gt_box', 'gt_button'):
+            setattr(self, name, None)
+        self.crops = []
+        self.point_sets = []
+
+    def _on_close(self, event):
+        if self.figure is not None and event.canvas is self.figure.canvas:
+            self._disconnect_widgets()
+            self.figure = None
+
+    def _ensure_window(self):
+        if self.figure is None or not plt.fignum_exists(self.figure.number):
+            self.figure = plt.figure(figsize=(15, 10))
+            self.figure.canvas.manager.set_window_title('Region-SIFT ambiguity diagnostics')
+            self.figure.canvas.mpl_connect('button_press_event', self._pick)
+            self.figure.canvas.mpl_connect('close_event', self._on_close)
+
+    def _present(self):
+        self.figure.show()
+        window = getattr(self.figure.canvas.manager, 'window', None)
+        if window is not None and hasattr(window, 'deiconify'):
+            window.deiconify()
+            window.lift()
+        self.figure.canvas.draw_idle()
+
     def show(self, result):
         self.result = result
         self.debug = result.get('region_debug')
         self.gt = None
         self.gt_error = ''
+        self._ensure_window()
         if not self.debug or result.get('debug_left_gray') is None:
-            if self.figure is not None and plt.fignum_exists(self.figure.number):
-                self.figure.clear()
-                self.figure.text(.05, .8, 'No candidate scores for this measurement.\n' +
-                                 str(result.get('fail_reason') or 'Region-SIFT unavailable'))
-                self.figure.canvas.draw_idle()
+            self._disconnect_widgets()
+            self.figure.clear()
+            reason = str(result.get('fail_reason') or 'Region-SIFT unavailable')
+            cfg = result.get('region_diagnostic_config')
+            settings = '' if cfg is None else (
+                f'\n\nSampling: {cfg.grid_rows}x{cfg.grid_cols} cells, '
+                f'{cfg.cell_width_px}x{cfg.cell_height_px}px/cell, '
+                f'{cfg.points_per_cell} anchors/cell + P\n'
+                f'Search: {cfg.search_width_px}x{cfg.search_length_px}px; '
+                f'support cap={cfg.descriptor_max_support_radius_px}px; '
+                f'specular_check_support={cfg.specular_check_support}')
+            self.figure.text(.05, .85, 'No candidate scores for this measurement.\n\n' +
+                textwrap.fill(reason, width=110) + settings +
+                '\n\nThe matcher stopped before scoring. Check the reason above; '
+                'this is not an empty score plot.', va='top')
+            self._present()
             return
         self.selected = len(self.debug['left_points']) - 1
-        if self.figure is None or not plt.fignum_exists(self.figure.number):
-            self.figure = plt.figure(figsize=(15, 10))
-            self.figure.canvas.manager.set_window_title('Region-SIFT ambiguity diagnostics')
-            self.figure.canvas.mpl_connect('button_press_event', self._pick)
         self._build()
-        self.figure.show()
+        self._present()
 
     def _build(self):
         fig = self.figure
+        self._disconnect_widgets()
         fig.clear()
         layout = fig.add_gridspec(3, 12, left=.055, right=.94, bottom=.29,
                                  top=.88, hspace=.5, wspace=.7,

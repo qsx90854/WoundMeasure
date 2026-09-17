@@ -25,6 +25,7 @@ from matplotlib.patches import ConnectionPatch, Rectangle, Polygon
 from matplotlib.widgets import RadioButtons, Button, CheckButtons, TextBox
 import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
+from Algorithm.aruco_id_filter import filter_marker_detections, filter_marker_mapping
 from Algorithm import camera_preprocess as camera_algo
 # Isolated temporal RT implementation; the original video_pose_analysis.py is
 # intentionally retained unchanged for direct A/B fallback.
@@ -50,6 +51,7 @@ from Algorithm.Region_SIFT_Matching import (
 )
 from Algorithm.region_sift_settings import show_region_sift_settings
 from Algorithm.region_sift_diagnostics import RegionSIFTDiagnostics
+from Algorithm.drag_height_profile import DragHeightProfile, DragProfileConfig
 from Algorithm.stereo_matching import (
     get_patch, score_patch_match, score_zncc_patch_match,
     score_warped_patch_match, score_warped_zncc_patch_match,
@@ -63,6 +65,10 @@ from Algorithm.stereo_matching import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
+# Drag-path samples use displayed image coordinates, not physical millimetres.
+DRAG_PROFILE_CONFIG = DragProfileConfig(spacing_px=5.0, max_points=100, pick_radius_px=12.0)
+# RT and reference-plane marker allowlist. None=all, []=none. Restart after editing.
+ARUCO_ALLOWED_PATTERN_IDS = None #[9,12]#[2, 5, 9, 12]
 # Stepped calibration model: 6 columns x 4 rows, row-major heights in mm.
 # 25/50/75% in each cell = nine anchor centers, inset 5 mm for a 20 mm cell.
 BLOCK_ACCURACY_CONFIG = BlockAccuracyConfig()
@@ -699,6 +705,8 @@ def compute_shared_marker_corner_plane(corners_left, corners_right,
         diag['reason'] = 'marker corner dictionaries are unavailable'
         return None, None, diag
 
+    corners_left = filter_marker_mapping(corners_left, ARUCO_ALLOWED_PATTERN_IDS)
+    corners_right = filter_marker_mapping(corners_right, ARUCO_ALLOWED_PATTERN_IDS)
     shared_ids = sorted(set(corners_left.keys()) & set(corners_right.keys()))
     diag['shared_marker_ids'] = [int(mid) for mid in shared_ids]
     if len(shared_ids) < int(min_shared_markers):
@@ -1230,7 +1238,8 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         detection_roi_ratio=None,
         feature_roi_ratio=feature_roi_ratio,
         pair_geometry_roi_ratio=None,
-        angle_guided_config=angle_guided_config
+        angle_guided_config=angle_guided_config,
+        allowed_marker_ids=ARUCO_ALLOWED_PATTERN_IDS
     )
 
 _clahe_cache = {}
@@ -1242,7 +1251,8 @@ def preprocess_gray(gray_img, enable_clahe=True):
     return camera_algo.preprocess_gray(gray_img, enable_clahe, CLAHE_CLIP_LIMIT, CLAHE_TILE_GRID_SIZE)
 
 def compute_global_plane(imgA_gray, K_L, marker_size_mm):
-    return aruco_algo.compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print)
+    return aruco_algo.compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print,
+                                          allowed_marker_ids=ARUCO_ALLOWED_PATTERN_IDS)
 
 
 def compute_marker_pose_plane(valid_poses, frame_idx, reference_normal=None):
@@ -1289,6 +1299,8 @@ def get_joint_relative_pose(imgA_gray, imgB_gray, K_L, K_R, marker_size_mm, glob
         cA, idsA, _ = cv2.aruco.detectMarkers(imgA_gray, dict_4x4, parameters=params)
         cB, idsB, _ = cv2.aruco.detectMarkers(imgB_gray, dict_4x4, parameters=params)
     
+    cA, idsA = filter_marker_detections(cA, idsA, ARUCO_ALLOWED_PATTERN_IDS)
+    cB, idsB = filter_marker_detections(cB, idsB, ARUCO_ALLOWED_PATTERN_IDS)
     term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
     if cA is not None:
         for c in cA: cv2.cornerSubPix(imgA_gray, c, (3, 3), (-1, -1), term)
@@ -1682,6 +1694,7 @@ def estimate_aruco_pattern_distances(
         params = cv2.aruco.DetectorParameters_create()
         corners, ids, _ = cv2.aruco.detectMarkers(
             gray, dictionary, parameters=params)
+    corners, ids = filter_marker_detections(corners, ids, ARUCO_ALLOWED_PATTERN_IDS)
     if ids is None or len(ids) == 0:
         return {}
 
@@ -2969,6 +2982,8 @@ def main():
     debug_region_artists = []
     region_diagnostics = RegionSIFTDiagnostics()
     region_diagnostic_latest = {'result': None}
+    height_profile = None
+    profile_disabled_widgets = []
     debug_region_state = {
         'records': [], 'selected_index': None,
         'base_left_text': '', 'base_right_text': '',
@@ -5074,6 +5089,7 @@ def main():
                 'g_kptsB': g_kptsB, 'g_rect': g_rect,
                 'grad_descriptor_audit': grad_descriptor_audit,
                 'region_debug': region_debug,
+                'region_diagnostic_config': region_config,
                 'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
                 'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score,
                 # Read-only references for the lower debug panels.  These are
@@ -5200,6 +5216,8 @@ def main():
 
     def do_measure(u, v, manual_match_pt=None, *, accuracy_batch=False):
         """同步計算並立即更新 UI"""
+        if height_profile is not None and height_profile.enabled and not accuracy_batch:
+            return None  # Profile owns measurement until the user exits its mode.
         if block_accuracy_state['mode'] != 'idle' and not accuracy_batch:
             print('[Block Accuracy] Finish/cancel the block run before manual measurement')
             return None
@@ -6342,7 +6360,9 @@ def main():
         debug = res.get('region_debug')
         region_diagnostic_latest['result'] = res
         if not isinstance(debug, dict):
-            region_diagnostics.show(res)
+            if (block_accuracy_state['mode'] == 'idle' and not auto_calc_active
+                    and not (height_profile is not None and height_profile.enabled)):
+                region_diagnostics.show(res)
             debug_right_gray = res.get('debug_right_gray')
             if debug_right_gray is not None:
                 im_debug_B.set_data(cv2.cvtColor(
@@ -6546,13 +6566,18 @@ def main():
         # Default to P so its descriptor contribution is visible immediately.
         select_region_sift_debug_point(index=len(records) - 1)
 
-        if block_accuracy_state['mode'] == 'idle' and not auto_calc_active:
+        if (block_accuracy_state['mode'] == 'idle' and not auto_calc_active
+                and not (height_profile is not None and height_profile.enabled)):
             show_region_diagnostics()
 
-    def show_region_diagnostics(event=None):
-        res = region_diagnostic_latest['result']
-        if res is None or not isinstance(res.get('region_debug'), dict):
+    def show_region_diagnostics(event=None, *, result=None, display=True):
+        res = result if result is not None else region_diagnostic_latest['result']
+        if res is None:
             print('[Region-SIFT Debug] No candidate scores; first measure a Region-SIFT point.')
+            return
+        if not isinstance(res.get('region_debug'), dict):
+            if display:
+                region_diagnostics.show(res)
             return
         debug = res['region_debug']
         n, c, label = get_selected_height_plane()
@@ -6568,7 +6593,8 @@ def main():
         debug['diagnostic_height_plane'] = {
             'n': None if n is None else np.asarray(n).reshape(3).copy(),
             'c': None if c is None else np.asarray(c).reshape(3).copy(), 'offset': offset}
-        region_diagnostics.show(res)
+        if display:
+            region_diagnostics.show(res)
 
     def update_grad_match_debug_views(res, u, v):
         """Update the lower zoomed views without changing any matching decision."""
@@ -7182,6 +7208,8 @@ def main():
         return True
 
     def on_press(event):
+        if height_profile is not None and height_profile.on_press(event):
+            return
         if block_accuracy_state['mode'] in ('running', 'preview') and event.inaxes in (ax_A, ax_B):
             return
         # Lower debug views: double-left-click or right-click resets the view.
@@ -7228,6 +7256,8 @@ def main():
         pan_state.update({'pressing': True, 'dragged': False, 'x': event.x, 'y': event.y, 'ax': event.inaxes})
  
     def on_release(event):
+        if height_profile is not None and height_profile.on_release(event):
+            return
         if pan_state.get('dragging_hud', False):
             pan_state['dragging_hud'] = False
             return
@@ -7291,6 +7321,8 @@ def main():
                     redraw_grad_lines(nearest_idx)
                     request_blit_refresh()
     def on_motion(event):
+        if height_profile is not None and height_profile.on_motion(event):
+            return
         if pan_state.get('dragging_hud', False):
             # 直接使用 Figure 座標系之逆變換計算新位置，避免綁定 ax_B 導致跨 axes 拖曳卡死
             inv = fig.transFigure.inverted()
@@ -7315,6 +7347,8 @@ def main():
         request_blit_refresh()
 
     def on_scroll(event):
+        if height_profile is not None and height_profile.mode == 'drawing':
+            return
         if event.inaxes not in (ax_A, ax_B, ax_debug_A, ax_debug_B):
             return
         if event.xdata is None or event.ydata is None:
@@ -7527,9 +7561,15 @@ def main():
     btn_region_diagnostics.label.set_color('#E0E0E0')
     btn_region_diagnostics.label.set_fontsize(7)
     btn_region_diagnostics.on_clicked(show_region_diagnostics)
+    ax_btn_height_profile = fig.add_axes([0.415, control_row_y[5], 0.15, control_h])
+    btn_height_profile = Button(ax_btn_height_profile, '拖曳高度剖面', useblit=False, **btn_opt_style)
+    btn_height_profile.label.set_color('#E0E0E0')
+    btn_height_profile.label.set_fontsize(7)
 
     def apply_region_settings(updated):
         global REGION_SIFT_CONFIG
+        if height_profile is not None and height_profile.enabled:
+            raise ValueError('請先關閉拖曳高度剖面，再修改參數')
         if block_accuracy_state['mode'] != 'idle':
             raise ValueError('請先完成或取消 Block 誤差統計，再修改參數')
         previous = REGION_SIFT_CONFIG
@@ -8314,7 +8354,7 @@ def main():
             artist.remove()
         block_accuracy_state['artists'] = []
 
-    def lock_block_accuracy_controls():
+    def block_accuracy_control_widgets():
         widgets = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12,
                    c13, c14, c15, c16, c17, c18, c19, radio_mode, text_box,
                    btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle,
@@ -8324,6 +8364,10 @@ def main():
                    btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
                    btn_top2_geo, btn_h_residual, btn_rt_warp_view]
         widgets.extend([text_region_u, text_region_v, btn_region_replay, btn_region_settings])
+        return widgets
+
+    def lock_block_accuracy_controls():
+        widgets = block_accuracy_control_widgets() + [btn_height_profile]
         block_accuracy_state['disabled_widgets'] = [(widget, widget.active) for widget in widgets]
         for widget in widgets:
             # RadioButtons.set_active(index) SELECTS an option; it does not
@@ -8606,12 +8650,73 @@ def main():
     btn_rt_diff.on_clicked(on_rt_diff)
     btn_metric_blocks.on_clicked(on_metric_blocks_toggle)
     btn_return_menu.on_clicked(on_return_menu)
+
+    def profile_notify(message):
+        print(f'[Height Profile] {message}')
+        depth_text.set_text(message)
+        request_blit_refresh()
+
+    def activate_height_profile():
+        nonlocal auto_calc_active
+        if (block_accuracy_state['mode'] != 'idle' or custom_plane_mode
+                or view_state['manual'] or view_state.get('show_rt_warp_view')):
+            profile_notify('Finish other selection modes and turn RT Warp off first.')
+            return False
+        if not view_state.get('region_sift', False):
+            profile_notify('Enable Region-SIFT before starting a height profile.')
+            return False
+        n, c, _ = get_selected_height_plane()
+        if not custom_plane_fitted and (n is None or c is None):
+            profile_notify('A valid reference plane is required for Wound Height.')
+            return False
+        auto_calc_active = False
+        btn_auto_calc.label.set_text('連續計算: 關')
+        pan_state.update(pressing=False, dragging_hud=False)
+        ax_B.set_visible(True)
+        ax_debug_B.set_visible(True)
+        ax_debug_info_B.set_visible(True)
+        btn_hide_R.label.set_text('隱藏右圖')
+        widgets = block_accuracy_control_widgets() + [
+            btn_block_accuracy, btn_block_cancel, btn_block_mae, btn_region_diagnostics]
+        profile_disabled_widgets[:] = [(widget, widget.active) for widget in widgets]
+        for widget in widgets:
+            widget.active = False
+        return True
+
+    def deactivate_height_profile():
+        for widget, active in profile_disabled_widgets:
+            widget.active = active
+        profile_disabled_widgets.clear()
+
+    def measure_profile_point(u, v):
+        result = do_measure(u, v, accuracy_batch=True)
+        if result is not None:
+            # Freeze the plane used by candidate-height diagnostics with this point.
+            show_region_diagnostics(result=result, display=False)
+        return result
+
+    def replay_profile_point(result):
+        update_region_sift_debug_views(result, result['u'], result['v'])
+        scatter_A.set_offsets([[result['u'], result['v']]])
+        point = result.get('pt')
+        scatter_B.set_offsets(np.asarray(point).reshape(1, 2)
+                              if point is not None else np.empty((0, 2)))
+        # Replay the stored candidate scores, geometry and plane; never remeasure.
+        region_diagnostics.show(result)
+        request_blit_refresh()
+
+    height_profile = DragHeightProfile(
+        fig, ax_A, ax_B, btn_height_profile, DRAG_PROFILE_CONFIG,
+        activate=activate_height_profile, deactivate=deactivate_height_profile,
+        measure=measure_profile_point, replay=replay_profile_point,
+        notify=profile_notify, refresh=request_blit_refresh,
+        image_shape=lambda: locked_L_clean.shape)
     # ---- 三區按鈕顯示/隱藏控制：左上角三個圓點，預設全部隱藏（返回主選單與自訂傷口平面不受影響）----
     panel_defs = [
         ('#00BFFF', [ax_c1, ax_c2, ax_c18, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
                      ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19,
                      ax_region_u, ax_region_v, ax_btn_region_replay, ax_btn_region_settings,
-                     ax_btn_region_diagnostics]),
+                     ax_btn_region_diagnostics, ax_btn_height_profile]),
         ('#00FF88', [ax_mode]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
@@ -8825,6 +8930,7 @@ def main():
 
         ax_A.draw_artist(fps_text)
         fig.draw_artist(pose_status_text)
+        height_profile.draw_overlays()
         fig.canvas.blit(fig.bbox)
         fig.canvas.flush_events()
         _time.sleep(UI_LOOP_SLEEP_SEC)

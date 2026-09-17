@@ -26,6 +26,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aruco_pose import average_rotations_svd, compute_global_plane as _compute_global_plane
+from .aruco_id_filter import normalize_allowed_ids, filter_marker_detections, filter_marker_mapping
 from .camera_preprocess import (
     centered_roi_bounds,
     normalized_roi_bounds,
@@ -2884,8 +2885,9 @@ def log_and_print(msg):
     print(msg)
 
 
-def compute_global_plane(imgA_gray, K_L, marker_size_mm):
-    return _compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print)
+def compute_global_plane(imgA_gray, K_L, marker_size_mm, allowed_marker_ids=None):
+    return _compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=log_and_print,
+                                 allowed_marker_ids=allowed_marker_ids)
 
 
 def analyze_video_frames(
@@ -2909,7 +2911,10 @@ def analyze_video_frames(
     local_window=True,
     local_window_config=None,
     angle_guided_config=None,
+    allowed_marker_ids=None,
 ):
+    allowed_marker_ids = normalize_allowed_ids(allowed_marker_ids)
+    log_and_print(f'[ArUco ID filter] allowed={sorted(allowed_marker_ids) if allowed_marker_ids is not None else "ALL"}')
     timer = StageTimer("影片分析明細")
     analysis_wall_start = time.perf_counter()
     pg_cfg = _pattern_guided_resolve_config(pattern_guided_config)
@@ -3206,6 +3211,7 @@ def analyze_video_frames(
         else:
             corners, ids, _ = cv2.aruco.detectMarkers(
                 detect_gray, dict_4x4, parameters=params)
+        corners, ids = filter_marker_detections(corners, ids, allowed_marker_ids)
         return detect_gray, corners, ids, offset_x, offset_y
 
     def refine_detected_marker_corners(
@@ -3228,7 +3234,7 @@ def analyze_video_frames(
         if marker_corners_override is not None:
             if frame_index < 0 or frame_index >= len(marker_corners_override):
                 return {}
-            override = marker_corners_override[frame_index] or {}
+            override = filter_marker_mapping(marker_corners_override[frame_index] or {}, allowed_marker_ids)
             return {
                 int(marker_id): np.asarray(points, dtype=np.float32).reshape(4, 2).copy()
                 for marker_id, points in override.items()
@@ -6740,7 +6746,8 @@ def analyze_video_frames(
                 f"✅ [參考平面] ref ID:{ref_id} 未必雙端共視，改由 final T_B<-W 直接映射固定 reference plane")
     if global_plane_n is None:
         log_and_print("⚠️ [參考平面] marker-map 平面建立失敗，退回 legacy PnP 平面")
-        global_plane_n, global_plane_c = compute_global_plane(imgA_gray, K_L, marker_size_mm)
+        global_plane_n, global_plane_c = compute_global_plane(
+            imgA_gray, K_L, marker_size_mm, allowed_marker_ids=allowed_marker_ids)
     timer.stage("基準平面建立")
     
     if progress_callback:
@@ -6872,6 +6879,7 @@ def analyze_video_frames(
         'all_frames': frames,
         'valid_poses': valid_poses,
         'marker_map': marker_map,
+        'allowed_marker_ids': None if allowed_marker_ids is None else sorted(allowed_marker_ids),
         'temporal_diagnostics': temporal_diagnostics,
         'pattern_guided_diagnostics': pattern_guided_diagnostics,
         'local_window_diagnostics': local_window_diagnostics,

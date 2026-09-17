@@ -55,6 +55,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
                        measurement_record=measurement_record, block_mae_color=block_mae_color,
                        summarize_block_records=summarize_block_records,
                        block_accuracy_state=self.state,
+                       height_profile=None,
                        ax_A=self.axis, fig=SimpleNamespace(canvas=SimpleNamespace(new_timer=Mock(return_value=self.timer))),
                        depth_text=SimpleNamespace(set_text=Mock()), request_blit_refresh=Mock(),
                        locked_L_clean=np.zeros((600, 800, 3), np.uint8),
@@ -77,11 +78,12 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
             'btn_wound_pts_toggle', 'btn_aruco_overlay', 'btn_rt_sift', 'btn_height_plane',
             'btn_metric_blocks', 'btn_shared_plane', 'btn_top2_geo', 'btn_h_residual',
             'btn_rt_warp_view', 'btn_block_accuracy', 'btn_block_cancel', 'btn_block_mae',
-            'text_region_u', 'text_region_v', 'btn_region_replay', 'btn_region_settings']
+            'text_region_u', 'text_region_v', 'btn_region_replay', 'btn_region_settings',
+            'btn_height_profile']
         self.ns.update({name: FakeWidget() for name in widget_names})
         tree = ast.parse(SOURCE.read_text(encoding='utf-8-sig'))
         names = ['on_region_coordinate_replay', 'apply_region_settings',
-                 'clear_block_accuracy_overlay', 'lock_block_accuracy_controls',
+                 'clear_block_accuracy_overlay', 'block_accuracy_control_widgets', 'lock_block_accuracy_controls',
                  'draw_block_accuracy_plan', 'pick_block_accuracy_corner', 'finish_block_accuracy',
                  'run_next_block_accuracy_point', 'on_block_accuracy', 'on_block_accuracy_close',
                  'on_block_mae_toggle']
@@ -112,6 +114,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.assertFalse(self.ns['text_region_v'].active)
         self.assertFalse(self.ns['btn_region_replay'].active)
         self.assertFalse(self.ns['btn_region_settings'].active)
+        self.assertFalse(self.ns['btn_height_profile'].active)
         self.callbacks['on_block_accuracy'](None)
         self.assertEqual(self.state['mode'], 'running')
         self.timer.start.assert_called_once()
@@ -125,6 +128,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.assertTrue(self.ns['text_region_v'].active)
         self.assertTrue(self.ns['btn_region_replay'].active)
         self.assertTrue(self.ns['btn_region_settings'].active)
+        self.assertTrue(self.ns['btn_height_profile'].active)
         self.assertTrue(self.state['report'].closed)
         self.assertTrue((self.state['report'].directory / 'blocks.csv').exists())
 
@@ -170,6 +174,13 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
             self.ns['text_region_v'].text = v
             self.callbacks['on_region_coordinate_replay'](None)
         self.ns['do_measure'].assert_not_called()
+
+    def test_existing_settings_window_cannot_apply_during_profile(self):
+        self.ns['height_profile'] = SimpleNamespace(enabled=True)
+        previous = self.ns['REGION_SIFT_CONFIG']
+        with self.assertRaises(ValueError):
+            self.callbacks['apply_region_settings'](SimpleNamespace(group_balance_weight=.5))
+        self.assertIs(self.ns['REGION_SIFT_CONFIG'], previous)
 
     def test_mae_toggle_colors_actual_polygons_without_remeasurement(self):
         self.start_preview()

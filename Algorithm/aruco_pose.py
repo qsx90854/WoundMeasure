@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 
 from .camera_preprocess import preprocess_gray
+from .aruco_id_filter import filter_marker_detections
 
 
 def average_rotations_svd(R_list):
@@ -18,7 +19,7 @@ def average_rotations_svd(R_list):
     return R_avg.astype(np.float32)
 
 
-def detect_aruco_corners_bgr_for_pose(bgr, preprocess_gray_fn=None):
+def detect_aruco_corners_bgr_for_pose(bgr, preprocess_gray_fn=None, allowed_marker_ids=None):
     """Detect ArUco marker corners in an already processed/undistorted UI image."""
     if bgr is None or bgr.size == 0:
         return {}
@@ -32,6 +33,7 @@ def detect_aruco_corners_bgr_for_pose(bgr, preprocess_gray_fn=None):
     else:
         params = cv2.aruco.DetectorParameters_create()
         corners, ids, _ = cv2.aruco.detectMarkers(gray, dict_4x4, parameters=params)
+    corners, ids = filter_marker_detections(corners, ids, allowed_marker_ids)
     if ids is None or len(ids) == 0:
         return {}
     term = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 80, 0.0001)
@@ -74,7 +76,7 @@ def marker_plane_homography_from_pose(R, t, K):
     return H
 
 
-def compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=print):
+def compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=print, allowed_marker_ids=None):
     dict_4x4 = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_100)
     if hasattr(cv2.aruco, "ArucoDetector"):
         detector = cv2.aruco.ArucoDetector(dict_4x4, cv2.aruco.DetectorParameters())
@@ -82,6 +84,7 @@ def compute_global_plane(imgA_gray, K_L, marker_size_mm, log_fn=print):
     else:
         params = cv2.aruco.DetectorParameters_create()
         cA, idsA, _ = cv2.aruco.detectMarkers(imgA_gray, dict_4x4, parameters=params)
+    cA, idsA = filter_marker_detections(cA, idsA, allowed_marker_ids)
     if idsA is None or len(idsA) < 1:
         print("⚠️ [平面擬合] 左圖未偵測到任何 ArUco 標籤。")
         return None, None

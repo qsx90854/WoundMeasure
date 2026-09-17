@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import matplotlib
 matplotlib.use('Agg')
@@ -12,6 +13,32 @@ from Algorithm.region_sift_gt import evaluate_gt, project_gt
 
 
 class RegionDiagnosticsTests(unittest.TestCase):
+    def test_first_failure_opens_window_and_restores_minimized_window(self):
+        viewer = RegionSIFTDiagnostics()
+        failure = dict(region_debug=None, fail_reason='anchors outside image',
+                       region_diagnostic_config=with_config(DEFAULT_CONFIG, cell_width_px=20))
+        try:
+            viewer.show(failure)
+            self.assertIsNotNone(viewer.figure)
+            self.assertTrue(plt.fignum_exists(viewer.figure.number))
+            self.assertIn('anchors outside image', viewer.figure.texts[0].get_text())
+            self.assertIn('20x10px/cell', viewer.figure.texts[0].get_text())
+            window = Mock()
+            with patch.object(viewer.figure.canvas.manager, 'window', window, create=True), \
+                 patch.object(viewer.figure.canvas, 'draw_idle') as draw:
+                viewer.show(failure)
+                window.deiconify.assert_called_once()
+                window.lift.assert_called_once()
+                draw.assert_called()
+            old_figure = viewer.figure
+            viewer._on_close(SimpleNamespace(canvas=old_figure.canvas))
+            plt.close(old_figure)
+            viewer.show(failure)
+            self.assertIsNot(viewer.figure, old_figure)
+            viewer.figure.canvas.draw()
+        finally:
+            plt.close(viewer.figure)
+
     def test_grid_preserves_invalid_and_singleton_coordinates(self):
         debug = dict(candidate_along_offsets=[2, 0, 4],
                      candidate_across_offsets=[0, 0, 0], scores=[8, 3, np.inf])
@@ -93,8 +120,42 @@ class RegionDiagnosticsTests(unittest.TestCase):
             viewer._submit_gt('6.5')
             debug['second_candidate'] = None
             debug['second_candidate_index'] = None
+            # Keep references so garbage collection cannot hide stale callbacks.
+            old_widgets = [viewer.checks, viewer.radio, viewer.gt_box, viewer.gt_button]
+            viewer.gt_box.begin_typing()
             viewer._build()
             viewer.figure.canvas.draw()
+            self.assertFalse(old_widgets[2].capturekeystrokes)
+            for widget in old_widgets:
+                for cid in widget._cids:
+                    self.assertFalse(any(cid in callbacks for callbacks in
+                        viewer.figure.canvas.callbacks.callbacks.values()))
+            saved_result = viewer.result
+            old_checks = viewer.checks
+            viewer.show(dict(region_debug=None, fail_reason='no valid support'))
+            viewer.figure.canvas.draw()
+            self.assertIsNone(viewer.checks)
+            self.assertFalse(old_checks.active)
+            self.assertEqual(viewer.crops, [])
+            viewer.show(saved_result)
+            viewer.figure.canvas.draw()
+            viewer.checks.set_active(0)
+            viewer.radio.set_active(0)
+            viewer.figure.canvas.draw()
+            # Simulate applying SIFT settings: rebuild for a different group size.
+            larger_config = with_config(config, grid_rows=5, grid_cols=5)
+            larger = run_region_sift_matching(left, right, (110, 90), cand, np.eye(3), config=larger_config)
+            self.assertIsNotNone(larger['region_debug'])
+            viewer.show(dict(region_debug=larger['region_debug'], debug_left_gray=left,
+                             fail_reason=larger['reject_reason']))
+            self.assertEqual(len(viewer.point_sets[0]), 76)
+            self.assertEqual(viewer.selected, 75)
+            viewer.figure.canvas.draw()
+            viewer.gt_box.begin_typing()
+            closed_figure = viewer.figure
+            viewer._on_close(SimpleNamespace(canvas=closed_figure.canvas))
+            plt.close(closed_figure)
+            self.assertIsNone(viewer.gt_box)
         finally:
             plt.close(viewer.figure)
 
