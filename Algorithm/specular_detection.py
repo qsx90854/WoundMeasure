@@ -52,26 +52,23 @@ class BlockSpatialSpecularConfig:
     dilate_px: int = SPEC_MASK_DILATE
 
 
-def compute_specular_mask_bgr_block_adaptive(
-    bgr, config=BlockSpatialSpecularConfig(), *, return_debug=False,
-):
-    """Estimate thresholds per tile, optionally interpolate at true tile centers.
-
-    Work on the source BGR image, without CLAHE or an AI mask. Morphology runs
-    once on the assembled full-image mask, not independently at tile borders.
-    """
-    if bgr is None or bgr.size == 0:
-        return (None, None) if return_debug else None
+def validate_block_spatial_specular_config(config):
+    """Validate adaptive spatial-highlight parameters without processing an image."""
+    if not isinstance(config, BlockSpatialSpecularConfig):
+        raise ValueError('config must be BlockSpatialSpecularConfig')
     for name in ('block_width_px', 'block_height_px', 'open_kernel_px', 'close_kernel_px'):
         value = getattr(config, name)
-        if not isinstance(value, (int, np.integer)) or value <= 0:
+        if not isinstance(value, (int, np.integer)) or isinstance(value, (bool, np.bool_)) or value <= 0:
             raise ValueError(f'{name} must be a positive integer')
     for name in ('open_kernel_px', 'close_kernel_px'):
         if getattr(config, name) % 2 == 0:
             raise ValueError(f'{name} must be odd')
-    if not isinstance(config.dilate_px, (int, np.integer)) or config.dilate_px < 0:
+    if (not isinstance(config.dilate_px, (int, np.integer))
+            or isinstance(config.dilate_px, (bool, np.bool_)) or config.dilate_px < 0):
         raise ValueError('dilate_px must be a nonnegative integer')
     for name, value in vars(config).items():
+        if isinstance(value, (bool, np.bool_)):
+            continue
         if not np.isfinite(value):
             raise ValueError(f'{name} must be finite')
     for name in ('v_percentile', 'rgb_percentile', 'local_hot_percentile'):
@@ -88,6 +85,20 @@ def compute_specular_mask_bgr_block_adaptive(
             raise ValueError(f'{name} must be in [0, 255]')
     if config.prominence_mad_multiplier < 0:
         raise ValueError('prominence_mad_multiplier must be nonnegative')
+    return config
+
+
+def compute_specular_mask_bgr_block_adaptive(
+    bgr, config=BlockSpatialSpecularConfig(), *, return_debug=False,
+):
+    """Estimate thresholds per tile, optionally interpolate at true tile centers.
+
+    Work on the source BGR image, without CLAHE or an AI mask. Morphology runs
+    once on the assembled full-image mask, not independently at tile borders.
+    """
+    if bgr is None or bgr.size == 0:
+        return (None, None) if return_debug else None
+    validate_block_spatial_specular_config(config)
     if bgr.dtype != np.uint8 or bgr.ndim != 3 or bgr.shape[2] != 3:
         raise ValueError('Expected a uint8 BGR image')
 

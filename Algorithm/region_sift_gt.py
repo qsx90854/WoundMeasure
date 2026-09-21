@@ -72,16 +72,21 @@ def evaluate_gt(debug, height_mm):
     if bad.any():
         return reject('warp/border validity rejected', bad)
     spec = debug.get('warped_specular_mask') if debug.get('reject_specular') else None
-    if spec is not None:
+    if spec is not None and not cfg.use_masked_sift:
         bad = spec[y, x] != 0
         if bad.any():
             return reject('specular anchor center', bad)
-    masked = spec is not None and cfg.specular_check_support
+    masked = spec is not None and cfg.specular_check_support and not cfg.use_masked_sift
+    context = None
+    if cfg.use_masked_sift:
+        from Algorithm.masked_sift_descriptor import create_context, compute_descriptors, compare_descriptors, group_validity
+        context = create_context(image, spec, cfg, valid)
     frames = estimate_dense_sift_frames(image, points,
         replace(cfg, min_valid_warp_ratio=1.) if masked else cfg,
+        context=context,
         valid_mask=np.where(spec > 0, 0, valid).astype(np.uint8) if masked else valid)
     out['frames'] = frames
-    if not frames['valid'].all():
+    if not cfg.use_masked_sift and not frames['valid'].all():
         bad = ~frames['valid']
         reason = 'incomplete image/warp scale support'
         if masked:
@@ -91,9 +96,21 @@ def evaluate_gt(debug, height_mm):
             out['specular_support_anchor_ids'] = (np.flatnonzero(spec_only)+1).tolist()
             reason += '; specular-support IDs=' + str(out['specular_support_anchor_ids'])
         return reject(reason, bad)
-    desc = compute_descriptors_at_points(image, points, config=cfg,
-        sizes_px=frames['size_px'], angles_deg=frames['angle_deg'], octaves=frames['octave'])
-    distances = np.linalg.norm(desc-debug['left_descriptors'], axis=1)
+    if cfg.use_masked_sift:
+        packet = compute_descriptors(context, points, frames['size_px'], frames['angle_deg'], cfg)
+        packet['valid_points'] &= frames['valid']
+        distances, usable, common = compare_descriptors(debug['left_masked_packet'], packet, cfg)
+        frames['masked_valid_fraction'] = packet['valid_fraction']
+        frames['masked_common_fraction'] = common
+        frames['masked_point_valid'] = usable
+        frames['scale_reliable'] &= usable
+        frames['orientation_reliable'] &= usable
+        if not group_validity(usable[None], debug['point_metadata'], cfg)[0]:
+            return reject('custom SIFT group/cell valid pair coverage insufficient', ~usable)
+    else:
+        desc = compute_descriptors_at_points(image, points, config=cfg,
+            sizes_px=frames['size_px'], angles_deg=frames['angle_deg'], octaves=frames['octave'])
+        distances = np.linalg.norm(desc-debug['left_descriptors'], axis=1)
     scores = score_candidate_groups(distances[None], debug['point_metadata'],
         debug['left_frames'], {k: v[None] for k, v in frames.items()}, cfg)
     group = float(scores['group_score'][0])

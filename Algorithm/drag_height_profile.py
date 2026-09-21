@@ -48,7 +48,8 @@ class ProfileCache:
     def save(self, index, result):
         keys = ('u', 'v', 'pt', 'pt_raw', 'p3d', 'p3d_best', 'height_display_mm',
                 'height_reference_source', 'fail_reason', 'region_debug',
-                'region_diagnostic_config', 'debug_left_gray', 'debug_right_gray', 'cand_idx')
+                'region_diagnostic_config', 'region_search_history',
+                'debug_left_gray', 'debug_right_gray', 'cand_idx')
         snapshot = {key: result[key] for key in keys if key in result}
         with gzip.open(Path(self.directory.name) / f'{index}.pkl.gz', 'wb', compresslevel=1) as stream:
             pickle.dump(snapshot, stream, protocol=pickle.HIGHEST_PROTOCOL)

@@ -26,6 +26,7 @@ class RegionSIFTDiagnostics:
 
     def __init__(self):
         self.figure = None
+        self.search_figure = None
         self.options = [False, False, False, False]
         self.score_key = 'candidate_objective_scores'
         self.gt = None
@@ -55,6 +56,9 @@ class RegionSIFTDiagnostics:
         if self.figure is not None and event.canvas is self.figure.canvas:
             self._disconnect_widgets()
             self.figure = None
+            if self.search_figure is not None:
+                plt.close(self.search_figure)
+                self.search_figure = None
 
     def _ensure_window(self):
         if self.figure is None or not plt.fignum_exists(self.figure.number):
@@ -74,6 +78,7 @@ class RegionSIFTDiagnostics:
     def show(self, result):
         self.result = result
         self.debug = result.get('region_debug')
+        self._show_search_history(result)
         self.gt = None
         self.gt_error = ''
         self._ensure_window()
@@ -98,6 +103,22 @@ class RegionSIFTDiagnostics:
         self.selected = len(self.debug['left_points']) - 1
         self._build()
         self._present()
+
+    def _show_search_history(self, result):
+        from Algorithm.region_sift_search_debug import draw_search_history
+        history = result.get('region_search_history') or (self.debug or {}).get('search_history')
+        if not history:
+            if self.search_figure is not None:
+                plt.close(self.search_figure)
+                self.search_figure = None
+            return
+        if self.search_figure is None or not plt.fignum_exists(self.search_figure.number):
+            self.search_figure = plt.figure(figsize=(12, 7))
+            self.search_figure.canvas.manager.set_window_title('Region-SIFT coarse-to-fine search')
+        draw_search_history(self.search_figure, history,
+                            result.get('fail_reason') or (self.debug or {}).get('search_status', ''))
+        self.search_figure.show()
+        self.search_figure.canvas.draw_idle()
 
     def _build(self):
         fig = self.figure
@@ -128,7 +149,7 @@ class RegionSIFTDiagnostics:
         fig.text(.38, .035, 'Click an anchor in any crop. Filled=KEEP, hollow=TRIM. '
                  'TRIM still contributes to CellAll.\n'
                  'Right crops use warped coordinates; all crops share the same scale. '
-                 'Gray heatmap cells are invalid.', fontsize=8)
+                 'Gray heatmap cells are invalid or not evaluated.', fontsize=8)
         self._plots()
         self._images()
 
@@ -306,7 +327,8 @@ class RegionSIFTDiagnostics:
             self.bars.bar(ids+.18, distances[2], width=.36, label='Second', color='#df8741')
         if distances[3] is not None:
             self.bars.plot(ids, distances[3], 'D-', color='green', markersize=3, label='GT exact')
-        self.bars.set(xlabel='Anchor ID (last=P)', ylabel='L2', xticks=ids)
+        self.bars.set(xlabel='Anchor ID (last=P)',
+                      ylabel='L2 + missing penalty' if d['config'].use_masked_sift else 'L2', xticks=ids)
         self.bars.legend(fontsize=8)
         self.bars.grid(axis='y', alpha=.2)
 

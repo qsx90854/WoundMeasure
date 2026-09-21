@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional
 
 import cv2
 import numpy as np
+from Algorithm.region_sift_profiling import DetailTimer, timed
 
 
 def _get(config, name, default):
@@ -68,6 +69,7 @@ def _scale_specs(config):
     return sorted(specs, key=lambda item: item[0])
 
 
+@timed('pyramid')
 def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
     """Build reusable image-only scale maps; do not reuse after image mutation.
 
@@ -75,6 +77,7 @@ def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
     does when every supplied keypoint has a nonnegative octave. This avoids
     the implicit doubled base image used by detector mode.
     """
+    detail = DetailTimer('pyramid')
     gray = np.asarray(image_gray)
     if gray.ndim != 2 or gray.size == 0 or gray.dtype != np.uint8:
         raise ValueError("Dense SIFT requires a nonempty uint8 grayscale image")
@@ -91,7 +94,9 @@ def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
     pyramid, halo = {}, {}
     sigma0 = float(np.float32(sigma))
     initial_blur = float(np.sqrt(np.float32(max(sigma0 * sigma0 - 0.25, 0.01))))
+    detail.mark('參數與尺度規格準備')
     base = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), initial_blur)
+    detail.mark('初始影像轉換與模糊')
     for octave in range(max_octave + 1):
         factor = 2 ** octave
         for layer in range(max_layer + 1):
@@ -115,6 +120,9 @@ def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
                                                 (0, 0), float(added))
                 halo[key] = halo[(octave, layer - 1)] + _gaussian_radius(added) * factor
 
+    detail.mark('Gaussian 各 octave/layer 建立')
+    detail.count('gaussian_layers', len(pyramid))
+    detail.count('active_scales', len(specs))
     entries = []
     pool_factor = float(_get(config, "scale_response_pool_sigma_factor", 0.75))
     for size, octave, layer, original_index in specs:
@@ -129,10 +137,12 @@ def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
             response = cv2.GaussianBlur(response, (0, 0), pool_sigma)
             pool_radius = _gaussian_radius(pool_sigma)
         # Derivative signs follow image coordinates: +x right and +y down.
+        detail.mark('DoG 響應與響應平滑')
         gx = cv2.sepFilter2D(current, cv2.CV_32F, np.array([-1, 0, 1], np.float32),
                             np.ones(1, np.float32))
         gy = cv2.sepFilter2D(current, cv2.CV_32F, np.ones(1, np.float32),
                             np.array([-1, 0, 1], np.float32))
+        detail.mark('梯度圖 gx/gy')
         orientation_sigma = sigma_layer * float(_get(config, "orientation_sigma_factor", 1.5))
         orientation_radius = int(np.rint(orientation_sigma * float(
             _get(config, "orientation_radius_factor", 3.0))))
@@ -151,6 +161,7 @@ def create_frame_context(image_gray: np.ndarray, config=None) -> Dict[str, Any]:
             "support": float(np.ceil(max(descriptor_support, orientation_support,
                                           response_support))),
         })
+        detail.mark('Support 半徑與尺度資料整理')
     # Only layers referenced by entries survive; full intermediate pyramid can
     # be freed after this function returns.
     return {"image_shape": gray.shape, "entries": entries, "layers": layers,
@@ -185,7 +196,9 @@ def _valid_support(points, radius, shape, bad_integral, min_valid_ratio=1.0):
     return valid
 
 
+@timed('angle')
 def _orientation(entry, point, config):
+    detail = DetailTimer('angle')
     factor = float(2 ** entry["octave"])
     center = point / factor
     radius = entry["orientation_radius"]
@@ -194,21 +207,28 @@ def _orientation(entry, point, config):
     gx, gy = entry["gx"], entry["gy"]
     x0, x1 = max(0, cx - radius), min(gx.shape[1], cx + radius + 1)
     y0, y1 = max(0, cy - radius), min(gx.shape[0], cy + radius + 1)
+    detail.mark('中心座標與視窗界限')
     xx, yy = np.meshgrid(np.arange(x0, x1) - cx, np.arange(y0, y1) - cy)
     weight = np.exp(-(xx * xx + yy * yy) / (2 * entry["orientation_sigma"] ** 2))
+    detail.mark('座標網格與 Gaussian 權重')
+    detail.count('window_pixels', (x1-x0)*(y1-y0))
     local_x, local_y = gx[y0:y1, x0:x1], gy[y0:y1, x0:x1]
     magnitude = np.hypot(local_x, local_y) * weight
     bins = int(_get(config, "orientation_bins", 36))
     coordinates = np.mod(np.degrees(np.arctan2(local_y, local_x)), 360) * bins / 360
     lower = np.floor(coordinates).astype(int)
     fraction = coordinates - lower
+    detail.mark('梯度強度、atan2 與 bin 座標')
     histogram = (np.bincount((lower % bins).ravel(), weights=(magnitude * (1 - fraction)).ravel(), minlength=bins)
                  + np.bincount(((lower + 1) % bins).ravel(), weights=(magnitude * fraction).ravel(), minlength=bins))
+    detail.mark('方向直方圖累加')
     for _ in range(int(_get(config, "orientation_hist_smooth_passes", 2))):
         histogram = (np.roll(histogram, 1) + 2 * histogram + np.roll(histogram, -1)) / 4
+    detail.mark('方向直方圖平滑')
     peak = int(np.argmax(histogram))
     strength = float(histogram[peak])
     if strength <= 1e-8:
+        detail.mark('主峰、次峰與角度可靠性')
         return float(_get(config, "keypoint_angle_deg", 0.0)) % 360, 0.0, 0.0
     before, after = histogram[(peak - 1) % bins], histogram[(peak + 1) % bins]
     denominator = before - 2 * strength + after
@@ -218,9 +238,11 @@ def _orientation(entry, point, config):
     peaks[peak] = False
     second = float(np.max(histogram[peaks])) if np.any(peaks) else 0.0
     confidence = max(0.0, (strength - second) / strength)
+    detail.mark('主峰、次峰與角度可靠性')
     return float(angle), strength, confidence
 
 
+@timed('frames')
 def estimate_dense_sift_frames(image_gray, points, config=None, context=None, valid_mask=None):
     """Return one frame per input coordinate, including validity/reliability.
 
@@ -236,12 +258,14 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
     intensity units, not its fraction of total histogram mass. Neither value
     adds a texture-state feature to the descriptor or drops any anchor.
     """
+    detail = DetailTimer('frames')
     pts = np.asarray(points, np.float32).reshape(-1, 2)
     if context is None:
         context = create_frame_context(image_gray, config)
     if context["image_shape"] != np.asarray(image_gray).shape:
         raise ValueError("Frame context/image shapes differ")
     count = len(pts)
+    detail.count('input_points', count)
     result = {name: np.zeros(count, np.float32) for name in (
         "size_px", "angle_deg", "scale_response", "orientation_strength", "scale_confidence",
         "orientation_confidence", "support_radius_px", "nominal_support_radius_px")}
@@ -250,6 +274,7 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
         "valid", "scale_reliable", "orientation_reliable")})
     if count == 0:
         return result
+    detail.mark('輸入準備與結果配置（含缺省 context 建立）')
     entries = context["entries"]
     bad_integral = None
     if valid_mask is not None:
@@ -260,17 +285,27 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
     min_valid_ratio = float(_get(config, "min_valid_warp_ratio", 1.0))
     if not 0 <= min_valid_ratio <= 1:
         raise ValueError("min_valid_warp_ratio must lie in [0,1]")
+    detail.mark('有效遮罩積分圖與參數檢查')
     finite = np.all(np.isfinite(pts), axis=1)
     safe_points = np.where(np.isfinite(pts), pts, 0)
     quantization = float(_get(config, "frame_coordinate_quantization_px", 0.0))
     if quantization > 0:
         safe_points = np.rint(safe_points / quantization) * quantization
     unique, inverse = np.unique(safe_points, axis=0, return_inverse=True)
+    detail.mark('座標準備與 np.unique 去重')
+    detail.count('unique_points', len(unique))
+    detail.count('duplicate_points', count-len(unique))
+    detail.count('scale_checks', len(unique)*len(entries))
     responses = np.column_stack([_sample(entry["response"], unique / (2 ** entry["octave"]))
                                  for entry in entries])
+    detail.mark('各尺度響應圖取樣')
     valid = np.column_stack([_valid_support(unique, entry["support"] + quantization,
                                             context["image_shape"], bad_integral, min_valid_ratio)
                              for entry in entries])
+    # Masked contexts contain only clean gradients/responses. A reflected
+    # center is not by itself an invalid frame: estimate from its neighborhood
+    # (or the normal flat-scale fallback), then test descriptor coverage.
+    detail.mark('各尺度 support 有效性檢查')
     responses[~valid] = -np.inf
     best = np.argmax(responses, axis=1)
     any_valid = np.any(valid, axis=1)
@@ -289,11 +324,15 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
         usable = np.isfinite(sorted_response[:, -2]) & (sorted_response[:, -1] > floor)
         confidence[usable] = ((sorted_response[usable, -1] - sorted_response[usable, -2])
                               / sorted_response[usable, -1])
+    detail.mark('尺度選擇、平坦回退與尺度信心')
+    detail.count('valid_unique_points', np.count_nonzero(any_valid))
     unique_frames = []
     for row, choice in enumerate(best):
         entry = entries[int(choice)]
+        detail.mark('逐點資料、可靠性與迴圈開銷')
         if any_valid[row] and automatic:
             angle, strength, orientation_confidence = _orientation(entry, unique[row], config)
+            detail.mark('角度估計（子項見 angle）')
         else:
             angle = float(_get(config, "keypoint_angle_deg", 0.0)) % 360
             strength, orientation_confidence = 0.0, 0.0
@@ -317,12 +356,15 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
             "support_radius_px": entry["support"] + quantization,
             "nominal_support_radius_px": entry["nominal_radius"], "valid": any_valid[row],
         })
+    detail.mark('逐點資料、可靠性與迴圈開銷')
     for name in result:
         result[name][:] = np.asarray([frame[name] for frame in unique_frames])[inverse]
     result["valid"] &= finite
+    detail.mark('去重結果還原與輸出組裝')
     return result
 
 
+@timed('descriptor')
 def compute_descriptors_at_points(image_gray, points, sift=None, config=None,
                                   sizes_px=None, angles_deg=None, octaves=None):
     """Compute aligned Nx128 descriptors without dropping low-information rows.
@@ -331,6 +373,7 @@ def compute_descriptors_at_points(image_gray, points, sift=None, config=None,
     When octaves are omitted, nearest Gaussian layers are inferred from sizes;
     automatic callers should pass all three arrays from frame estimation.
     """
+    detail = DetailTimer('descriptor')
     pts = np.asarray(points, np.float32).reshape(-1, 2)
     count = len(pts)
     if count == 0:
@@ -354,10 +397,14 @@ def compute_descriptors_at_points(image_gray, points, sift=None, config=None,
     elif ((hasattr(sift, "getNOctaveLayers") and sift.getNOctaveLayers() != layers)
           or (hasattr(sift, "getSigma") and abs(sift.getSigma() - sigma) > 1e-6)):
         sift = cv2.SIFT_create(nOctaveLayers=layers, sigma=sigma)
+    detail.mark('陣列檢查、octave 準備與 SIFT 物件')
+    detail.count('rows', count)
     keypoints = [cv2.KeyPoint(float(point[0]), float(point[1]), float(size),
                               float(angle % 360), 0.0, int(octave), index)
                  for index, (point, size, angle, octave) in enumerate(zip(pts, sizes, angles, packed))]
+    detail.mark('建立 cv2.KeyPoint 列表')
     returned, descriptors = sift.compute(image_gray, keypoints)
+    detail.mark('OpenCV SIFT.compute（含內部前置）')
     if descriptors is None or descriptors.shape != (count, 128) or len(returned) != count:
         raise ValueError("SIFT must preserve exactly one descriptor for every anchor")
     if any(keypoint.class_id != index for index, keypoint in enumerate(returned)):
@@ -365,4 +412,5 @@ def compute_descriptors_at_points(image_gray, points, sift=None, config=None,
     descriptors = np.asarray(descriptors, np.float32)
     if _get(config, "normalize_descriptors", False):
         descriptors /= np.maximum(np.linalg.norm(descriptors, axis=1, keepdims=True), 1e-12)
+    detail.mark('descriptor 檢查與正規化')
     return descriptors

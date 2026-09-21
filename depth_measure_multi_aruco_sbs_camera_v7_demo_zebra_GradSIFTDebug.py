@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 plt.rcParams['font.sans-serif'] = ['Microsoft JhengHei', 'PingFang HK', 'SimHei', 'Arial Unicode MS', 'sans-serif']
 plt.rcParams['axes.unicode_minus'] = False
 from matplotlib.patches import ConnectionPatch, Rectangle, Polygon
-from matplotlib.widgets import RadioButtons, Button, CheckButtons, TextBox
+from matplotlib.widgets import Button, CheckButtons, TextBox
 import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
 from Algorithm.aruco_id_filter import filter_marker_detections, filter_marker_mapping
@@ -32,6 +32,7 @@ from Algorithm import camera_preprocess as camera_algo
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
 from Algorithm import video_pose_analysis_temporal_unified_pattern_guided_local_window as video_pose_algo
 from Algorithm.perf_timer import StageTimer
+from Algorithm.paired_view_renderer import PairedViewRenderer
 from Algorithm.lossless_recording import open_lossless_writer
 from Algorithm.block_height_accuracy import (
     BlockAccuracyConfig, BlockAccuracyReport, build_block_plan, measurement_record,
@@ -39,6 +40,7 @@ from Algorithm.block_height_accuracy import (
 )
 from Algorithm.specular_detection import (
     BlockSpatialSpecularConfig,
+    compute_specular_mask_bgr,
     compute_specular_mask_bgr_block_adaptive,
     compute_specular_mask_bgr_wound_adaptive,
     compute_rt_aligned_temporal_specular_mask_bgr,
@@ -50,7 +52,14 @@ from Algorithm.Region_SIFT_Matching import (
     run_region_sift_matching,
 )
 from Algorithm.region_sift_settings import show_region_sift_settings
+from Algorithm.specular_settings import show_specular_settings
+from Algorithm.specular_model_v2 import (
+    SpecularModelV2Config, detect_specular_model_v2, overlay_specular_v2_uncertain,
+)
+from Algorithm.specular_model_v2_settings import show_specular_model_v2_settings
 from Algorithm.region_sift_diagnostics import RegionSIFTDiagnostics
+from Algorithm.region_sift_profiling import format_profile
+from Algorithm.region_sift_search import format_stage_funnel
 from Algorithm.drag_height_profile import DragHeightProfile, DragProfileConfig
 from Algorithm.stereo_matching import (
     get_patch, score_patch_match, score_zncc_patch_match,
@@ -97,6 +106,10 @@ SPATIAL_BLOCK_CONFIG = BlockSpatialSpecularConfig(
 )
 _WOUND_DETECTOR = None
 _WOUND_DETECTOR_ERROR_LOGGED = False
+
+# Independent experimental backend. Toggle in UI; all V2 fields use v2_ names.
+SPECULAR_MODEL_V2_ENABLED_DEFAULT = False
+SPECULAR_MODEL_V2_CONFIG = SpecularModelV2Config()
 
 # ==================== 全局設定區 ====================
 VIDEO_PATH            = r"test_video_Zebra//video_20260601_172436.mp4"        # 影片檔案路徑
@@ -201,6 +214,7 @@ GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback use
 # a 28x128 descriptor matrix and a rotated 5x75 epipolar band. GroupScore
 # blends best-21 with cell-balanced ALL-row L2; only reliable frames add a penalty.
 REGION_SIFT_CONFIG = RegionSIFTConfig(
+    two_stage_search=True,
     grid_rows=3,
     grid_cols=3,
     cell_width_px=10,
@@ -269,7 +283,8 @@ DEBUG_METRIC_BLOCK_BASE_TOL_MM = 1.0
 DEBUG_METRIC_BLOCK_SIGMA_D_PX = 1.0
 DEBUG_METRIC_BLOCK_SIGMA_MULT = 3.0
 DEBUG_METRIC_BLOCK_MAX_REPROJ_PX = 3.5
-UI_LOOP_SLEEP_SEC             = 0.03                       # idle UI loop delay; lower is smoother but uses more CPU
+UI_RENDER_INTERVAL_MS         = 16  # coalesce navigation events; render only when dirty
+UI_RENDER_PROFILE             = False  # aggregate render timings every 60 updates
 IDEAL_BASELINE_MM             = 45.0                       # preferred baseline for pair selection
 PAIR_SCORE_REPROJ_W           = 1.00                       # pair selection weight: reprojection error
 PAIR_SCORE_BASELINE_W         = 0.18                       # pair selection weight: baseline away from ideal
@@ -2491,12 +2506,26 @@ def main():
     startup_timer.stage("影片分析(ArUco配對+RT解算)")
 
     use_wound_adaptive_spatial_specular = True
+    use_specular_model_v2 = SPECULAR_MODEL_V2_ENABLED_DEFAULT
+    specular_v2_display = {'left': None, 'right': None}
     log_and_print(
         f'[Specular] Adaptive Spatial: valid wound mask when available; otherwise '
         f'full-image {SPATIAL_BLOCK_CONFIG.block_width_px}x{SPATIAL_BLOCK_CONFIG.block_height_px}px tiles '
         f'(AI enabled={ENABLE_WOUND_AI})')
 
     def compute_wound_adaptive_spatial_mask(bgr, wound_prediction=None):
+        if use_specular_model_v2 and bgr is not None and bgr.size:
+            mask, details = detect_specular_model_v2(
+                bgr, SPECULAR_MODEL_V2_CONFIG, return_debug=True)
+            side = ('left' if bgr is locked_L_clean else
+                    'right' if bgr is locked_R_clean else 'extra')
+            if side in specular_v2_display:
+                # Retain only the display map, not every full-frame diagnostic.
+                specular_v2_display[side] = details['uncertain_mask']
+            print(f"[Specular V2] {side}: excluded={100*details['mask_fraction']:.2f}% | "
+                  f"uncertain={100*details['uncertain_fraction']:.2f}% (not excluded) | "
+                  f"{details['elapsed_ms']:.1f} ms")
+            return mask
         if not use_wound_adaptive_spatial_specular or bgr is None or bgr.size == 0:
             return None
         if wound_prediction is not None:
@@ -3033,11 +3062,25 @@ def main():
     im_B.set_animated(True)
     fps_text.set_animated(True)
     pose_status_text.set_animated(True)
-    # blit_state: 管理背景圖狀態
-    blit_state = {'bg': None, 'needs_refresh': True}
+    view_renderer = PairedViewRenderer(
+        fig, ((ax_A, ax_B), (ax_debug_A, ax_debug_B)),
+        overlays=(depth_text, pose_status_text))
+    blit_state = {'needs_refresh': True, 'full_refresh': True, 'pair': None}
 
     def request_blit_refresh():
-        """UI 元件有治變時呼叫，主迴圈下一幀會重新全圖儲存新背景。"""
+        """Content/control changes invalidate the navigation background."""
+        blit_state.update(needs_refresh=True, full_refresh=True, pair=None)
+        view_renderer.invalidate()
+
+    def request_view_refresh(ax):
+        """Coalesce scroll/pan events, preserving pending content updates."""
+        pair = 0 if ax in (ax_A, ax_B) else 1
+        if not blit_state['full_refresh']:
+            previous = blit_state['pair']
+            if blit_state['needs_refresh'] and previous != pair:
+                request_blit_refresh()
+                return
+            blit_state['pair'] = pair
         blit_state['needs_refresh'] = True
 
     # 顯示影像轉換快取：locked_L/locked_R 與疊圖狀態沒變時，重繪直接重用上次轉換結果
@@ -3109,16 +3152,19 @@ def main():
     def recompute_locked_spec_masks_from_wound(reason="adaptive spatial"):
         nonlocal locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask
         nonlocal locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask
-        locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(
+        new_left_masks = compute_locked_spec_masks(
             locked_L_clean,
             locked_L_idx,
             wound_state.get('left_pred'),
         )
-        locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(
+        new_right_masks = compute_locked_spec_masks(
             locked_R_clean,
             locked_R_idx,
             wound_state.get('right_pred'),
         )
+        # Commit only after BOTH computations succeed.
+        locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = new_left_masks
+        locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = new_right_masks
         current_cand['spec_mask'] = locked_R_spec_mask
         current_cand['spec_spatial_mask'] = locked_R_spec_spatial_mask
         current_cand['spec_temporal_mask'] = locked_R_spec_temporal_mask
@@ -3129,7 +3175,7 @@ def main():
             extra['spec_spatial_mask'] = None
             extra['spec_temporal_mask'] = None
         print(
-            f"[Specular] {'Adaptive spatial (wound mask or full-image tiles)' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
+            f"[Specular] {'V2 local dichromatic model' if use_specular_model_v2 else 'Adaptive spatial (wound mask or full-image tiles)' if use_wound_adaptive_spatial_specular else 'Fixed spatial'} "
             f"masks refreshed ({reason})"
         )
         mark_display_dirty()
@@ -3194,6 +3240,13 @@ def main():
     ax_c16 = fig.add_axes([0.17, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
     ax_c17 = fig.add_axes([0.29, control_row_y[5], 0.11, control_h], facecolor='#1E1E1E')
     ax_c19 = fig.add_axes([0.05, control_row_y[6], 0.11, control_h], facecolor='#1E1E1E')
+    # The legacy three-mode selector occupied this central area. Keep the
+    # calculation mode fixed by MEASURE_MODE and reuse the space for the
+    # independent spatial-highlight parameter editor.
+    ax_btn_specular_settings = fig.add_axes(
+        [0.42, 0.930, 0.13, 0.026], facecolor='#1E1E1E')
+    ax_btn_specular_v2 = fig.add_axes([0.42, 0.895, 0.13, 0.028], facecolor='#1E1E1E')
+    ax_btn_specular_v2_settings = fig.add_axes([0.42, 0.858, 0.13, 0.028], facecolor='#1E1E1E')
     
     # 建立標準按鈕，文字開頭加上 [X] 或 [ ] 代表勾選狀態
     btn_opt_style = dict(color='#1A1A1A', hovercolor='#333333')
@@ -3219,6 +3272,20 @@ def main():
     c16 = Button(ax_c16, "[ ] Show Temporal", **btn_opt_style)
     c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
     c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
+    btn_specular_settings = Button(
+        ax_btn_specular_settings, "舊版反光參數", useblit=False, **btn_opt_style)
+    btn_specular_settings.label.set_color('white')
+    btn_specular_settings.label.set_fontsize(7)
+    btn_specular_settings.ax.patch.set_edgecolor('#00FF88')
+    btn_specular_settings.ax.patch.set_linewidth(1.0)
+    btn_specular_v2 = Button(ax_btn_specular_v2,
+        '新版反光: On' if use_specular_model_v2 else '新版反光: Off', useblit=False, **btn_opt_style)
+    btn_specular_v2_settings = Button(ax_btn_specular_v2_settings,
+        '新版反光參數', useblit=False, **btn_opt_style)
+    for button in (btn_specular_v2, btn_specular_v2_settings):
+        button.label.set_color('white')
+        button.label.set_fontsize(7)
+        button.ax.patch.set_edgecolor('#00FF88')
 
     view_state = {'precise': False, 'grad_sift': False, 'region_sift': True,
                   'enforce_epi': False,
@@ -3282,34 +3349,6 @@ def main():
         _artist.set_visible(view_state['show_high_grad_points'])
     for _artist in (scatter_mid_grad_ref_A, scatter_mid_grad_ref_B, scatter_mid_grad_inject, scatter_mid_grad_match):
         _artist.set_visible(view_state['show_mid_grad_points'])
-
-    # 建立測量模式單選框，置於中間空白處
-    ax_mode = fig.add_axes([0.42, 0.836, 0.13, 0.12], facecolor='#1E1E1E')
-    ax_mode.patch.set_edgecolor('white')
-    ax_mode.patch.set_linewidth(1.0)
-    radio_mode = RadioButtons(ax_mode, ('雙幀直接', '多幀去漂移', '多幀純光流'),
-                              active=0 if MEASURE_MODE=="dual_direct" else (1 if MEASURE_MODE=="multi_dedrift" else 2),
-                              activecolor='#00FFFF')
-    
-    # 調整單選框字型與色彩
-    for label in radio_mode.labels:
-        label.set_color('white')
-        label.set_fontsize(7)
-        
-    def on_mode_change(label_text):
-        global MEASURE_MODE
-        if label_text == '雙幀直接':
-            MEASURE_MODE = 'dual_direct'
-        elif label_text == '多幀去漂移':
-            MEASURE_MODE = 'multi_dedrift'
-        elif label_text == '多幀純光流':
-            MEASURE_MODE = 'multi_pure'
-        print(f"🔄 量測模式已切換為: {MEASURE_MODE}")
-        mark_wound_size_dirty('measure_mode')
-        if last_click:
-            do_measure(last_click[0], last_click[1])
-            
-    radio_mode.on_clicked(on_mode_change)
 
     # 統一設定文字顏色為白色，並將按鈕外框設為白色
     for c in [c1, c2, c18, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c19]:
@@ -3389,6 +3428,10 @@ def main():
 
     def on_adaptive_spatial_specular(event):
         nonlocal use_wound_adaptive_spatial_specular
+        if use_specular_model_v2:
+            depth_text.set_text('新版反光啟用中；Adaptive Spatial 是舊版選項，請先關閉新版反光')
+            request_blit_refresh()
+            return
         view_state['adaptive_spatial_specular'] = not view_state['adaptive_spatial_specular']
         use_wound_adaptive_spatial_specular = view_state['adaptive_spatial_specular']
         c19.label.set_text("[X] Adaptive Spatial" if use_wound_adaptive_spatial_specular else "[ ] Adaptive Spatial")
@@ -3400,6 +3443,87 @@ def main():
         request_blit_refresh()
 
     c19.on_clicked(on_adaptive_spatial_specular)
+
+    def commit_specular_backend(enabled, updated_v2=None, updated_legacy=None):
+        global SPATIAL_BLOCK_CONFIG, SPECULAR_MODEL_V2_CONFIG
+        nonlocal use_specular_model_v2, use_wound_adaptive_spatial_specular
+        if height_profile is not None and height_profile.enabled:
+            raise ValueError('請先關閉拖曳高度剖面，再修改反光參數')
+        if block_accuracy_state['mode'] != 'idle':
+            raise ValueError('請先完成或取消 Block 誤差統計，再修改反光參數')
+        previous_v2 = SPECULAR_MODEL_V2_CONFIG
+        previous_legacy = SPATIAL_BLOCK_CONFIG
+        previous_enabled = use_specular_model_v2
+        previous_adaptive = use_wound_adaptive_spatial_specular
+        previous_display = dict(specular_v2_display)
+        use_specular_model_v2 = enabled
+        if updated_v2 is not None:
+            SPECULAR_MODEL_V2_CONFIG = updated_v2
+        if updated_legacy is not None:
+            SPATIAL_BLOCK_CONFIG = updated_legacy
+            use_wound_adaptive_spatial_specular = True
+        try:
+            recompute_locked_spec_masks_from_wound('backend / parameter update')
+        except Exception as exc:
+            SPECULAR_MODEL_V2_CONFIG = previous_v2
+            SPATIAL_BLOCK_CONFIG = previous_legacy
+            use_specular_model_v2 = previous_enabled
+            use_wound_adaptive_spatial_specular = previous_adaptive
+            specular_v2_display.update(previous_display)
+            raise RuntimeError(f'反光重算失敗，保留原設定與遮罩: {exc}') from exc
+        for label, previous, updated in (
+                ('V2', previous_v2, SPECULAR_MODEL_V2_CONFIG),
+                ('Legacy', previous_legacy, SPATIAL_BLOCK_CONFIG)):
+            for name, value in vars(updated).items():
+                if getattr(previous, name) != value:
+                    print(f'[Specular {label} Settings] {name}: {getattr(previous, name)} -> {value}')
+        view_state['adaptive_spatial_specular'] = use_wound_adaptive_spatial_specular
+        c19.label.set_text('[X] Adaptive Spatial' if use_wound_adaptive_spatial_specular else '[ ] Adaptive Spatial')
+        btn_specular_v2.label.set_text('新版反光: On' if enabled else '新版反光: Off')
+        view_state['show_spatial_specular_mask'] = True
+        c15.label.set_text("[X] Show Spatial")
+        wound_state['dirty'] = True
+        backend = '新版 V2（藍色排除／橘色不確定）' if enabled else '舊版'
+        depth_text.set_text(f'{backend}反光遮罩已重算；請重新點選量測')
+        request_blit_refresh()
+
+    def apply_spatial_specular_settings(updated):
+        commit_specular_backend(False, updated_legacy=updated)
+
+    def apply_specular_v2_settings(updated):
+        commit_specular_backend(True, updated_v2=updated)
+
+    def on_specular_v2(event):
+        try:
+            commit_specular_backend(not use_specular_model_v2)
+        except (ValueError, RuntimeError) as exc:
+            depth_text.set_text(str(exc))
+            request_blit_refresh()
+
+    def on_specular_v2_settings(event):
+        if block_accuracy_state['mode'] != 'idle' or (height_profile is not None and height_profile.enabled):
+            depth_text.set_text('請先結束 Block 統計／拖曳高度剖面，再修改新版反光參數')
+            request_blit_refresh()
+            return
+        show_specular_model_v2_settings(fig.canvas.manager.window,
+                                       SPECULAR_MODEL_V2_CONFIG, apply_specular_v2_settings)
+
+    btn_specular_v2.on_clicked(on_specular_v2)
+    btn_specular_v2_settings.on_clicked(on_specular_v2_settings)
+
+    def on_specular_settings(event):
+        if block_accuracy_state['mode'] != 'idle':
+            depth_text.set_text('請先完成或取消 Block 誤差統計，再修改反光參數')
+            request_blit_refresh()
+            return
+        show_specular_settings(
+            fig.canvas.manager.window,
+            SPATIAL_BLOCK_CONFIG,
+            apply_spatial_specular_settings,
+        )
+
+    btn_specular_settings.on_clicked(on_specular_settings)
+
     def on_c10_clicked(event):
         view_state['use_rgb_sift'] = not view_state['use_rgb_sift']
         c10.label.set_text("[X] 啟用 RGB-SIFT" if view_state['use_rgb_sift'] else "[ ] 啟用 RGB-SIFT")
@@ -4542,7 +4666,8 @@ def main():
             # 延遲計算：只有實際會用到遮罩 (Reject SpecPts 開啟) 時才計算；
             # 與背景預計算執行緒以 spec_mask_lock 互斥，先到先算、後到直接取用
             if (right_spec_mask is None and cand.get('rgb') is not None
-                    and snap_view_state.get('reject_specular_candidates', False)):
+                    and (snap_view_state.get('reject_specular_candidates', False)
+                         or (region_config.use_masked_sift and snap_view_state.get('region_sift', False)))):
                 with spec_mask_lock:
                     right_spec_mask = cand.get('spec_mask')
                     if right_spec_mask is None:
@@ -4556,6 +4681,7 @@ def main():
         trajectory_res = None
         grad_descriptor_audit = None
         region_debug = None
+        region_search_history = []
 
         if not cand.get('pose_valid', True):
             print(f"❌ [測量失敗] 當前候選影格位姿無效 (pose_valid == False)，原因: {cand.get('pose_info', '未知')}")
@@ -4582,8 +4708,26 @@ def main():
                 region_mode = bool(snap_view_state.get('region_sift', False))
                 if region_mode:
                     _t_blk = time.perf_counter()
-                    region_right_gray = preprocess_gray(
-                        cand['gray'], snap_view_state.get('enable_clahe', False))
+                    if region_config.use_masked_sift:
+                        # Spatial-only masks in the same undistorted coordinates;
+                        # no CLAHE whose histogram could include excluded pixels.
+                        snap_imgA_gray = cv2.cvtColor(locked_L_clean, cv2.COLOR_BGR2GRAY)
+                        region_right_gray = cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2GRAY)
+                        left_spec_mask = locked_L_spec_spatial_mask
+                        right_spec_mask = (locked_R_spec_spatial_mask
+                            if cand.get('idx') == current_cand.get('idx')
+                            else cand.get('spec_spatial_mask'))
+                        if right_spec_mask is None:
+                            right_spec_mask = compute_wound_adaptive_spatial_mask(
+                                cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR))
+                            if right_spec_mask is None:
+                                right_spec_mask = compute_specular_mask_bgr(
+                                    cv2.cvtColor(cand['rgb'], cv2.COLOR_RGB2BGR))
+                        print(f"[Region-SIFT Descriptor] 自製遮罩式 SIFT | spatial mask={'V2' if use_specular_model_v2 else 'Legacy'} | CLAHE=OFF | 完整反光 support 拒絕=OFF")
+                    else:
+                        region_right_gray = preprocess_gray(
+                            cand['gray'], snap_view_state.get('enable_clahe', False))
+                        print('[Region-SIFT Descriptor] OpenCV SIFT')
                     t_prof['右圖灰階/CLAHE前處理'] = time.perf_counter() - _t_blk
                     _t_blk = time.perf_counter()
                     region_result = run_region_sift_matching(
@@ -4593,9 +4737,40 @@ def main():
                         reject_specular=snap_view_state.get('reject_specular_candidates', False),
                         left_spec_mask=left_spec_mask, right_spec_mask=right_spec_mask)
                     t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
+                    region_search_history = region_result.get('search_history', [])
+                    region_config = region_result.get('effective_config', region_config)
+                    for stage in region_search_history:
+                        valley = stage.get('valley', {})
+                        print(f"[Region-SIFT Search] round={stage['round']} {stage['stage']} | "
+                              f"cell={stage['cell_width']}x{stage['cell_height']} "
+                              f"points={stage['point_count']} | candidates={stage['candidate_count']} "
+                              f"new candidates={stage.get('new_candidates', 0)} "
+                              f"new rows={stage['descriptor_rows']} cache hits={stage['cache_hits']} | "
+                              f"valleyDrop={valley.get('relative_depth', float('nan')):.3f} "
+                              f"basinRatio={valley.get('basin_ratio', float('nan')):.3f} | "
+                              f"{stage['elapsed_ms']:.1f}ms | {stage['reason']}")
+                        for _funnel_line in format_stage_funnel(stage):
+                            print(_funnel_line)
                     _t_blk = time.perf_counter()
                     _region_ms = region_result.get('elapsed_ms', 0.0)
                     _region_counts = region_result.get('timing_counts', {})
+                    if region_config.use_masked_sift:
+                        print(f"[Masked SIFT] 有效／共同覆蓋不足候選={_region_counts.get('masked_coverage_rejected_candidates', 0)}")
+                        print(f"[Masked SIFT] 有效點數不足={_region_counts.get('masked_group_count_rejects', 0)} | "
+                              f"cell 缺有效點超過容忍上限(容忍={region_config.masked_max_deficient_cells})="
+                              f"{_region_counts.get('masked_cell_count_rejects', 0)}（兩者可能重疊）")
+                        _masked_debug = region_result.get('region_debug')
+                        if _masked_debug is not None:
+                            for _side in ('left', 'right'):
+                                _coverage = _masked_debug[_side + '_frames'].get('masked_valid_fraction')
+                                if _coverage is not None:
+                                    print(f'[Masked SIFT] {_side} 有效覆蓋 min/mean={np.min(_coverage):.3f}/{np.mean(_coverage):.3f}')
+                            _common = _masked_debug['right_frames'].get('masked_common_fraction')
+                            _pair_valid = _masked_debug['right_frames'].get('masked_point_valid')
+                            if _pair_valid is not None:
+                                print(f'[Masked SIFT] 有效點對={np.count_nonzero(_pair_valid)}/{len(_pair_valid)} | 無效 IDs={(np.flatnonzero(~_pair_valid)+1).tolist()} | 距離含缺失覆蓋懲罰')
+                            if _common is not None:
+                                print(f'[Masked SIFT] 最佳候選共同覆蓋 min/mean={np.min(_common):.3f}/{np.mean(_common):.3f}')
                     print(f"[Region-SIFT Specular] enabled={_region_counts.get('reject_specular', False)} "
                           f"| support={_region_counts.get('specular_check_support', False)} "
                           f"| center rejects={_region_counts.get('specular_center_rejected_candidates', 0)} "
@@ -4607,6 +4782,11 @@ def main():
                     for _stage_name, _stage_ms in region_result.get('timing_ms', {}).items():
                         _stage_pct = 100.0 * _stage_ms / _region_ms if _region_ms > 0 else 0.0
                         print(f"   - {_stage_name}: {_stage_ms:.1f} ms ({_stage_pct:.1f}%)")
+                    print(f"[F{cand.get('idx')} Region-SIFT 特徵細分] "
+                          f"new candidates={_region_counts.get('new_candidate_evaluations', 0)} | "
+                          f"candidate cache hits={_region_counts.get('candidate_cache_hits', 0)}")
+                    for _detail_line in format_profile(region_result.get('detail_profile', {})):
+                        print(_detail_line)
                     region_debug = region_result.get('region_debug')
                     if region_debug is not None:
                         region_debug['diagnostic_match_status'] = (
@@ -5090,6 +5270,7 @@ def main():
                 'grad_descriptor_audit': grad_descriptor_audit,
                 'region_debug': region_debug,
                 'region_diagnostic_config': region_config,
+                'region_search_history': region_search_history,
                 'fail_reason': fail_reason, 'u': u, 'v': v, 'trajectory': trajectory_res,
                 'd_epi': d_epi, 'zncc_score': zncc_score, 'masked_score': masked_score, 'confidence_score': confidence_score,
                 # Read-only references for the lower debug panels.  These are
@@ -6254,6 +6435,9 @@ def main():
         keep_text = 'KEEP in TrimK' if record.get('kept') else 'TRIM from TrimK'
         keep_text += ('; CellAll active' if record.get('balanced_score_active')
                       else '; CellAll disabled (weight=0)')
+        distance_label = 'L2+missing penalty' if record.get('distance_includes_missing_penalty') else 'L2'
+        if not record.get('masked_pair_valid', True):
+            keep_text = 'INVALID PAIR; maximum-distance penalty (not a measured L2)'
         point_warp = np.asarray(record['right_point_warp'], dtype=np.float32)
         point_right = np.asarray(record['right_point_original'], dtype=np.float32)
         for support_artist in debug_region_state.get('support_artists', []):
@@ -6285,7 +6469,7 @@ def main():
               f"{record.get('angle_pair_reliable')}; dotted=full support bounds")
         dbg_info_B.set_text(
             debug_region_state.get('base_right_text', '')
-            + f"\n{label}: L2={float(record['l2_distance']):.3f}, "
+            + f"\n{label}: {distance_label}={float(record['l2_distance']):.3f}, "
               f"rank={int(record['distance_rank'])}/{len(records)} => {keep_text}"
             + f"\nL=({point_left[0]:.1f},{point_left[1]:.1f}), "
               f"RW=({point_warp[0]:.1f},{point_warp[1]:.1f}), "
@@ -6307,7 +6491,7 @@ def main():
                 f"packedOctave L/R={record.get('left_octave')}/{record.get('right_octave')} "
                 f"support L/R={record.get('left_support_radius_px')}/{record.get('right_support_radius_px')}px "
                 f"reliableScale/Angle={record.get('scale_pair_reliable')}/{record.get('angle_pair_reliable')} "
-                f"L2={float(record['l2_distance']):.3f} "
+                f"{distance_label}={float(record['l2_distance']):.3f} "
                 f"rank={int(record['distance_rank'])}/{len(records)} "
                 f"status={keep_text}")
         if refresh:
@@ -6527,7 +6711,7 @@ def main():
         descriptor_shape = tuple(np.asarray(debug['left_descriptors']).shape)
         kept_stats = debug.get('kept_l2_stats', {})
         base_left_text = (
-            f"Region-SIFT | grid={cfg.grid_rows}x{cfg.grid_cols}, "
+            f"Region-SIFT [{debug.get('descriptor_backend', 'opencv')}] | grid={cfg.grid_rows}x{cfg.grid_cols}, "
             f"cell={cfg.cell_width_px}x{cfg.cell_height_px}px | "
             f"auto={auto_count}+P={debug['point_count']} | desc={descriptor_shape}\n"
             "each ray=size+angle; red=High, yellow=Mid, cyan=Low; click for details")
@@ -6556,6 +6740,10 @@ def main():
                if cfg.group_balance_weight > 0 else
                "green=TrimK, gray=trimmed; CellAll diagnostic only (weight=0)")
             + "; flat frames skip consistency penalty")
+        if cfg.use_masked_sift:
+            coverage = debug['right_frames'].get('masked_common_fraction')
+            if coverage is not None:
+                base_right_text += f'\nMasked common coverage min/mean={np.min(coverage):.2f}/{np.mean(coverage):.2f}'
         if res.get('fail_reason'):
             base_right_text += f"\nResult: {res['fail_reason']}"
         debug_region_state['records'] = records
@@ -7204,7 +7392,7 @@ def main():
             return False
         ax.set_xlim(*home[0])
         ax.set_ylim(*home[1])
-        request_blit_refresh()
+        request_view_refresh(ax)
         return True
 
     def on_press(event):
@@ -7344,7 +7532,7 @@ def main():
         dx_d, dy_d = p1 - p0
         ax.set_xlim(ax.get_xlim() - dx_d); ax.set_ylim(ax.get_ylim() - dy_d)
         pan_state.update({'x': event.x, 'y': event.y})
-        request_blit_refresh()
+        request_view_refresh(ax)
 
     def on_scroll(event):
         if height_profile is not None and height_profile.mode == 'drawing':
@@ -7387,7 +7575,7 @@ def main():
         else:
             ax.set_xlim([x - (x-xl[0])*f, x + (xl[1]-x)*f])
             ax.set_ylim([y - (y-yl[0])*f, y + (yl[1]-y)*f])
-        request_blit_refresh()
+        request_view_refresh(ax)
 
     fig.canvas.mpl_connect('scroll_event', on_scroll)
     fig.canvas.mpl_connect('motion_notify_event', on_motion)
@@ -7565,6 +7753,12 @@ def main():
     btn_height_profile = Button(ax_btn_height_profile, '拖曳高度剖面', useblit=False, **btn_opt_style)
     btn_height_profile.label.set_color('#E0E0E0')
     btn_height_profile.label.set_fontsize(7)
+    ax_btn_sift_backend = fig.add_axes([0.415, control_row_y[4], 0.15, control_h])
+    btn_sift_backend = Button(ax_btn_sift_backend,
+        'Descriptor: 自製' if REGION_SIFT_CONFIG.use_masked_sift else 'Descriptor: OpenCV',
+        useblit=False, **btn_opt_style)
+    btn_sift_backend.label.set_color('#E0E0E0')
+    btn_sift_backend.label.set_fontsize(7)
 
     def apply_region_settings(updated):
         global REGION_SIFT_CONFIG
@@ -7574,6 +7768,7 @@ def main():
             raise ValueError('請先完成或取消 Block 誤差統計，再修改參數')
         previous = REGION_SIFT_CONFIG
         REGION_SIFT_CONFIG = updated
+        btn_sift_backend.label.set_text('Descriptor: 自製' if updated.use_masked_sift else 'Descriptor: OpenCV')
         # Left descriptor cache keys include the whole immutable config;
         # the next measurement also creates a new click-local cache.
         for name, value in vars(updated).items():
@@ -7581,6 +7776,17 @@ def main():
                 print(f'[Region-SIFT Settings] {name}: {getattr(previous, name)} -> {value}')
         depth_text.set_text('Region-SIFT 參數已套用；請重新點選或按座標重現')
         request_blit_refresh()
+
+    def on_sift_backend(event):
+        from dataclasses import replace
+        try:
+            apply_region_settings(replace(REGION_SIFT_CONFIG,
+                use_masked_sift=not REGION_SIFT_CONFIG.use_masked_sift))
+        except ValueError as exc:
+            depth_text.set_text(str(exc))
+            request_blit_refresh()
+
+    btn_sift_backend.on_clicked(on_sift_backend)
 
     def on_region_settings(event):
         if block_accuracy_state['mode'] != 'idle':
@@ -8356,23 +8562,24 @@ def main():
 
     def block_accuracy_control_widgets():
         widgets = [c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12,
-                   c13, c14, c15, c16, c17, c18, c19, radio_mode, text_box,
+                   c13, c14, c15, c16, c17, c18, c19, text_box,
                    btn_lock_L, btn_lock_R, btn_hide_R, btn_norm_toggle,
                    btn_calc, btn_auto_calc, btn_grad_toggle, btn_custom_plane,
                    btn_high_grad_pts, btn_mid_grad_pts, btn_rt_diff, btn_return_menu,
                    btn_wound_toggle, btn_wound_pts_toggle, btn_aruco_overlay,
                    btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
                    btn_top2_geo, btn_h_residual, btn_rt_warp_view]
-        widgets.extend([text_region_u, text_region_v, btn_region_replay, btn_region_settings])
+        widgets.extend([text_region_u, text_region_v, btn_region_replay,
+                        btn_region_settings, btn_sift_backend, btn_specular_settings,
+                        btn_specular_v2, btn_specular_v2_settings])
         return widgets
 
     def lock_block_accuracy_controls():
         widgets = block_accuracy_control_widgets() + [btn_height_profile]
         block_accuracy_state['disabled_widgets'] = [(widget, widget.active) for widget in widgets]
         for widget in widgets:
-            # RadioButtons.set_active(index) SELECTS an option; it does not
-            # disable events. The inherited active property is the common
-            # event-enable API for Buttons, RadioButtons and TextBox alike.
+            # The inherited active property is the common event-enable API
+            # for Matplotlib Buttons and TextBox widgets.
             widget.active = False
 
     def draw_block_accuracy_plan(block_summaries=None):
@@ -8716,8 +8923,8 @@ def main():
         ('#00BFFF', [ax_c1, ax_c2, ax_c18, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
                      ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19,
                      ax_region_u, ax_region_v, ax_btn_region_replay, ax_btn_region_settings,
-                     ax_btn_region_diagnostics, ax_btn_height_profile]),
-        ('#00FF88', [ax_mode]),
+                     ax_btn_region_diagnostics, ax_btn_height_profile, ax_btn_sift_backend]),
+        ('#00FF88', [ax_btn_specular_settings, ax_btn_specular_v2, ax_btn_specular_v2_settings]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
                      ax_btn_high_grad_pts, ax_btn_mid_grad_pts, ax_btn_rt_diff,
@@ -8761,43 +8968,26 @@ def main():
         log_and_print("ℹ️ [Wound] AI disabled: model loading and inference skipped")
         startup_timer.stage("傷口 AI 停用")
 
-    # ---- Blit 初始化 ----
-    # 切斷 im_A/im_B 的 stale propagation callback：
-    # im.set_data() 會把 artist 標為 stale，stale 向上傳遞到 figure 後
-    # 觸發 canvas.draw_idle()，最終讓 flush_events() 執行完整重繪。
-    # 由於 im_A/im_B 由我們的 blit 路徑手動管理，不需要這個機制。
-    im_A._stale_callback = None
-    im_B._stale_callback = None
-
-    # Monkey-patch draw_idle：按鈕/Widget 觸發的 draw_idle 只需設 flag
+    # Native Tk mainloop handles input continuously. One timer renders the
+    # latest accumulated state; no nested flush_events or blocking sleeps.
+    original_draw_idle = fig.canvas.draw_idle
     fig.canvas.draw_idle = request_blit_refresh
-
-    # 顯示視窗並做初始全繪，存成靜態背景
-    plt.show(block=False)
-    fig.canvas.draw()
-    blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
-    blit_state['needs_refresh'] = False
-    startup_timer.stage("首次繪製")
-    startup_timer.report()
-
-    import time as _time
-    _fps_t0 = _time.perf_counter()
-    _fps_counter = 0
-    _fps_val = 0.0
-    # 各階段耗時累計 (單位: ms)
-    _t_cap = _t_buf = _t_calc_q = _t_result_q = _t_proc = _t_setdata = _t_pause = 0.0
-    _perf_frames = 0
-    _perf_t0 = _time.perf_counter()
-    _last_auto_calc_time = 0.0
-
-    # 更改 FPS 文字為靜態影片標籤
+    resize_cid = fig.canvas.mpl_connect(
+        'resize_event', lambda event: request_blit_refresh())
     fps_text.set_text("Mode: Video (Offline)")
-    
-    while plt.fignum_exists(fig.number):
-        if not blit_state['needs_refresh'] and blit_state['bg'] is not None:
-            fig.canvas.flush_events()
-            _time.sleep(UI_LOOP_SLEEP_SEC)
-            continue
+    render_stats = []
+    first_render = True
+
+    def render_pending():
+        nonlocal first_render
+        if not plt.fignum_exists(fig.number):
+            return False
+        if not blit_state['needs_refresh']:
+            return True
+        started = time.perf_counter()
+        pair = None if blit_state['full_refresh'] else blit_state['pair']
+        # Consume before drawing so refresh requests raised during draw survive.
+        blit_state.update(needs_refresh=False, full_refresh=False, pair=None)
         # 依前處理開關，動態切換顯示畫面（使肉眼可見差異）。
         # 影像內容 (version) 與疊圖相關開關沒變時，直接重用上次的轉換結果。
         disp_key = (
@@ -8823,6 +9013,10 @@ def main():
                 disp_B = cv2.cvtColor(locked_R, cv2.COLOR_BGR2RGB)
 
             if view_state.get('show_spatial_specular_mask', False) or view_state.get('show_temporal_specular_mask', False):
+                if (use_specular_model_v2 and SPECULAR_MODEL_V2_CONFIG.v2_show_uncertain
+                        and view_state.get('show_spatial_specular_mask', False)):
+                    disp_A = overlay_specular_v2_uncertain(disp_A, specular_v2_display['left'])
+                    disp_B = overlay_specular_v2_uncertain(disp_B, specular_v2_display['right'])
                 empty_L = np.zeros_like(locked_L_spec_mask) if locked_L_spec_mask is not None else None
                 empty_R = np.zeros_like(locked_R_spec_mask) if locked_R_spec_mask is not None else None
                 spatial_A = locked_L_spec_spatial_mask if view_state.get('show_spatial_specular_mask', False) else empty_L
@@ -8842,98 +9036,65 @@ def main():
             display_cache['disp_A'] = disp_A
             display_cache['disp_B'] = disp_B
 
-        im_A.set_data(display_cache['disp_A'])
-        im_B.set_data(display_cache['disp_B'])
+            # Navigation changes only limits, never image data.
+            im_A.set_data(display_cache['disp_A'])
+            im_B.set_data(display_cache['disp_B'])
 
-        # ---- Blit 渲染 ----
-        if blit_state['needs_refresh'] or blit_state['bg'] is None:
-            # 右圖的點、線、ArUco 及傷口量測 artist 都使用原始右圖座標。
-            # 建立 warp 模式背景時暫時隱藏，畫完即恢復其內部狀態，關閉
-            # warp 後所有顯示選項仍能原樣回來。
-            hidden_right_artists = []
-            if view_state.get('show_rt_warp_view', False):
-                right_overlay_artists = (
-                    list(ax_B.collections)
-                    + list(ax_B.lines)
-                    + list(ax_B.texts)
-                    + [patch for patch in ax_B.patches if patch is not border_B]
-                )
-                seen_artist_ids = set()
-                for artist in right_overlay_artists:
-                    artist_id = id(artist)
-                    if artist_id in seen_artist_ids:
-                        continue
-                    seen_artist_ids.add(artist_id)
-                    hidden_right_artists.append((artist, artist.get_visible()))
-                    artist.set_visible(False)
-            try:
-                fig.canvas.draw()
-                blit_state['bg'] = fig.canvas.copy_from_bbox(fig.bbox)
-            finally:
-                for artist, was_visible in hidden_right_artists:
-                    artist.set_visible(was_visible)
-            blit_state['needs_refresh'] = False
-        else:
-            fig.canvas.restore_region(blit_state['bg'])
+        prepared = time.perf_counter()
+        hidden_right_artists = []
+        if view_state.get('show_rt_warp_view', False):
+            right_overlay_artists = (
+                list(ax_B.collections) + list(ax_B.lines) + list(ax_B.texts)
+                + [patch for patch in ax_B.patches if patch is not border_B]
+                + list(ax_B.artists))
+            for artist in dict.fromkeys(right_overlay_artists):
+                hidden_right_artists.append((artist, artist.get_visible()))
+                artist.set_visible(False)
+        try:
+            rebuilt = view_renderer.draw(pair)
+        except Exception:
+            request_blit_refresh()
+            raise
+        finally:
+            for artist, was_visible in hidden_right_artists:
+                artist.set_visible(was_visible)
+        if first_render:
+            first_render = False
+            startup_timer.stage("首次繪製")
+            startup_timer.report()
+        if UI_RENDER_PROFILE:
+            finished = time.perf_counter()
+            render_stats.append(((prepared - started) * 1000,
+                                 (finished - prepared) * 1000, rebuilt))
+            if len(render_stats) >= 60:
+                values = np.asarray(render_stats)
+                totals = values[:, 0] + values[:, 1]
+                print(f"[UI render] n={len(values)} "
+                      f"prepare={values[:, 0].mean():.1f}ms "
+                      f"draw={values[:, 1].mean():.1f}ms "
+                      f"median={np.median(totals):.1f}ms "
+                      f"p95={np.percentile(totals, 95):.1f}ms "
+                      f"background_rebuilds={int(values[:, 2].sum())}")
+                render_stats.clear()
+        return True
 
-        ax_A.draw_artist(im_A)
-        if custom_plane_poly_artist is not None:
-            ax_A.draw_artist(custom_plane_poly_artist)
-        ax_A.draw_artist(scatter_A)
-        ax_A.draw_artist(scatter_A_reproj)
-        ax_A.draw_artist(scatter_grad_ref_A)
-        ax_A.draw_artist(scatter_mid_grad_ref_A)
-        ax_A.draw_artist(scatter_grad_inject)
-        ax_A.draw_artist(scatter_mid_grad_inject)
-        ax_A.draw_artist(scatter_rt_sift_A)
-        for artist in block_accuracy_state['artists']:
-            ax_A.draw_artist(artist)
-        for a in custom_plane_artists:
-            ax_A.draw_artist(a)
-        
-        if ax_B.get_visible():
-            ax_B.draw_artist(im_B)
-            if not view_state.get('show_rt_warp_view', False):
-                ax_B.draw_artist(scatter_B)
-                ax_B.draw_artist(scatter_B_reproj)
-                ax_B.draw_artist(scatter_grad_ref_B)
-                ax_B.draw_artist(scatter_mid_grad_ref_B)
-                ax_B.draw_artist(scatter_grad_match)
-                ax_B.draw_artist(scatter_mid_grad_match)
-                ax_B.draw_artist(scatter_rt_sift_B)
-                ax_B.draw_artist(epi_line)
-                ax_B.draw_artist(sift_rect)
-                ax_B.draw_artist(sift_rect_center)
+    render_timer = fig.canvas.new_timer(interval=UI_RENDER_INTERVAL_MS)
+    render_timer.add_callback(render_pending)
+    def stop_rendering(event):
+        render_timer.stop()
+        # Return to the source menu even when diagnostic windows remain open.
+        fig.canvas.manager.window.quit()
 
-                for line in view_state.get('grad_lines', []):
-                    ax_B.draw_artist(line)
-                if view_state.get('highlighted_grad_line_artist'):
-                    ax_B.draw_artist(view_state['highlighted_grad_line_artist'])
-                
-        fig.draw_artist(depth_text)
-
-        for ax in [ax_A, ax_B]:
-            if hasattr(ax, 'art'):
-                if (ax == ax_B and (
-                        not ax_B.get_visible()
-                        or view_state.get('show_rt_warp_view', False))):
-                    continue
-                for a in ax.art:
-                    ax.draw_artist(a)
-            if hasattr(ax, 'reproj_art'):
-                if (ax == ax_B and (
-                        not ax_B.get_visible()
-                        or view_state.get('show_rt_warp_view', False))):
-                    continue
-                for a in ax.reproj_art:
-                    ax.draw_artist(a)
-
-        ax_A.draw_artist(fps_text)
-        fig.draw_artist(pose_status_text)
-        height_profile.draw_overlays()
-        fig.canvas.blit(fig.bbox)
-        fig.canvas.flush_events()
-        _time.sleep(UI_LOOP_SLEEP_SEC)
+    close_cid = fig.canvas.mpl_connect('close_event', stop_rendering)
+    render_timer.start()
+    try:
+        plt.show(block=True)
+    finally:
+        render_timer.stop()
+        fig.canvas.draw_idle = original_draw_idle
+        fig.canvas.mpl_disconnect(resize_cid)
+        fig.canvas.mpl_disconnect(close_cid)
+        view_renderer.invalidate()
 
     return view_state.get('restart', False)
 

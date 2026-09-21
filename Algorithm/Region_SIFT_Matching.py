@@ -20,6 +20,7 @@ import numpy as np
 
 from Algorithm import region_sift_frames as dense_frames
 from Algorithm.region_sift_scoring import score_candidate_groups
+from Algorithm.region_sift_profiling import begin as begin_detail, end as end_detail
 
 
 @dataclass(frozen=True)
@@ -61,12 +62,42 @@ class RegionSIFTConfig:
     require_all_descriptors: bool = True
     normalize_descriptors: bool = False
 
+    # Custom masked operator only. OpenCV remains the default baseline.
+    use_masked_sift: bool = False
+    masked_extra_margin_px: int = 0
+    masked_min_blur_weight: float = 0.5
+    masked_min_valid_fraction: float = 0.6
+    masked_min_cell_fraction: float = 0.8
+    masked_min_common_fraction: float = 0.5
+    masked_descriptor_clip: float = 0.2
+    masked_min_group_fraction: float = 0.75
+    masked_min_points_per_cell: int = 1
+    masked_max_deficient_cells: int = 1
+    masked_missing_penalty_weight: float = 0.25
+
     # Rotated epipolar band dimensions.  With unit steps this is 5 x 75
     # candidates: 75 samples along the line and 5 across it.
     search_length_px: float = 75.0
     search_width_px: float = 5.0
     search_along_step_px: float = 1.0
     search_across_step_px: float = 1.0
+
+    # Opt-in at library level; the main UI enables this explicitly.
+    two_stage_search: bool = False
+    coarse_along_step_px: float = 2.0
+    coarse_side_rescue: bool = True
+    fine_half_length_px: float = 10.0
+    fine_width_px: float = 5.0
+    fine_step_px: float = 1.0
+    adaptive_max_expansions: int = 2
+    adaptive_cell_increment_px: int = 15
+    adaptive_points_increment: int = 2
+    valley_min_relative_depth: float = 0.08
+    valley_shoulder_distance_px: float = 10.0
+    valley_level_fraction: float = 0.5
+    valley_min_side_samples: int = 2
+    valley_min_valid_fraction: float = 0.7
+    valley_max_basin_ratio: float = 0.95
 
     # Robust group score.  keep_best_count, when set, overrides the ratio.
     keep_best_ratio: float = 0.75
@@ -104,6 +135,13 @@ class RegionSIFTError(RuntimeError):
 
 
 def _validate_config(config: RegionSIFTConfig) -> None:
+    from Algorithm.masked_sift_descriptor import validate_config
+    try:
+        validate_config(config)
+    except ValueError as exc:
+        raise RegionSIFTError(str(exc)) from exc
+    from Algorithm.region_sift_search import validate_search_config
+    validate_search_config(config)
     if config.grid_rows <= 0 or config.grid_cols <= 0:
         raise RegionSIFTError("grid_rows/grid_cols must be positive")
     if config.grid_rows % 2 == 0 or config.grid_cols % 2 == 0:
@@ -537,8 +575,18 @@ def run_region_sift_matching(
     reject_specular: bool = False,
     left_spec_mask: Optional[np.ndarray] = None,
     right_spec_mask: Optional[np.ndarray] = None,
+    _session=None,
+    _offsets=None,
+    _candidate_cache=None,
 ) -> Dict[str, Any]:
     """Run Region-SIFT and return an original-right-image match plus debug data."""
+    from Algorithm.region_sift_search import run_two_stage, frame_context, evaluate_positions
+    if config.two_stage_search and _session is None:
+        return run_two_stage(
+            run_region_sift_matching, img_left_gray, img_right_gray, point_p, cand, K_L,
+            sift=sift, config=config, left_cache=left_cache,
+            reject_specular=reject_specular, left_spec_mask=left_spec_mask,
+            right_spec_mask=right_spec_mask)
     started = time.perf_counter()
     timing_ms: Dict[str, float] = {}
     timing_stage = '初始化與快取檢查'
@@ -559,15 +607,24 @@ def run_region_sift_matching(
         "timing_ms": timing_ms,
         "timing_counts": {'left_cache_hit': False, 'right_descriptor_batches': 0,
                           'right_descriptor_rows': 0},
+        "candidate_funnel": {},
     }
+    detail_profile = {}
+    base_result['detail_profile'] = detail_profile
+    detail_token = begin_detail(detail_profile)
     try:
         _validate_config(config)
+        if config.use_masked_sift:
+            # This backend always requires spatial masks, independently of the
+            # legacy Reject SpecPts switch. Never silently run without a mask.
+            reject_specular = True
         left_gray = np.asarray(img_left_gray)
         right_gray = np.asarray(img_right_gray)
         if left_gray.ndim != 2 or right_gray.ndim != 2:
             raise RegionSIFTError("Region-SIFT requires grayscale left/right images")
         base_result['timing_counts']['reject_specular'] = bool(reject_specular)
-        base_result['timing_counts']['specular_check_support'] = bool(config.specular_check_support)
+        base_result['timing_counts']['specular_check_support'] = bool(config.specular_check_support and not config.use_masked_sift)
+        base_result['descriptor_backend'] = 'custom-masked' if config.use_masked_sift else 'opencv'
         if reject_specular:
             for label, mask, gray in (('left', left_spec_mask, left_gray),
                                       ('right', right_spec_mask, right_gray)):
@@ -599,6 +656,7 @@ def run_region_sift_matching(
             hashlib.blake2b(left_spec_mask.tobytes(), digest_size=16).digest()
             if left_spec_mask is not None else None,
         )
+        left_masked = None
         cached = left_cache.get("region_sift") if left_cache is not None else None
         if (cached is not None and cached.get("key") == cache_key
                 and "frames" in cached):
@@ -607,6 +665,7 @@ def run_region_sift_matching(
             left_points = cached["points"]
             point_metadata = [dict(item) for item in cached["metadata"]]
             left_descriptors = cached["descriptors"]
+            left_masked = cached.get('masked_descriptors')
             left_frames = {
                 key: np.asarray(value).copy()
                 for key, value in cached["frames"].items()
@@ -616,37 +675,53 @@ def run_region_sift_matching(
             left_context = None
             left_excluded = left_spec_mask
             left_frame_config = config
-            if reject_specular and config.specular_check_support:
+            if config.use_masked_sift:
+                from Algorithm.masked_sift_descriptor import exclusion_mask
+                left_excluded = exclusion_mask(left_spec_mask, config)
+            if reject_specular and config.specular_check_support and not config.use_masked_sift:
                 timing_next('左圖尺度金字塔與響應圖')
-                left_context = dense_frames.create_frame_context(left_gray, config)
+                left_context = frame_context(left_gray, config, _session, 'left')
                 # Pre-filter sampling positions at the smallest possible support;
                 # scale selection below checks every actual support independently.
                 radius = int(np.ceil(min(entry['support'] for entry in left_context['entries'])
                                      + config.frame_coordinate_quantization_px)) + 1
                 left_excluded = 1 - _eroded_valid_mask(1 - left_spec_mask, radius, 1.0)
                 left_frame_config = replace(config, min_valid_warp_ratio=1.0)
-            timing_next('左圖梯度與28點取樣')
+            timing_next('左圖梯度與區域取點')
             left_points, point_metadata, _magnitude, left_roi = select_region_points(
                 left_gray, point_p, config, exclusion_mask=left_excluded)
             timing_next('左圖尺度金字塔與響應圖')
             if left_context is None:
-                left_context = dense_frames.create_frame_context(left_gray, config)
+                left_context = frame_context(left_gray, config, _session, 'left', left_spec_mask)
             timing_next('左圖尺度選擇與角度估計')
             left_frames = estimate_dense_sift_frames(
                 left_gray, left_points, left_frame_config, context=left_context,
                 valid_mask=(1 - left_spec_mask)
-                if reject_specular and config.specular_check_support else None)
-            del left_context
-            if not np.all(left_frames['valid']):
+                if reject_specular and config.specular_check_support and not config.use_masked_sift else None)
+            if not config.use_masked_sift and not np.all(left_frames['valid']):
                 raise RegionSIFTError(
                     'left anchors lack complete reflection-free SIFT/scale-space support; '
                     'move the click inward or tune the support limit')
             timing_next('左圖SIFT descriptor')
-            left_descriptors = compute_descriptors_at_points(
-                left_gray, left_points, sift, config,
-                sizes_px=left_frames["size_px"],
-                angles_deg=left_frames["angle_deg"],
-                octaves=left_frames['octave'])
+            if config.use_masked_sift:
+                from Algorithm.masked_sift_descriptor import compute_descriptors, group_validity
+                left_masked = compute_descriptors(left_context, left_points,
+                    left_frames['size_px'], left_frames['angle_deg'], config)
+                left_masked['valid_points'] &= left_frames['valid']
+                if not group_validity(left_masked['valid_points'][None], point_metadata, config)[0]:
+                    raise RegionSIFTError('匹配失敗: 自製 SIFT 左圖有效點比例或每 cell 有效點不足')
+                left_descriptors = left_masked['descriptors']
+                left_frames['masked_valid_fraction'] = left_masked['valid_fraction']
+                left_frames['masked_point_valid'] = left_masked['valid_points']
+                left_frames['scale_reliable'] &= left_masked['valid_points']
+                left_frames['orientation_reliable'] &= left_masked['valid_points']
+            else:
+                left_descriptors = compute_descriptors_at_points(
+                    left_gray, left_points, sift, config,
+                    sizes_px=left_frames["size_px"],
+                    angles_deg=left_frames["angle_deg"],
+                    octaves=left_frames['octave'])
+            del left_context
             timing_next('左圖快取保存')
             if left_cache is not None:
                 left_cache["region_sift"] = {
@@ -654,6 +729,7 @@ def run_region_sift_matching(
                     "points": left_points,
                     "metadata": [dict(item) for item in point_metadata],
                     "descriptors": left_descriptors,
+                    "masked_descriptors": left_masked,
                     "frames": {
                         key: np.asarray(value).copy()
                         for key, value in left_frames.items()
@@ -671,34 +747,46 @@ def run_region_sift_matching(
         H_lr = plane_homography_left_to_right(cand, K_L)
         H_rl = np.linalg.inv(H_lr)
         height, width = left_gray.shape[:2]
-        warped_right = cv2.warpPerspective(
-            right_gray, H_rl, (width, height),
-            flags=int(config.warp_interpolation),
-            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        source_valid = np.ones(right_gray.shape[:2], dtype=np.float32)
-        warped_fraction = cv2.warpPerspective(
-            source_valid, H_rl, (width, height),
-            flags=int(config.warp_interpolation),
-            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        warped_valid = (warped_fraction >= 1.0 - 1e-6).astype(np.uint8) * 255
-        warped_specular = None
-        if reject_specular:
-            source_specular = right_spec_mask
-            if config.specular_check_support:
-                # Conservatively include the source interpolation footprint.
-                radius = {cv2.INTER_NEAREST: 0, cv2.INTER_LINEAR: 1,
-                          cv2.INTER_CUBIC: 2, cv2.INTER_LANCZOS4: 4}.get(int(config.warp_interpolation), 4)
-                if radius:
-                    source_specular = cv2.dilate(source_specular, np.ones((2 * radius + 1,) * 2, np.uint8))
-            warped_specular = cv2.warpPerspective(
-                source_specular, H_rl, (width, height), flags=cv2.INTER_NEAREST,
+        if _session is not None and 'warp' in _session:
+            warped_right, warped_valid, warped_specular, support_valid = _session['warp']
+        else:
+            warped_right = cv2.warpPerspective(
+                right_gray, H_rl, (width, height),
+                flags=int(config.warp_interpolation),
                 borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-        support_valid = _eroded_valid_mask(
-            warped_valid, int(config.descriptor_border_margin_px),
-            float(config.min_valid_warp_ratio))
+            source_valid = np.ones(right_gray.shape[:2], dtype=np.float32)
+            warped_fraction = cv2.warpPerspective(
+                source_valid, H_rl, (width, height),
+                flags=int(config.warp_interpolation),
+                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            warped_valid = (warped_fraction >= 1.0 - 1e-6).astype(np.uint8) * 255
+            warped_specular = None
+            if reject_specular:
+                source_specular = right_spec_mask
+                if config.specular_check_support or config.use_masked_sift:
+                    # Conservatively include the source interpolation footprint.
+                    radius = {cv2.INTER_NEAREST: 0, cv2.INTER_LINEAR: 1,
+                              cv2.INTER_CUBIC: 2, cv2.INTER_LANCZOS4: 4}.get(int(config.warp_interpolation), 4)
+                    if radius:
+                        source_specular = cv2.dilate(source_specular, np.ones((2 * radius + 1,) * 2, np.uint8))
+                warped_specular = cv2.warpPerspective(
+                    source_specular, H_rl, (width, height), flags=cv2.INTER_NEAREST,
+                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            support_valid = _eroded_valid_mask(
+                warped_valid, int(config.descriptor_border_margin_px),
+                float(config.min_valid_warp_ratio))
+            if _session is not None:
+                _session['warp'] = (warped_right, warped_valid, warped_specular, support_valid)
+                _session['warp_builds'] = _session.get('warp_builds', 0) + 1
 
         timing_next('極線候選建立與初步篩選')
         band = build_epipolar_band(point_p, cand["F"], H_lr, config)
+        if _offsets is not None:
+            offsets = np.asarray(_offsets, dtype=np.float32).reshape(-1, 2)
+            band['along_offsets'], band['across_offsets'] = offsets[:, 0], offsets[:, 1]
+            band['centers_warp'] = (band['seed_on_line'][None, :]
+                + offsets[:, :1] * band['tangent'][None, :]
+                + offsets[:, 1:] * band['normal'][None, :]).astype(np.float32)
         p = np.asarray(point_p, dtype=np.float32).reshape(2)
         point_offsets = left_points - p
         centers = band["centers_warp"]
@@ -713,97 +801,35 @@ def run_region_sift_matching(
             & (all_positions[:, :, 1] <= height - 1)
             & (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height))
         valid_candidates = np.all(in_bounds, axis=1)
+        funnel = base_result['candidate_funnel']
+        funnel['requested_candidates'] = int(len(all_positions))
+        funnel['in_bounds_candidates'] = int(np.count_nonzero(valid_candidates))
         in_bound_indices = np.flatnonzero(valid_candidates)
         for candidate_index in in_bound_indices:
             valid_candidates[candidate_index] = bool(np.all(
                 support_valid[ys[candidate_index], xs[candidate_index]] > 0))
+        funnel['warp_support_candidates'] = int(np.count_nonzero(valid_candidates))
         before_specular = int(np.count_nonzero(valid_candidates))
-        if warped_specular is not None:
+        if warped_specular is not None and not config.use_masked_sift:
             for candidate_index in np.flatnonzero(valid_candidates):
                 valid_candidates[candidate_index] &= not np.any(
                     warped_specular[ys[candidate_index], xs[candidate_index]])
         base_result['timing_counts']['specular_center_rejected_candidates'] = (
             before_specular - int(np.count_nonzero(valid_candidates)))
+        funnel['center_mask_candidates'] = int(np.count_nonzero(valid_candidates))
+        funnel['initial_eligible_candidates'] = int(np.count_nonzero(valid_candidates))
         valid_indices = np.flatnonzero(valid_candidates)
         if len(valid_indices) == 0:
             raise RegionSIFTError("匹配失敗: no search candidate has valid warp support and reflection-free anchors")
 
-        group_scores = np.full(len(centers), np.inf, dtype=np.float64)
-        objective_scores = np.full(len(centers), np.inf, dtype=np.float64)
-        trimmed_scores = np.full(len(centers), np.inf, dtype=np.float64)
-        balanced_scores = np.full(len(centers), np.inf, dtype=np.float64)
-        frame_penalties = np.full(len(centers), np.inf, dtype=np.float64)
-        candidate_distances: Dict[int, np.ndarray] = {}
-        candidate_descriptors: Dict[int, np.ndarray] = {}
-        valid_positions = all_positions[valid_indices]
-        flat_valid_positions = valid_positions.reshape(-1, 2)
-        timing_next('右圖尺度金字塔與響應圖')
-        right_context = dense_frames.create_frame_context(warped_right, config)
-        timing_next('右圖尺度選擇與角度估計')
-        right_frames_flat = estimate_dense_sift_frames(
-            warped_right, flat_valid_positions,
-            replace(config, min_valid_warp_ratio=1.0)
-            if reject_specular and config.specular_check_support else config,
-            context=right_context,
-            valid_mask=np.where(warped_specular > 0, 0, warped_valid).astype(np.uint8)
-            if reject_specular and config.specular_check_support else warped_valid)
-        del right_context
-        timing_next('候選完整support篩選')
-        right_frames = {
-            key: np.asarray(value).reshape(len(valid_indices), point_count)
-            for key, value in right_frames_flat.items()
-        }
-        complete_support = np.all(right_frames['valid'], axis=1)
-        base_result['timing_counts']['incomplete_support_rejected_candidates'] = int(np.count_nonzero(~complete_support))
-        valid_indices = valid_indices[complete_support]
-        right_frames = {key: value[complete_support]
-                        for key, value in right_frames.items()}
-        if len(valid_indices) == 0:
-            raise RegionSIFTError('匹配失敗: no search candidate has complete reflection-free per-scale SIFT support')
-        valid_row_by_candidate = {
-            int(candidate_index): row_index
-            for row_index, candidate_index in enumerate(valid_indices)
-        }
-        candidates_per_batch = max(
-            1, int(config.descriptor_batch_size) // max(1, point_count))
-
-        for start in range(0, len(valid_indices), candidates_per_batch):
-            timing_next('右圖SIFT descriptor（各batch累計）')
-            batch_indices = valid_indices[start:start + candidates_per_batch]
-            batch_points = all_positions[batch_indices].reshape(-1, 2)
-            valid_rows = np.arange(start, start + len(batch_indices))
-            batch_descriptors = compute_descriptors_at_points(
-                warped_right, batch_points, sift, config,
-                sizes_px=right_frames["size_px"][valid_rows].reshape(-1),
-                angles_deg=right_frames["angle_deg"][valid_rows].reshape(-1),
-                octaves=right_frames['octave'][valid_rows].reshape(-1))
-            base_result['timing_counts']['right_descriptor_batches'] += 1
-            base_result['timing_counts']['right_descriptor_rows'] += len(batch_descriptors)
-            timing_next('L2距離、群組評分與候選保存（累計）')
-            expected_rows = len(batch_indices) * point_count
-            if len(batch_descriptors) != expected_rows:
-                raise RegionSIFTError(
-                    f"right descriptor batch returned {len(batch_descriptors)}/{expected_rows} rows")
-            matrices = batch_descriptors.reshape(len(batch_indices), point_count, 128)
-            distances = np.linalg.norm(
-                matrices - left_descriptors[None, :, :], axis=2)
-            components = score_candidate_groups(
-                distances, point_metadata, left_frames,
-                {key: value[valid_rows] for key, value in right_frames.items()},
-                config)
-            scores = components['group_score']
-            penalties = (float(config.epipolar_penalty_weight)
-                         * np.abs(band["across_offsets"][batch_indices]))
-            for local_index, candidate_index in enumerate(batch_indices):
-                ci = int(candidate_index)
-                group_scores[ci] = float(scores[local_index])
-                trimmed_scores[ci] = float(components['trimmed_mean'][local_index])
-                balanced_scores[ci] = float(components['balanced_mean'][local_index])
-                frame_penalties[ci] = float(components['frame_penalty'][local_index])
-                objective_scores[ci] = float(
-                    components['objective_without_epi'][local_index] + penalties[local_index])
-                candidate_distances[ci] = distances[local_index].astype(np.float32)
-                candidate_descriptors[ci] = matrices[local_index].astype(np.float32)
+        (group_scores, objective_scores, trimmed_scores, balanced_scores,
+         frame_penalties, candidate_distances, candidate_descriptors,
+         right_frames, valid_row_by_candidate) = evaluate_positions(
+            warped_right, all_positions, valid_indices, warped_valid,
+            warped_specular, reject_specular, band, left_descriptors,
+            point_metadata, left_frames, sift, config, _session, _candidate_cache,
+            timing_next, base_result['timing_counts'], left_masked=left_masked,
+            funnel=funnel)
 
         timing_next('最佳候選、座標回轉與Debug整理')
         finite_indices = np.flatnonzero(np.isfinite(objective_scores))
@@ -834,7 +860,8 @@ def run_region_sift_matching(
             best_distances.reshape(1, -1), point_metadata, left_frames,
             {key: value.reshape(1, -1) for key, value in best_right_frames.items()},
             config)
-        distance_order = np.argsort(best_distances, kind="mergesort")
+        distance_order = np.argsort(np.where(best_right_frames.get('masked_point_valid', np.ones(point_count, bool)),
+                                             best_distances, np.inf), kind="mergesort")
         keep_count = _keep_count(point_count, config)
         keep_mask = np.zeros(point_count, dtype=bool)
         keep_mask[distance_order[:keep_count]] = True
@@ -910,6 +937,8 @@ def run_region_sift_matching(
 
         for index, record in enumerate(point_metadata):
             record.update({
+                'masked_pair_valid': bool(best_right_frames.get('masked_point_valid', np.ones(point_count, bool))[index]),
+                'distance_includes_missing_penalty': bool(config.use_masked_sift),
                 "left_point": left_points[index].copy(),
                 "right_point_warp": best_points_warp[index].copy(),
                 "right_point_original": best_points_right[index].copy(),
@@ -947,7 +976,9 @@ def run_region_sift_matching(
             second_row = valid_row_by_candidate[second_index]
             second_distances = candidate_distances[second_index].copy()
             second_keep = np.zeros(point_count, dtype=bool)
-            second_keep[np.argsort(second_distances, kind='stable')[:keep_count]] = True
+            second_valid = right_frames.get('masked_point_valid')
+            second_sort = second_distances if second_valid is None else np.where(second_valid[second_row], second_distances, np.inf)
+            second_keep[np.argsort(second_sort, kind='stable')[:keep_count]] = True
             second_debug = {
                 'points_warp': all_positions[second_index].copy(),
                 'center_right': _transform_points(centers[second_index].reshape(1, 2), H_lr)[0],
@@ -971,6 +1002,9 @@ def run_region_sift_matching(
             "left_scale_responses": left_frames["scale_response"],
             "left_orientation_strengths": left_frames["orientation_strength"],
             "left_descriptors": left_descriptors,
+            "descriptor_backend": base_result['descriptor_backend'],
+            "left_masked_coverage": None if left_masked is None else left_masked['cell_valid_fraction'],
+            "left_masked_packet": left_masked,
             'left_frames': left_frames,
             'right_frames': best_right_frames,
             "point_metadata": point_metadata,
@@ -980,7 +1014,7 @@ def run_region_sift_matching(
             "warped_valid_mask": warped_valid,
             "warped_specular_mask": warped_specular,
             "reject_specular": bool(reject_specular),
-            "specular_check_support": bool(config.specular_check_support),
+            "specular_check_support": bool(config.specular_check_support and not config.use_masked_sift),
             "line_right": band["line_right"],
             "line_warp": band["line_warp"],
             "tangent": band["tangent"],
@@ -1047,8 +1081,10 @@ def run_region_sift_matching(
             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
         }
         rejection = None
+        informative_left = (left_descriptors[left_masked['valid_points']]
+                            if left_masked is not None else left_descriptors)
         if (config.reject_uninformative_group
-                and np.all(np.linalg.norm(left_descriptors, axis=1) <= 1e-12)):
+                and np.all(np.linalg.norm(informative_left, axis=1) <= 1e-12)):
             rejection = 'all left SIFT descriptors are zero; the group cannot determine a location'
         score_span = float(np.ptp(group_scores[finite_indices]))
         debug['score_surface_span'] = score_span
@@ -1080,7 +1116,7 @@ def run_region_sift_matching(
 
         base_result.update({
             "m_pt": best_center_right.astype(np.float32),
-            "method": f"Region-SIFT({keep_count}/{point_count})",
+            "method": f"Region-SIFT({keep_count}/{point_count})" + ('+MaskedSIFT' if config.use_masked_sift else ''),
             "region_debug": debug,
         })
         return base_result
@@ -1096,6 +1132,8 @@ def run_region_sift_matching(
             base_result['region_debug']['timing_ms'] = dict(timing_ms)
             base_result['region_debug']['timing_counts'] = dict(base_result['timing_counts'])
             base_result['region_debug']['elapsed_ms'] = base_result['elapsed_ms']
+            base_result['region_debug']['detail_profile'] = detail_profile
+        end_detail(detail_token)
 
 
 def with_config(config: RegionSIFTConfig = DEFAULT_CONFIG, **changes: Any) -> RegionSIFTConfig:

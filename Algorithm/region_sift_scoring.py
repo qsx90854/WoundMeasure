@@ -102,7 +102,11 @@ def score_candidate_groups(
     else:
         keep_count = int(config.keep_best_count)
     keep_count = min(point_count, max(1, keep_count))
-    order = np.argsort(values, axis=1, kind="stable")
+    sort_values = values
+    if getattr(config, 'use_masked_sift', False) and 'masked_point_valid' in right_frames:
+        pair_valid = np.asarray(right_frames['masked_point_valid'], bool).reshape(values.shape)
+        sort_values = np.where(pair_valid, values, np.inf)
+    order = np.argsort(sort_values, axis=1, kind="stable")
     keep_mask = np.zeros(values.shape, dtype=bool)
     np.put_along_axis(keep_mask, order[:, :keep_count], True, axis=1)
     trimmed_mean = np.mean(

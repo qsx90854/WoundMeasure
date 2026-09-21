@@ -15,13 +15,13 @@ from Algorithm.drag_height_profile import DragProfileConfig, DragHeightProfile, 
 
 class SamplingTests(unittest.TestCase):
     def test_ten_samples_include_endpoints(self):
-        points, distances, spacing = sample_drag_path([(10, 10), (190, 10)], DragProfileConfig())
+        points, distances, spacing = sample_drag_path([(10, 10), (190, 10)], DragProfileConfig(spacing_px=20.0))
         np.testing.assert_array_equal(points[:, 0], np.arange(10, 191, 20))
         np.testing.assert_array_equal(distances, np.arange(0, 181, 20))
         self.assertEqual(spacing, 20)
 
     def test_bent_path_uses_arclength_not_endpoint_chord(self):
-        points, _, _ = sample_drag_path([(0, 0), (0, 0), (40, 0), (40, 40)], DragProfileConfig())
+        points, _, _ = sample_drag_path([(0, 0), (0, 0), (40, 0), (40, 40)], DragProfileConfig(spacing_px=20.0))
         np.testing.assert_array_equal(points, [[0, 0], [20, 0], [40, 0], [40, 20], [40, 40]])
 
     def test_cap_preserves_endpoints_and_tiny_spacing_deduplicates_pixels(self):
@@ -93,7 +93,7 @@ class ControllerTests(unittest.TestCase):
         self.measure = Mock(side_effect=self.result)
         self.replay, self.restore = Mock(), Mock()
         self.controller = DragHeightProfile(
-            self.fig, self.left, self.right, button, DragProfileConfig(),
+            self.fig, self.left, self.right, button, DragProfileConfig(spacing_px=20.0),
             activate=Mock(return_value=True), deactivate=self.restore,
             measure=self.measure, replay=self.replay, notify=Mock(), refresh=Mock(),
             image_shape=lambda: (100, 220, 3))

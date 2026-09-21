@@ -68,7 +68,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
                        get_selected_height_plane=lambda: (np.array([0, 0, 1]), np.zeros(3), 'Shared Pattern Plane'),
                        VIDEO_PATH='test.mp4', MEASURE_MODE='dual_direct',
                        DEFAULT_WOUND_HEIGHT_OFFSET_MM=0, shared_height_plane_diag={},
-                       REGION_SIFT_CONFIG=SimpleNamespace(group_balance_weight=0.35), KL=np.eye(3),
+                       REGION_SIFT_CONFIG=SimpleNamespace(group_balance_weight=0.35, use_masked_sift=False), KL=np.eye(3),
                        scatter_A=SimpleNamespace(set_offsets=Mock()),
                        do_measure=Mock(return_value={'height_display_mm': 12.5, 'fail_reason': ''}))
         widget_names = [f'c{i}' for i in range(1, 20)] + [
@@ -79,7 +79,8 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
             'btn_metric_blocks', 'btn_shared_plane', 'btn_top2_geo', 'btn_h_residual',
             'btn_rt_warp_view', 'btn_block_accuracy', 'btn_block_cancel', 'btn_block_mae',
             'text_region_u', 'text_region_v', 'btn_region_replay', 'btn_region_settings',
-            'btn_height_profile']
+            'btn_height_profile', 'btn_sift_backend', 'btn_specular_settings',
+            'btn_specular_v2', 'btn_specular_v2_settings']
         self.ns.update({name: FakeWidget() for name in widget_names})
         tree = ast.parse(SOURCE.read_text(encoding='utf-8-sig'))
         names = ['on_region_coordinate_replay', 'apply_region_settings',
@@ -146,7 +147,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
 
     def test_region_settings_apply_is_atomic_and_blocked_during_batch(self):
         previous = self.ns['REGION_SIFT_CONFIG']
-        updated = SimpleNamespace(group_balance_weight=0.5)
+        updated = SimpleNamespace(group_balance_weight=0.5, use_masked_sift=True)
         self.state['mode'] = 'running'
         with self.assertRaises(ValueError):
             self.callbacks['apply_region_settings'](updated)
@@ -154,6 +155,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.state['mode'] = 'idle'
         self.callbacks['apply_region_settings'](updated)
         self.assertIs(self.ns['REGION_SIFT_CONFIG'], updated)
+        self.ns['btn_sift_backend'].label.set_text.assert_called_with('Descriptor: 自製')
         self.ns['do_measure'].assert_not_called()
 
     def test_region_coordinate_replay_rejects_invalid_mode_and_coordinates(self):
@@ -273,25 +275,22 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
         self.assertIn('finish/cancel', self.ns['depth_text'].set_text.call_args.args[0])
         self.callbacks['finish_block_accuracy']()
 
-    def test_real_radio_controls_disable_and_restore_without_selecting_options(self):
+    def test_real_specular_control_disables_and_restores_without_triggering_toggle(self):
         FigureCanvasAgg(self.figure)
-        radio = RadioButtons(self.figure.add_axes([0.42, 0.836, 0.13, 0.12]),
-                             ('Direct', 'Dedrift', 'Flow'), active=2)
-        # The application sets per-option colors; bool indexing through the
-        # radio's set_active(False) then raises the reported RGBA exception.
-        radio.set_radio_props({'facecolor': ['cyan', 'cyan', 'cyan']})
+        specular = Button(self.figure.add_axes([0.42, 0.895, 0.13, 0.028]),
+                          'V2: Off', useblit=False)
         on_change = Mock()
-        radio.on_clicked(on_change)
+        specular.on_clicked(on_change)
         textbox = TextBox(self.figure.add_axes([0.78, 0.824, 0.08, 0.026]), '', initial='0')
-        self.ns.update(radio_mode=radio, text_box=textbox)
+        self.ns.update(btn_specular_v2=specular, text_box=textbox)
         self.callbacks['on_block_accuracy'](None)
-        self.assertFalse(radio.active)
+        self.assertFalse(specular.active)
         self.assertFalse(textbox.active)
-        self.assertEqual(radio.value_selected, 'Flow')
+        self.assertEqual(specular.label.get_text(), 'V2: Off')
         self.callbacks['finish_block_accuracy']()
-        self.assertTrue(radio.active)
+        self.assertTrue(specular.active)
         self.assertTrue(textbox.active)
-        self.assertEqual(radio.value_selected, 'Flow')
+        self.assertEqual(specular.label.get_text(), 'V2: Off')
         on_change.assert_not_called()
 
     def test_real_radio_full_measure_finish_and_mae_stays_usable(self):

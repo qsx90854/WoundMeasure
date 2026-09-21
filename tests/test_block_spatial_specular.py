@@ -127,6 +127,7 @@ class SpatialApplicationRoutingTests(unittest.TestCase):
         for node in nodes:
             node.body = [ast.Global(stmt.names) if isinstance(stmt, ast.Nonlocal) else stmt for stmt in node.body]
         self.ns = dict(np=np, cv2=cv2, use_wound_adaptive_spatial_specular=True,
+                       use_specular_model_v2=False,
                        SPATIAL_BLOCK_CONFIG=BlockSpatialSpecularConfig(),
                        compute_specular_mask_bgr_block_adaptive=compute_specular_mask_bgr_block_adaptive,
                        compute_specular_mask_bgr_wound_adaptive=Mock(return_value=np.full((32, 32), 255, np.uint8)),

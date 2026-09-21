@@ -8,6 +8,17 @@ from Algorithm.region_sift_frames import _scale_specs
 
 
 LABELS = {
+    'use_masked_sift': '【自製算子】True=遮罩式 SIFT；False=OpenCV（主畫面按鈕同步）',
+    'masked_extra_margin_px': '【自製算子】反光遮罩額外擴張 px（原遮罩已有膨脹）',
+    'masked_min_blur_weight': '【自製算子】Gaussian 平滑最低有效權重 (0,1]',
+    'masked_min_valid_fraction': '【自製算子】每點最低有效覆蓋率 (0,1]',
+    'masked_min_cell_fraction': '【自製算子】SIFT 4×4 子區共同覆蓋下限 (0,1]',
+    'masked_min_common_fraction': '【自製算子】左右點對整體共同覆蓋下限 (0,1]',
+    'masked_descriptor_clip': '【自製算子】descriptor 正規化截斷值 (0,1]',
+    'masked_min_group_fraction': '【自製算子】群組有效點對最低比例（且至少保留原 best-K 數量）',
+    'masked_min_points_per_cell': '【自製算子】每個 Region cell 最少有效點對（至少 1）',
+    'masked_max_deficient_cells': '【自製算子】最多允許幾個 Region cell 未達最少有效點對仍可匹配（0=每格皆須達標）',
+    'masked_missing_penalty_weight': '【自製算子】有效點缺失覆蓋懲罰權重 [0,1]；無效點固定最大距離',
     'grid_rows': '取點區塊列數（奇數）',
     'grid_cols': '取點區塊欄數（奇數）',
     'cell_width_px': '每格寬度 px', 'cell_height_px': '每格高度 px',
@@ -39,6 +50,21 @@ LABELS = {
     'search_width_px': '垂直極線搜尋寬度 px',
     'search_along_step_px': '沿極線步長 px',
     'search_across_step_px': '垂直極線步長 px',
+    'two_stage_search': '兩階段搜尋（False 使用原本完整搜尋）',
+    'coarse_along_step_px': '粗搜沿極線步長 px',
+    'coarse_side_rescue': '中心線低谷不明確時補搜兩側邊線',
+    'fine_half_length_px': '細搜沿線半長 px（10 表示中心 ±10）',
+    'fine_width_px': '細搜帶寬 px（不超過原始搜尋帶）',
+    'fine_step_px': '細搜沿線／橫向步長 px',
+    'adaptive_max_expansions': '自適應擴大次數上限 0~2',
+    'adaptive_cell_increment_px': '每次擴大 cell 寬高的增量 px',
+    'adaptive_points_increment': '每次每格增加取點數',
+    'valley_min_relative_depth': '低谷相對兩側肩部的最小下降比例',
+    'valley_shoulder_distance_px': '低谷左右肩部觀察距離 px',
+    'valley_level_fraction': '低谷底部邊界：谷底至肩部的比例',
+    'valley_min_side_samples': '低谷每側最少有效樣本數',
+    'valley_min_valid_fraction': '沿線有效樣本最低比例',
+    'valley_max_basin_ratio': '不同低谷最佳 Objective 比值上限',
     'keep_best_ratio': '最佳點保留比例',
     'keep_best_count': '固定保留點數（None 使用比例）',
     'max_group_score': 'BestG 上限（None 關閉）',
@@ -57,7 +83,7 @@ LABELS = {
     'min_valid_warp_ratio': 'Warp 有效像素比例',
     'descriptor_border_margin_px': 'descriptor 邊界留白 px',
     'descriptor_batch_size': '每批 descriptor 數量',
-    'specular_check_support': 'Reject SpecPts：True 檢查完整 support；False 只檢查中心',
+    'specular_check_support': '【OpenCV】Reject SpecPts 完整 support 檢查；自製模式不使用',
 }
 
 
@@ -133,6 +159,8 @@ def show_region_sift_settings(parent, current, on_apply):
     window.transient(parent)
     ttk.Label(window, text='修改後按「套用」：下一次量測生效。未按套用不會變更；重新啟動後使用程式設定。',
               padding=10).pack(anchor='w')
+    ttk.Label(window, text='【自製算子】欄位僅自製模式生效：固定使用空間反光遮罩／不使用 CLAHE；分數門檻需重新驗證。',
+              padding=6).pack(anchor='w')
     body = ttk.Frame(window)
     body.pack(fill='both', expand=True, padx=10)
     canvas = tk.Canvas(body, highlightthickness=0)
