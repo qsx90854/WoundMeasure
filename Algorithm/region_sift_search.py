@@ -36,17 +36,40 @@ def validate_search_config(config):
             raise RegionSIFTError(f'{name} must be in (0, 1]')
 
 
-def frame_context(image, config, session, side, specular_mask=None, valid_mask=None):
+def frame_context(image, config, session, side, specular_mask=None, valid_mask=None, roi=None):
+    """roi=(x0,y0,x1,y1), masked-SIFT only: crop before building the pyramid.
+
+    context['origin'] is (0,0) when uncropped, else the crop's top-left in the
+    original image; callers must subtract it from point coordinates before
+    indexing into the context (its own outputs -- sizes, angles, descriptors,
+    coverage -- carry no coordinates, so nothing needs shifting back). Safe
+    whenever every sampled point's support radius stays inside the crop (see
+    masked_sift_descriptor.max_support_radius): pixels outside the crop are
+    then never read, so results are identical to running on the full image.
+    """
     def build():
         if config.use_masked_sift:
             from Algorithm.masked_sift_descriptor import create_context
-            return create_context(image, specular_mask, config, valid_mask)
-        return frames.create_frame_context(image, config)
+            source_image, source_specular, source_valid, origin = image, specular_mask, valid_mask, (0, 0)
+            if roi is not None:
+                x0, y0, x1, y1 = roi
+                source_image = image[y0:y1, x0:x1]
+                source_specular = specular_mask[y0:y1, x0:x1] if specular_mask is not None else None
+                source_valid = valid_mask[y0:y1, x0:x1] if valid_mask is not None else None
+                origin = (x0, y0)
+            context = create_context(source_image, source_specular, config, source_valid)
+        else:
+            context = frames.create_frame_context(image, config)
+            origin = (0, 0)
+        context['origin'] = origin
+        return context
     if session is None:
         return build()
     key = side + '_context'
-    if key not in session:
+    cached = session.get(key)
+    if cached is None or cached.get('_roi') != roi:
         session[key] = build()
+        session[key]['_roi'] = roi
         session[side + '_context_builds'] = session.get(side + '_context_builds', 0) + 1
     return session[key]
 
@@ -55,7 +78,8 @@ def frame_context(image, config, session, side, specular_mask=None, valid_mask=N
 def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
                        warped_specular, reject_specular, band, left_descriptors,
                        point_metadata, left_frames, sift, config, session, cache,
-                       timing_next, counts, left_masked=None, funnel=None):
+                       timing_next, counts, left_masked=None, funnel=None,
+                       right_context_roi=None):
     """Evaluate only new exact-coordinate candidates; cache frames and descriptors.
 
     The cache belongs to ONE anchor configuration, and is discarded on expansion.
@@ -83,15 +107,28 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
     point_count = len(left_descriptors)
     if len(pending):
         timing_next('右圖尺度金字塔與響應圖')
-        context = frame_context(warped_right, config, session, 'right', warped_specular, warped_valid)
+        context = frame_context(warped_right, config, session, 'right', warped_specular, warped_valid,
+                                roi=right_context_roi)
+        # The context may be a crop; its own outputs carry no coordinates, so
+        # only calls that index into it need positions shifted into its local
+        # frame (all_positions itself, cached/returned elsewhere, stays
+        # absolute). origin is (0,0) whenever uncropped, making every slice
+        # below a no-op view of the full array.
+        right_origin = np.asarray(context.get('origin', (0, 0)), np.float32)
+        _oy, _ox = int(right_origin[1]), int(right_origin[0])
+        _ch, _cw = context['image_shape']
+        right_context_image = warped_right[_oy:_oy + _ch, _ox:_ox + _cw]
+        right_context_valid = warped_valid[_oy:_oy + _ch, _ox:_ox + _cw]
+        right_context_specular = (warped_specular[_oy:_oy + _ch, _ox:_ox + _cw]
+                                  if warped_specular is not None else None)
         timing_next('右圖尺度選擇與角度估計')
         right_flat = matcher.estimate_dense_sift_frames(
-            warped_right, all_positions[pending].reshape(-1, 2),
+            right_context_image, all_positions[pending].reshape(-1, 2) - right_origin,
             replace(config, min_valid_warp_ratio=1.0)
             if reject_specular and config.specular_check_support and not config.use_masked_sift else config,
             context=context,
-            valid_mask=np.where(warped_specular > 0, 0, warped_valid).astype(np.uint8)
-            if reject_specular and config.specular_check_support and not config.use_masked_sift else warped_valid)
+            valid_mask=np.where(right_context_specular > 0, 0, right_context_valid).astype(np.uint8)
+            if reject_specular and config.specular_check_support and not config.use_masked_sift else right_context_valid)
         timing_next('候選完整support篩選')
         right = {key: np.asarray(value).reshape(len(pending), point_count)
                  for key, value in right_flat.items()}
@@ -115,7 +152,7 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
             rows = np.arange(start, start + len(indices))
             if config.use_masked_sift:
                 from Algorithm.masked_sift_descriptor import compute_descriptors, compare_descriptors
-                packet = compute_descriptors(context, all_positions[indices].reshape(-1, 2),
+                packet = compute_descriptors(context, all_positions[indices].reshape(-1, 2) - right_origin,
                     right['size_px'][rows].reshape(-1), right['angle_deg'][rows].reshape(-1), config)
                 descriptors = packet['descriptors']
                 packet = {key: value.reshape((len(indices), point_count) + value.shape[1:])

@@ -8,7 +8,8 @@ import cv2
 import numpy as np
 
 from Algorithm import masked_sift_descriptor as masked, region_sift_frames as frames
-from Algorithm.Region_SIFT_Matching import DEFAULT_CONFIG, run_region_sift_matching
+from Algorithm.Region_SIFT_Matching import (
+    DEFAULT_CONFIG, run_region_sift_matching, _left_context_roi, _right_context_roi)
 from Algorithm.region_sift_settings import parse_config_values, LABELS
 
 
@@ -160,6 +161,85 @@ class MaskedSIFTTests(unittest.TestCase):
         expanded = masked.exclusion_mask(self.mask, replace(self.cfg, masked_extra_margin_px=2))
         self.assertEqual(np.count_nonzero(expanded), 25)
         np.testing.assert_array_equal(self.mask, before)
+
+    def test_roi_crop_matches_full_image_left_descriptor(self):
+        """Tier-1 perf change: cropping the pyramid input to a safe ROI around
+        the anchor must reproduce the exact frames/descriptor computed on the
+        full image -- proves the crop margin (max_support_radius +
+        masked_extra_margin_px) is sufficient and origin bookkeeping correct."""
+        from Algorithm import region_sift_search as search
+        self.mask[95:108, 115:128] = 255
+        full_context = masked.create_context(self.image, self.mask, self.cfg)
+        margin = masked.max_support_radius(self.cfg) + self.cfg.masked_extra_margin_px + 2
+        x0 = max(0, int(self.points[:, 0].min()) - margin)
+        y0 = max(0, int(self.points[:, 1].min()) - margin)
+        x1 = min(self.image.shape[1], int(self.points[:, 0].max()) + margin + 1)
+        y1 = min(self.image.shape[0], int(self.points[:, 1].max()) + margin + 1)
+        self.assertLess(x1 - x0, self.image.shape[1])  # the crop is a proper subset
+        self.assertLess(y1 - y0, self.image.shape[0])
+        cropped_context = search.frame_context(
+            self.image, self.cfg, None, 'left', self.mask, roi=(x0, y0, x1, y1))
+        self.assertEqual(tuple(cropped_context['origin']), (x0, y0))
+        origin = np.asarray(cropped_context['origin'], np.float32)
+        local_points = self.points - origin
+        f_full = frames.estimate_dense_sift_frames(self.image, self.points, self.cfg, context=full_context)
+        f_crop = frames.estimate_dense_sift_frames(
+            self.image[y0:y1, x0:x1], local_points, self.cfg, context=cropped_context)
+        for key in f_full:
+            np.testing.assert_array_equal(f_full[key], f_crop[key])
+        d_full = masked.compute_descriptors(
+            full_context, self.points, f_full['size_px'], f_full['angle_deg'], self.cfg)
+        d_crop = masked.compute_descriptors(
+            cropped_context, local_points, f_crop['size_px'], f_crop['angle_deg'], self.cfg)
+        for key in d_full:
+            np.testing.assert_array_equal(d_full[key], d_crop[key])
+
+    def test_left_context_roi_skips_crop_when_quantization_is_active(self):
+        """frame_coordinate_quantization_px rounds to a step generally
+        unaligned with the crop's pixel origin, so cropping first could pick a
+        different scale/angle than the full image would (found in review of
+        the Tier-1 perf change). _left_context_roi must fall back to the full
+        image (None) whenever that knob is on, and still crop when it is off."""
+        left_roi = (100, 90, 30, 30)
+        self.assertIsNotNone(_left_context_roi(self.cfg, left_roi, self.image.shape))
+        quantized = replace(self.cfg, frame_coordinate_quantization_px=1.5)
+        self.assertIsNone(_left_context_roi(quantized, left_roi, self.image.shape))
+        opencv_cfg = replace(self.cfg, use_masked_sift=False)
+        self.assertIsNone(_left_context_roi(opencv_cfg, left_roi, self.image.shape))
+
+    def test_right_context_roi_skips_crop_when_quantization_is_active(self):
+        """Mirrors test_left_context_roi_skips_crop_when_quantization_is_active
+        for the right-side ROI (gap flagged in independent review of the
+        Tier-1 perf change: only the end-to-end path was covered there)."""
+        band = dict(seed_on_line=np.array([130., 110.], np.float32),
+                    tangent=np.array([1., 0.], np.float32),
+                    normal=np.array([0., 1.], np.float32))
+        point_offsets = np.zeros((28, 2), np.float32)
+        self.assertIsNotNone(_right_context_roi(self.cfg, band, point_offsets, self.image.shape))
+        quantized = replace(self.cfg, frame_coordinate_quantization_px=1.5)
+        self.assertIsNone(_right_context_roi(quantized, band, point_offsets, self.image.shape))
+        opencv_cfg = replace(self.cfg, use_masked_sift=False)
+        self.assertIsNone(_right_context_roi(opencv_cfg, band, point_offsets, self.image.shape))
+
+    def test_right_roi_crop_matches_full_image_search(self):
+        """Tier-1 perf change (right side): cropping the right-image pyramid
+        input to a safe ROI must reproduce exactly the same match as
+        searching on the full warped image -- proves the crop (built from
+        the maximal search-band polygon, bounded by search_length_px/
+        search_width_px regardless of stage or adaptive expansion) covers
+        every candidate the whole search could ever sample. Forcing
+        _right_context_roi to return None gets the pre-optimization
+        reference without duplicating run_region_sift_matching."""
+        from Algorithm import Region_SIFT_Matching as matcher
+        cropped = self.match()
+        self.assertIsNotNone(cropped['m_pt'], cropped['reject_reason'])
+        with patch.object(matcher, '_right_context_roi', return_value=None):
+            full = self.match()
+        self.assertIsNotNone(full['m_pt'], full['reject_reason'])
+        np.testing.assert_array_equal(cropped['m_pt'], full['m_pt'])
+        np.testing.assert_array_equal(
+            cropped['region_debug']['distances'], full['region_debug']['distances'])
+        self.assertEqual(cropped['method'], full['method'])
 
     def test_right_reflected_anchor_center_is_not_whole_candidate_veto(self):
         right_mask = self.mask.copy()

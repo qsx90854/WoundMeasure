@@ -52,6 +52,64 @@ class DenseSIFTFrameTests(unittest.TestCase):
         rotated_descriptor = self._descriptor(rotated, rotated_point, rotated_frame, config)
         self.assertLess(float(np.linalg.norm(descriptor - rotated_descriptor)), 1.0)
 
+    def test_orientation_weight_cache_matches_uncached_including_boundary_clip(self):
+        """_orientation's optional weight_cache reuses one Gaussian spatial
+        window per entry (scale) instead of recomputing meshgrid+exp for
+        every point (perf change: the window depends only on the entry, never
+        on point position). Must give bit-identical output with or without
+        the cache, including for a point near the image edge whose window is
+        clipped -- exercises the cached-window slicing path, not just a
+        full-window reuse."""
+        from Algorithm.region_sift_frames import _orientation, create_frame_context
+        config = _config()
+        image = self._asymmetric_blob()
+        context = create_frame_context(image, config)
+        entry = context['entries'][0]
+        interior_point = np.array([120., 140.], np.float32)
+        edge_point = np.array([1., 1.], np.float32)  # window clipped by the top-left border
+        cache = {}
+        for point in (interior_point, edge_point):
+            uncached = _orientation(entry, point, config)
+            cached_first = _orientation(entry, point, config, weight_cache=cache, cache_key=0)
+            cached_second = _orientation(entry, point, config, weight_cache=cache, cache_key=0)
+            self.assertEqual(uncached, cached_first)
+            self.assertEqual(cached_first, cached_second)
+        self.assertEqual(len(cache), 1)  # one entry cached, reused for both points
+
+    def test_orientation_batch_matches_per_point_loop_including_edge_points(self):
+        """Step-2 perf change: estimate_dense_sift_frames groups rows by
+        selected entry and calls _orientation_batch once per group (batching
+        the histogram accumulate/smooth/peak-find steps, where per-call NumPy
+        overhead on the tiny 36-bin array dominated real work) instead of
+        calling _orientation once per row. Must reproduce the exact per-point
+        _orientation loop's output for every returned field, including points
+        near the image border whose window is clipped and must fall back to
+        the per-point path inside the batch."""
+        from Algorithm.region_sift_frames import (
+            _orientation, _orientation_batch, create_frame_context)
+        from unittest.mock import patch
+        config = _config(scale_keypoint_sizes_px=(3.2, 4.0, 5.0, 6.4, 8.0, 10.0, 12.8, 16.0))
+        image = self._asymmetric_blob()
+        context = create_frame_context(image, config)
+        rng = np.random.default_rng(7)
+        n = 500
+        points = np.empty((n, 2), np.float32)
+        points[:n // 2] = rng.uniform(0, image.shape[0], size=(n // 2, 2))  # some near the border
+        points[n // 2:] = rng.uniform(30, image.shape[0] - 30, size=(n - n // 2, 2))  # interior
+
+        def forced_per_point(entry, pts, cfg, weight_cache=None, cache_key=None):
+            pts = np.asarray(pts).reshape(-1, 2)
+            out = [_orientation(entry, p, cfg, weight_cache=weight_cache, cache_key=cache_key)
+                   for p in pts]
+            angles, strengths, confidences = zip(*out)
+            return np.array(angles), np.array(strengths), np.array(confidences)
+
+        batched = estimate_dense_sift_frames(image, points, config, context=context)
+        with patch('Algorithm.region_sift_frames._orientation_batch', side_effect=forced_per_point):
+            reference = estimate_dense_sift_frames(image, points, config, context=context)
+        for key in batched:
+            np.testing.assert_array_equal(batched[key], reference[key], err_msg=key)
+
     def test_doubled_image_selects_doubled_scale_and_beats_wrong_scale_descriptor(self):
         image = self._asymmetric_blob()
         config = _config(scale_keypoint_sizes_px=(3.2, 4, 5, 6.4, 8, 10, 12.8, 16, 20, 25.6),

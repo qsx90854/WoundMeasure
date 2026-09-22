@@ -50,6 +50,30 @@ def _smooth(image, valid, sigma):
     return numerator / np.maximum(weight, 1e-12), weight
 
 
+def _entry_support_radius(size, config, ratio):
+    """One candidate scale's support radius; a pure function of config, no image."""
+    sigma = size / 2.
+    orientation_sigma = sigma * config.orientation_sigma_factor
+    pool = sigma * config.scale_response_pool_sigma_factor
+    nominal = float(np.rint(3 * sigma * np.sqrt(2) * 2.5))
+    return float(np.ceil(max(nominal + 1, orientation_sigma * config.orientation_radius_factor + 1)
+                         + frames._gaussian_radius(sigma * ratio)
+                         + (frames._gaussian_radius(pool) if pool > 0 else 0)))
+
+
+def max_support_radius(config):
+    """Largest entry support radius across all candidate scales, without an image.
+
+    Lets a caller size a safe ROI crop before building the pyramid: any point
+    whose full support window (plus masked_extra_margin_px of exclusion-mask
+    dilation) stays inside the crop gets bit-identical results to running on
+    the uncropped image, since pixels outside the crop are then never read.
+    """
+    ratio = float(config.scale_dog_ratio)
+    return int(max(_entry_support_radius(size, config, ratio)
+                    for size, octave, layer, scale_index in frames._scale_specs(config)))
+
+
 @timed('pyramid')
 def create_context(image_gray, specular_mask, config, valid_mask=None):
     validate_config(config)
@@ -100,9 +124,7 @@ def create_context(image_gray, specular_mask, config, valid_mask=None):
             orientation_sigma=orientation_sigma,
             orientation_radius=int(np.rint(orientation_sigma * config.orientation_radius_factor)),
             nominal_radius=nominal,
-            support=float(np.ceil(max(nominal+1, orientation_sigma*config.orientation_radius_factor+1)
-                                 + frames._gaussian_radius(sigma*ratio)
-                                 + (frames._gaussian_radius(pool) if pool > 0 else 0)))))
+            support=_entry_support_radius(size, config, ratio)))
     return dict(image_shape=image.shape, entries=entries, masked=True,
                 valid_mask=valid, layers=config.sift_n_octave_layers, sigma=config.sift_sigma,
                 active_sizes_px=np.array([e['size'] for e in entries], np.float32))

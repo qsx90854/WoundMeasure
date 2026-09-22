@@ -372,6 +372,28 @@ def select_region_points(
     return points, metadata, magnitude, (x0, y0, roi_w, roi_h)
 
 
+def _left_context_roi(
+    config: RegionSIFTConfig, left_roi: Tuple[int, int, int, int],
+    image_shape: Tuple[int, int],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Safe pyramid-crop box around the left anchors, or None for the full image.
+
+    None (full image, the pre-optimization behavior) whenever cropping is not
+    provably safe: the OpenCV backend (untouched by this crop), or
+    frame_coordinate_quantization_px > 0, whose rounding step is not
+    generally aligned with the crop's pixel origin -- cropping first could
+    then pick a different scale/angle than the full image would.
+    """
+    if not config.use_masked_sift or config.frame_coordinate_quantization_px > 0:
+        return None
+    from Algorithm.masked_sift_descriptor import max_support_radius
+    margin = max_support_radius(config) + int(config.masked_extra_margin_px) + 2
+    rx0, ry0, rw, rh = left_roi
+    img_h, img_w = image_shape[:2]
+    return (max(0, rx0 - margin), max(0, ry0 - margin),
+            min(img_w, rx0 + rw + margin), min(img_h, ry0 + rh + margin))
+
+
 def compute_descriptors_at_points(
     image_gray: np.ndarray,
     points: np.ndarray,
@@ -562,6 +584,36 @@ def _search_band_polygon(band: Dict[str, np.ndarray],
     ], dtype=np.float32)
 
 
+def _right_context_roi(
+    config: RegionSIFTConfig, band: Dict[str, np.ndarray], point_offsets: np.ndarray,
+    image_shape: Tuple[int, int],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Safe pyramid-crop box for the masked right context, or None for the
+    full warped-right image (see _left_context_roi for the None conditions).
+
+    Must cover every position ANY round of the whole two-stage search could
+    ever sample for this anchor layout, not just the current round: along
+    and across offsets are always bounded by search_length_px/search_width_px
+    regardless of stage or adaptive expansion (run_two_stage clips fine
+    offsets back inside the original half-range and caps fine_across by
+    search_width_px), so _search_band_polygon's corners -- built from those
+    same two config values -- already bound every candidate center. Adding
+    the anchors' fixed offsets from the click (Minkowski sum of two boxes)
+    then bounds every one of the 28 sampled positions per candidate.
+    """
+    if not config.use_masked_sift or config.frame_coordinate_quantization_px > 0:
+        return None
+    from Algorithm.masked_sift_descriptor import max_support_radius
+    margin = max_support_radius(config) + int(config.masked_extra_margin_px) + 2
+    polygon = _search_band_polygon(band, config)
+    offsets = np.asarray(point_offsets, np.float32).reshape(-1, 2)
+    lo = polygon.min(axis=0) + offsets.min(axis=0) - margin
+    hi = polygon.max(axis=0) + offsets.max(axis=0) + margin
+    img_h, img_w = image_shape[:2]
+    return (max(0, int(np.floor(lo[0]))), max(0, int(np.floor(lo[1]))),
+            min(img_w, int(np.ceil(hi[0])) + 1), min(img_h, int(np.ceil(hi[1])) + 1))
+
+
 def run_region_sift_matching(
     img_left_gray: np.ndarray,
     img_right_gray: np.ndarray,
@@ -692,10 +744,19 @@ def run_region_sift_matching(
                 left_gray, point_p, config, exclusion_mask=left_excluded)
             timing_next('左圖尺度金字塔與響應圖')
             if left_context is None:
-                left_context = frame_context(left_gray, config, _session, 'left', left_spec_mask)
+                left_context = frame_context(left_gray, config, _session, 'left', left_spec_mask,
+                                             roi=_left_context_roi(config, left_roi, left_gray.shape))
+            # The context may be a crop; its own outputs carry no coordinates,
+            # so only the two calls below (which index into it) need points
+            # shifted into its local frame. left_points itself stays absolute.
+            left_origin = np.asarray(left_context.get('origin', (0, 0)), np.float32)
+            local_left_points = left_points - left_origin
+            _oy, _ox = int(left_origin[1]), int(left_origin[0])
+            _ch, _cw = left_context['image_shape']
+            left_context_image = left_gray[_oy:_oy + _ch, _ox:_ox + _cw]
             timing_next('左圖尺度選擇與角度估計')
             left_frames = estimate_dense_sift_frames(
-                left_gray, left_points, left_frame_config, context=left_context,
+                left_context_image, local_left_points, left_frame_config, context=left_context,
                 valid_mask=(1 - left_spec_mask)
                 if reject_specular and config.specular_check_support and not config.use_masked_sift else None)
             if not config.use_masked_sift and not np.all(left_frames['valid']):
@@ -705,7 +766,7 @@ def run_region_sift_matching(
             timing_next('左圖SIFT descriptor')
             if config.use_masked_sift:
                 from Algorithm.masked_sift_descriptor import compute_descriptors, group_validity
-                left_masked = compute_descriptors(left_context, left_points,
+                left_masked = compute_descriptors(left_context, local_left_points,
                     left_frames['size_px'], left_frames['angle_deg'], config)
                 left_masked['valid_points'] &= left_frames['valid']
                 if not group_validity(left_masked['valid_points'][None], point_metadata, config)[0]:
@@ -822,6 +883,7 @@ def run_region_sift_matching(
         if len(valid_indices) == 0:
             raise RegionSIFTError("匹配失敗: no search candidate has valid warp support and reflection-free anchors")
 
+        right_context_roi = _right_context_roi(config, band, point_offsets, warped_right.shape)
         (group_scores, objective_scores, trimmed_scores, balanced_scores,
          frame_penalties, candidate_distances, candidate_descriptors,
          right_frames, valid_row_by_candidate) = evaluate_positions(
@@ -829,7 +891,7 @@ def run_region_sift_matching(
             warped_specular, reject_specular, band, left_descriptors,
             point_metadata, left_frames, sift, config, _session, _candidate_cache,
             timing_next, base_result['timing_counts'], left_masked=left_masked,
-            funnel=funnel)
+            funnel=funnel, right_context_roi=right_context_roi)
 
         timing_next('最佳候選、座標回轉與Debug整理')
         finite_indices = np.flatnonzero(np.isfinite(objective_scores))

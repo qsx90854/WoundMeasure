@@ -196,8 +196,24 @@ def _valid_support(points, radius, shape, bad_integral, min_valid_ratio=1.0):
     return valid
 
 
+def _entry_orientation_weight(entry):
+    """Full (2r+1)x(2r+1) Gaussian spatial weight for this scale's orientation
+    window, r = entry['orientation_radius']. Depends only on the entry (scale),
+    never on a point's position, so it is identical for every point that
+    selects this entry. A boundary-clipped point's actual weight is always a
+    contiguous slice of this array: its xx/yy offsets from center never leave
+    [-r, r] (x0/x1/y0/y1 are clamped to the image against a center within it),
+    so slicing reproduces exactly what recomputing exp() at those same offsets
+    would give.
+    """
+    radius = entry["orientation_radius"]
+    axis = np.arange(-radius, radius + 1)
+    xx, yy = np.meshgrid(axis, axis)
+    return np.exp(-(xx * xx + yy * yy) / (2 * entry["orientation_sigma"] ** 2))
+
+
 @timed('angle')
-def _orientation(entry, point, config):
+def _orientation(entry, point, config, weight_cache=None, cache_key=None):
     detail = DetailTimer('angle')
     factor = float(2 ** entry["octave"])
     center = point / factor
@@ -208,8 +224,14 @@ def _orientation(entry, point, config):
     x0, x1 = max(0, cx - radius), min(gx.shape[1], cx + radius + 1)
     y0, y1 = max(0, cy - radius), min(gx.shape[0], cy + radius + 1)
     detail.mark('中心座標與視窗界限')
-    xx, yy = np.meshgrid(np.arange(x0, x1) - cx, np.arange(y0, y1) - cy)
-    weight = np.exp(-(xx * xx + yy * yy) / (2 * entry["orientation_sigma"] ** 2))
+    if weight_cache is None:
+        full_weight = _entry_orientation_weight(entry)
+    else:
+        full_weight = weight_cache.get(cache_key)
+        if full_weight is None:
+            full_weight = _entry_orientation_weight(entry)
+            weight_cache[cache_key] = full_weight
+    weight = full_weight[y0 - cy + radius:y1 - cy + radius, x0 - cx + radius:x1 - cx + radius]
     detail.mark('座標網格與 Gaussian 權重')
     detail.count('window_pixels', (x1-x0)*(y1-y0))
     local_x, local_y = gx[y0:y1, x0:x1], gy[y0:y1, x0:x1]
@@ -240,6 +262,113 @@ def _orientation(entry, point, config):
     confidence = max(0.0, (strength - second) / strength)
     detail.mark('主峰、次峰與角度可靠性')
     return float(angle), strength, confidence
+
+
+def _orientation_batch(entry, points, config, weight_cache=None, cache_key=None):
+    """Vectorized _orientation for many points sharing one entry (scale).
+
+    Every stage after window extraction is elementwise (arctan2, degrees,
+    mod, roll, argmax, ...); stacking points into one batch never changes any
+    individual element's value, so the only thing that must be checked is
+    that each point's histogram bins stay independent. bincount's combined
+    index (point_index*bins + bin_index) partitions the output into disjoint
+    per-point ranges and processes the raveled input sequentially, so each
+    point accumulates exactly the same (index, weight) terms in exactly the
+    same order as calling _orientation on it alone would -- see
+    tests/test_region_sift_frames.py for the bit-exact proof against a
+    from-scratch reimplementation of the original per-point algorithm.
+
+    A point whose full (2r+1)x(2r+1) window does not fit in the image (rare;
+    after the ROI-crop perf change, only possible on the un-cropped OpenCV
+    path near the true image edge) falls back to plain _orientation, since
+    its smaller, differently-shaped window cannot be stacked with the rest.
+    """
+    from Algorithm.region_sift_profiling import _bucket
+    from time import perf_counter
+
+    factor = float(2 ** entry["octave"])
+    radius = entry["orientation_radius"]
+    gx, gy = entry["gx"], entry["gy"]
+    height, width = gx.shape
+    pts = np.asarray(points, np.float32).reshape(-1, 2)
+    cx = np.rint(pts[:, 0] / factor).astype(int)
+    cy = np.rint(pts[:, 1] / factor).astype(int)
+    clipped = ((cx - radius < 0) | (cx + radius + 1 > width)
+               | (cy - radius < 0) | (cy + radius + 1 > height))
+
+    n = len(pts)
+    angles = np.empty(n, np.float64)
+    strengths = np.empty(n, np.float64)
+    confidences = np.empty(n, np.float64)
+    for i in np.flatnonzero(clipped):
+        angles[i], strengths[i], confidences[i] = _orientation(
+            entry, pts[i], config, weight_cache=weight_cache, cache_key=cache_key)
+
+    full_idx = np.flatnonzero(~clipped)
+    if len(full_idx):
+        bucket = _bucket('angle')
+        started = perf_counter()
+        detail = DetailTimer('angle')
+        if weight_cache is None:
+            full_weight = _entry_orientation_weight(entry)
+        else:
+            full_weight = weight_cache.get(cache_key)
+            if full_weight is None:
+                full_weight = _entry_orientation_weight(entry)
+                weight_cache[cache_key] = full_weight
+        fcx, fcy = cx[full_idx], cy[full_idx]
+        offsets = np.arange(-radius, radius + 1)
+        rows = fcy[:, None, None] + offsets[None, :, None]
+        cols = fcx[:, None, None] + offsets[None, None, :]
+        detail.mark('中心座標與視窗界限')
+        local_x, local_y = gx[rows, cols], gy[rows, cols]
+        magnitude = np.hypot(local_x, local_y) * full_weight[None, :, :]
+        detail.mark('座標網格與 Gaussian 權重')
+        bins = int(_get(config, "orientation_bins", 36))
+        coordinates = np.mod(np.degrees(np.arctan2(local_y, local_x)), 360) * bins / 360
+        lower = np.floor(coordinates).astype(int)
+        fraction = coordinates - lower
+        detail.mark('梯度強度、atan2 與 bin 座標')
+        m = len(full_idx)
+        point_index = np.arange(m)[:, None, None]
+        low_flat = (point_index * bins + (lower % bins)).ravel()
+        high_flat = (point_index * bins + ((lower + 1) % bins)).ravel()
+        histogram = (
+            np.bincount(low_flat, weights=(magnitude * (1 - fraction)).ravel(), minlength=m * bins)
+            + np.bincount(high_flat, weights=(magnitude * fraction).ravel(), minlength=m * bins)
+        ).reshape(m, bins)
+        detail.mark('方向直方圖累加')
+        for _ in range(int(_get(config, "orientation_hist_smooth_passes", 2))):
+            histogram = (np.roll(histogram, 1, axis=1) + 2 * histogram
+                        + np.roll(histogram, -1, axis=1)) / 4
+        detail.mark('方向直方圖平滑')
+        rows_index = np.arange(m)
+        peak = np.argmax(histogram, axis=1)
+        strength = histogram[rows_index, peak]
+        weak = strength <= 1e-8
+        before = histogram[rows_index, (peak - 1) % bins]
+        after = histogram[rows_index, (peak + 1) % bins]
+        denominator = before - 2 * strength + after
+        reliable_curve = np.abs(denominator) > 1e-12
+        safe_denominator = np.where(reliable_curve, denominator, 1.0)
+        offset = np.where(reliable_curve, 0.5 * (before - after) / safe_denominator, 0.0)
+        angle = ((peak + np.clip(offset, -0.5, 0.5)) * 360 / bins) % 360
+        peaks_mask = ((histogram >= np.roll(histogram, 1, axis=1))
+                      & (histogram > np.roll(histogram, -1, axis=1)))
+        peaks_mask[rows_index, peak] = False
+        has_second = np.any(peaks_mask, axis=1)
+        second = np.where(has_second, np.max(np.where(peaks_mask, histogram, -np.inf), axis=1), 0.0)
+        safe_strength = np.where(strength > 0, strength, 1.0)
+        confidence = np.maximum(0.0, (strength - second) / safe_strength)
+        detail.mark('主峰、次峰與角度可靠性')
+        fallback_angle = float(_get(config, "keypoint_angle_deg", 0.0)) % 360
+        angles[full_idx] = np.where(weak, fallback_angle, angle)
+        strengths[full_idx] = np.where(weak, 0.0, strength)
+        confidences[full_idx] = np.where(weak, 0.0, confidence)
+        if bucket is not None:
+            bucket['calls'] += m
+            bucket['total_ms'] += (perf_counter() - started) * 1000.
+    return angles, strengths, confidences
 
 
 @timed('frames')
@@ -326,15 +455,38 @@ def estimate_dense_sift_frames(image_gray, points, config=None, context=None, va
                               / sorted_response[usable, -1])
     detail.mark('尺度選擇、平坦回退與尺度信心')
     detail.count('valid_unique_points', np.count_nonzero(any_valid))
+    # Group rows by selected entry (scale) and batch _orientation across each
+    # group instead of calling it once per row: the histogram accumulate/
+    # smooth/peak-find steps operate on a tiny 36-bin array, where per-call
+    # NumPy overhead dominates real work, so amortizing that overhead across
+    # many rows at once is the actual perf change (see _orientation_batch).
+    fallback_angle = float(_get(config, "keypoint_angle_deg", 0.0)) % 360
+    angle_by_row = np.full(len(unique), fallback_angle, np.float64)
+    strength_by_row = np.zeros(len(unique), np.float64)
+    confidence_by_row = np.zeros(len(unique), np.float64)
+    if automatic:
+        orientation_weight_cache = {}
+        needed_rows = np.flatnonzero(any_valid)
+        for entry_index in np.unique(best[needed_rows]):
+            group_rows = needed_rows[best[needed_rows] == entry_index]
+            group_entry = entries[int(entry_index)]
+            a, s, c = _orientation_batch(
+                group_entry, unique[group_rows], config,
+                weight_cache=orientation_weight_cache, cache_key=int(entry_index))
+            angle_by_row[group_rows] = a
+            strength_by_row[group_rows] = s
+            confidence_by_row[group_rows] = c
+    detail.mark('角度估計（子項見 angle）')
     unique_frames = []
     for row, choice in enumerate(best):
         entry = entries[int(choice)]
         detail.mark('逐點資料、可靠性與迴圈開銷')
         if any_valid[row] and automatic:
-            angle, strength, orientation_confidence = _orientation(entry, unique[row], config)
-            detail.mark('角度估計（子項見 angle）')
+            angle = float(angle_by_row[row])
+            strength = float(strength_by_row[row])
+            orientation_confidence = float(confidence_by_row[row])
         else:
-            angle = float(_get(config, "keypoint_angle_deg", 0.0)) % 360
+            angle = fallback_angle
             strength, orientation_confidence = 0.0, 0.0
         response = float(responses[row, choice]) if any_valid[row] else 0.0
         scale_reliable = (automatic and not flat[row] and confidence[row] >= float(
