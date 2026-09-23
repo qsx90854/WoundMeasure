@@ -32,6 +32,7 @@ from Algorithm import camera_preprocess as camera_algo
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
 from Algorithm import video_pose_analysis_temporal_unified_pattern_guided_local_window as video_pose_algo
 from Algorithm.perf_timer import StageTimer
+from Algorithm.click_latency import ClickLatency
 from Algorithm.paired_view_renderer import PairedViewRenderer
 from Algorithm.lossless_recording import open_lossless_writer
 from Algorithm.block_height_accuracy import (
@@ -213,6 +214,11 @@ GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback use
 # Region-SIFT tuning.  Defaults produce 27 automatic samples + click P,
 # a 28x128 descriptor matrix and a rotated 5x75 epipolar band. GroupScore
 # blends best-21 with cell-balanced ALL-row L2; only reliable frames add a penalty.
+# Display-only switches; no effect on matching, search history or terminal logs.
+# False skips window creation AND drawing, including the SIFT Debug button.
+REGION_SIFT_SHOW_COARSE_FINE_WINDOW = False
+REGION_SIFT_SHOW_AMBIGUITY_WINDOW = False
+
 REGION_SIFT_CONFIG = RegionSIFTConfig(
     two_stage_search=True,
     grid_rows=3,
@@ -285,6 +291,9 @@ DEBUG_METRIC_BLOCK_SIGMA_MULT = 3.0
 DEBUG_METRIC_BLOCK_MAX_REPROJ_PX = 3.5
 UI_RENDER_INTERVAL_MS         = 16  # coalesce navigation events; render only when dirty
 UI_RENDER_PROFILE             = False  # aggregate render timings every 60 updates
+UI_CLICK_LATENCY_PROFILE      = True   # per measurement: callback entry -> main canvas blit
+DEBUG_LEFT_PANEL_ENABLED      = True   # lower-left: skip updates, draw and input when False
+DEBUG_RIGHT_PANEL_ENABLED     = True   # lower-right: independent of main right image/popups
 IDEAL_BASELINE_MM             = 45.0                       # preferred baseline for pair selection
 PAIR_SCORE_REPROJ_W           = 1.00                       # pair selection weight: reprojection error
 PAIR_SCORE_BASELINE_W         = 0.18                       # pair selection weight: baseline away from ideal
@@ -2745,6 +2754,22 @@ def main():
         [0.05, 0.012, 0.445, 0.105], facecolor='#101010')
     ax_debug_info_B = fig.add_axes(
         [0.535, 0.012, 0.445, 0.105], facecolor='#101010')
+
+    def debug_axis_enabled(axis):
+        if axis is ax_debug_A or axis is ax_debug_info_A:
+            return DEBUG_LEFT_PANEL_ENABLED
+        if axis is ax_debug_B or axis is ax_debug_info_B:
+            return DEBUG_RIGHT_PANEL_ENABLED
+        return True
+
+    def debug_artist_enabled(artist):
+        return debug_axis_enabled(artist.axes)
+
+    # Exclude disabled axes from Figure.draw AND the explicit paired renderer.
+    for debug_axis in (ax_debug_A, ax_debug_B, ax_debug_info_A, ax_debug_info_B):
+        if not debug_axis_enabled(debug_axis):
+            debug_axis.set_visible(False)
+            debug_axis.set_animated(True)
     for ax_info, border_color in (
             (ax_debug_info_A, '#8FD3FF'),
             (ax_debug_info_B, '#FFD29A')):
@@ -2757,15 +2782,17 @@ def main():
     im_B = ax_B.imshow(current_cand['rgb'])
     # Debug panels show the actual grayscale inputs used by the default
     # Grad-SIFT/ORB path, rather than the display-only RGB/overlay images.
-    im_debug_A = ax_debug_A.imshow(cv2.cvtColor(imgA_gray, cv2.COLOR_GRAY2RGB))
+    im_debug_A = ax_debug_A.imshow(cv2.cvtColor(imgA_gray, cv2.COLOR_GRAY2RGB)
+                                 if DEBUG_LEFT_PANEL_ENABLED else np.zeros((1, 1, 3), np.uint8))
     im_debug_B = ax_debug_B.imshow(
-        cv2.cvtColor(current_cand['gray'], cv2.COLOR_GRAY2RGB))
+        cv2.cvtColor(current_cand['gray'], cv2.COLOR_GRAY2RGB)
+        if DEBUG_RIGHT_PANEL_ENABLED else np.zeros((1, 1, 3), np.uint8))
     for ax in axes_grid.flat:
         ax.axis("off")
         ax.set_facecolor('#1E1E1E')
     ax_B.set_visible(False)
-    ax_debug_B.set_visible(False)
-    ax_debug_info_B.set_visible(False)
+    ax_debug_B.set_visible((False) and DEBUG_RIGHT_PANEL_ENABLED)
+    ax_debug_info_B.set_visible((False) and DEBUG_RIGHT_PANEL_ENABLED)
         
     # 加入專業感的影像外框
     from matplotlib.patches import Rectangle
@@ -3009,7 +3036,9 @@ def main():
     # Region-SIFT uses the same lower axes but keeps its dynamic 3x3 grid,
     # rotated search band and numbered point annotations separate.
     debug_region_artists = []
-    region_diagnostics = RegionSIFTDiagnostics()
+    region_diagnostics = RegionSIFTDiagnostics(
+        show_search=REGION_SIFT_SHOW_COARSE_FINE_WINDOW,
+        show_ambiguity=REGION_SIFT_SHOW_AMBIGUITY_WINDOW)
     region_diagnostic_latest = {'result': None}
     height_profile = None
     profile_disabled_widgets = []
@@ -3063,9 +3092,11 @@ def main():
     fps_text.set_animated(True)
     pose_status_text.set_animated(True)
     view_renderer = PairedViewRenderer(
-        fig, ((ax_A, ax_B), (ax_debug_A, ax_debug_B)),
+        fig, ((ax_A, ax_B), tuple(axis for axis in (ax_debug_A, ax_debug_B)
+                               if debug_axis_enabled(axis))),
         overlays=(depth_text, pose_status_text))
     blit_state = {'needs_refresh': True, 'full_refresh': True, 'pair': None}
+    click_latency = ClickLatency(enabled=UI_CLICK_LATENCY_PROFILE)
 
     def request_blit_refresh():
         """Content/control changes invalidate the navigation background."""
@@ -3074,6 +3105,8 @@ def main():
 
     def request_view_refresh(ax):
         """Coalesce scroll/pan events, preserving pending content updates."""
+        if not debug_axis_enabled(ax):
+            return
         pair = 0 if ax in (ax_A, ax_B) else 1
         if not blit_state['full_refresh']:
             previous = blit_state['pair']
@@ -3404,8 +3437,8 @@ def main():
             # Region mode needs both lower panels to explain the shared group
             # shift; keep the upper/lower right visibility controls coherent.
             ax_B.set_visible(True)
-            ax_debug_B.set_visible(True)
-            ax_debug_info_B.set_visible(True)
+            ax_debug_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
+            ax_debug_info_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
             btn_hide_R.label.set_text("隱藏右圖")
         request_blit_refresh()
         mark_wound_size_dirty('region_sift')
@@ -4753,6 +4786,19 @@ def main():
                             print(_funnel_line)
                     _t_blk = time.perf_counter()
                     _region_ms = region_result.get('elapsed_ms', 0.0)
+                    _refine = region_result.get('refinement')
+                    if _refine is not None:
+                        print(f"[Region-SIFT LocalPlane] {_refine['status']} | {_refine['reason']} | "
+                              f"{_refine.get('elapsed_ms', 0):.1f}ms | extra rows={_refine.get('descriptor_rows', 0)}")
+                        if 'center_shift_px' in _refine:
+                            print(f"  center shift={_refine['center_shift_px']:+.3f}px | "
+                                  f"slopes(x,y)=({_refine['slope_x']:+.5f},{_refine['slope_y']:+.5f}) | "
+                                  f"G: {_refine['original_group_score']:.3f} -> {_refine.get('refined_group_score', float('nan')):.3f} | "
+                                  f"Obj: {_refine['original_objective']:.3f} -> {_refine.get('refined_objective', float('nan')):.3f} | "
+                                  f"verified gain={_refine.get('verified_gain', float('nan')):.3f}")
+                        if _refine.get('applied'):
+                            print(f"  P' right: {_refine['original_center_right']} -> {_refine['refined_center_right']}; "
+                                  "三角化採用微調座標；以下 best/second 分數仍為原始剛性搜尋。")
                     _region_counts = region_result.get('timing_counts', {})
                     if region_config.use_masked_sift:
                         print(f"[Masked SIFT] 有效／共同覆蓋不足候選={_region_counts.get('masked_coverage_rejected_candidates', 0)}")
@@ -4798,7 +4844,8 @@ def main():
                         second_candidate = region_debug.get('second_candidate')
                         candidate_p3ds = []
                         for candidate_pt in (region_debug['best_center_right'],
-                                             None if second_candidate is None else second_candidate['center_right']):
+                                             None if second_candidate is None else second_candidate['center_right'],
+                                             region_debug.get('refinement', {}).get('refined_center_right')):
                             xyz = None
                             if candidate_pt is not None:
                                 try:
@@ -5395,8 +5442,9 @@ def main():
         l_B, = ax_B.plot(pts[:, 0], pts[:, 1], color='#00FFFF', linestyle='-', linewidth=1.5, marker='o', markersize=2, alpha=0.8, zorder=4)
         flow_line_artists.extend([l_A, l_B])
 
-    def do_measure(u, v, manual_match_pt=None, *, accuracy_batch=False):
+    def do_measure(u, v, manual_match_pt=None, *, accuracy_batch=False, release_started_at=None):
         """同步計算並立即更新 UI"""
+        measurement_entered = time.perf_counter()
         if height_profile is not None and height_profile.enabled and not accuracy_batch:
             return None  # Profile owns measurement until the user exits its mode.
         if block_accuracy_state['mode'] != 'idle' and not accuracy_batch:
@@ -5412,6 +5460,8 @@ def main():
             request_blit_refresh()
             return None
         nonlocal last_click, locked_L, locked_R; last_click = (u, v)
+        latency_ticket = (click_latency.begin((u, v), measurement_entered, release_started_at)
+                          if not accuracy_batch else None)
         print("\n" + "=" * 80)
         print(f"🖱️ [新點選量測] 左圖點選座標: ({float(u):.1f}, {float(v):.1f})")
         print("=" * 80)
@@ -5592,7 +5642,8 @@ def main():
         
         if not accuracy_batch:
             apply_measure_result(res, np.mean(all_d) if all_d else None, summary)
-        click_timer.stage("UI 更新繪製")
+        click_timer.stage("UI 資料更新／重繪請求")
+        click_latency.ready(latency_ticket, time.perf_counter())
         click_timer.report()
         return res
 
@@ -6022,6 +6073,8 @@ def main():
             f"status={log_data.get('status')} | read_only=True")
 
     def render_metric_block_audit(audit):
+        if not (DEBUG_LEFT_PANEL_ENABLED or DEBUG_RIGHT_PANEL_ENABLED):
+            return
         clear_metric_block_debug_artists()
         if (not view_state.get('show_metric_blocks', False)
                 or not isinstance(audit, dict) or not audit.get('available')):
@@ -6035,6 +6088,8 @@ def main():
             cell_status = cell['summary'].get('status', 'INSUFFICIENT')
             color = status_colors.get(cell_status, '#888888')
             for axis, key in ((ax_debug_A, 'left'), (ax_debug_B, 'right')):
+                if not debug_axis_enabled(axis):
+                    continue
                 patch = Polygon(
                     cell[key], closed=True,
                     facecolor=color, edgecolor=color,
@@ -6050,6 +6105,8 @@ def main():
         for axis, poly in (
                 (ax_debug_A, audit.get('centered_left')),
                 (ax_debug_B, audit.get('centered_right'))):
+            if not debug_axis_enabled(axis):
+                continue
             if poly is not None:
                 window_outline = Polygon(
                     poly, closed=True, fill=False, edgecolor='#00FFFF',
@@ -6061,13 +6118,17 @@ def main():
             None)
         if selected is not None:
             center_left = np.mean(selected['left'], axis=0)
-            label = ax_debug_A.text(
-                center_left[0], center_left[1],
-                f"5mm {audit.get('status', 'N/A')}",
-                color='white', fontsize=6.5, fontweight='bold',
-                ha='center', va='center', zorder=8,
-                bbox=dict(facecolor='black', alpha=0.55, edgecolor='none', pad=1.0))
-            debug_metric_block_artists.append(label)
+            if DEBUG_LEFT_PANEL_ENABLED:
+                label = ax_debug_A.text(
+                    center_left[0], center_left[1],
+                    f"5mm {audit.get('status', 'N/A')}",
+                    color='white', fontsize=6.5, fontweight='bold',
+                    ha='center', va='center', zorder=8,
+                    bbox=dict(facecolor='black', alpha=0.55, edgecolor='none', pad=1.0))
+            else:
+                label = None
+            if DEBUG_LEFT_PANEL_ENABLED:
+                debug_metric_block_artists.append(label)
 
     def ensure_metric_block_audit(res, u, v, pts_a, pts_b, pair_groups,
                                   announce=False):
@@ -6086,6 +6147,10 @@ def main():
     def select_grad_descriptor_audit(index=None, screen_xy=None,
                                      announce=False, refresh=False):
         """Select one audited left reference and expose its Top-1/Top-2."""
+        if not (DEBUG_LEFT_PANEL_ENABLED or DEBUG_RIGHT_PANEL_ENABLED):
+            return False
+        if screen_xy is not None and not DEBUG_LEFT_PANEL_ENABLED:
+            return False
         empty = np.empty((0, 2), dtype=np.float32)
         records = debug_audit_state.get('records', [])
 
@@ -6097,14 +6162,20 @@ def main():
                     pass
             debug_audit_artists.clear()
             debug_audit_state['selected_index'] = None
-            dbg_audit_selected_A.set_offsets(empty)
-            dbg_audit_top1_B.set_offsets(empty)
-            dbg_audit_top2_B.set_offsets(empty)
-            dbg_audit_local_seed_B.set_offsets(empty)
-            dbg_info_A.set_text(
-                debug_audit_state.get('base_left_text', '')
-                + "\nGlobal KNN audit unavailable for this result")
-            dbg_info_B.set_text(debug_audit_state.get('base_right_text', ''))
+            if DEBUG_LEFT_PANEL_ENABLED:
+                dbg_audit_selected_A.set_offsets(empty)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_audit_top1_B.set_offsets(empty)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_audit_top2_B.set_offsets(empty)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_audit_local_seed_B.set_offsets(empty)
+            if DEBUG_LEFT_PANEL_ENABLED:
+                dbg_info_A.set_text(
+                    debug_audit_state.get('base_left_text', '')
+                    + "\nGlobal KNN audit unavailable for this result")
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_info_B.set_text(debug_audit_state.get('base_right_text', ''))
             if refresh:
                 request_blit_refresh()
             return False
@@ -6150,12 +6221,16 @@ def main():
             None if record.get('local_seed') is None
             else np.asarray(record['local_seed'], dtype=np.float32).reshape(2)
         )
-        dbg_audit_selected_A.set_offsets([p_left])
-        dbg_audit_top1_B.set_offsets([p_top1])
-        dbg_audit_top2_B.set_offsets(
-            [p_top2] if p_top2 is not None else empty)
-        dbg_audit_local_seed_B.set_offsets(
-            [local_seed] if local_seed is not None else empty)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_audit_selected_A.set_offsets([p_left])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_audit_top1_B.set_offsets([p_top1])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_audit_top2_B.set_offsets(
+                [p_top2] if p_top2 is not None else empty)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_audit_local_seed_B.set_offsets(
+                [local_seed] if local_seed is not None else empty)
 
         # The lower-right yellow line follows the reference selected in the
         # lower-left Debug panel.  It is this pL's own epipolar line, not the
@@ -6165,41 +6240,59 @@ def main():
                 p0_selected, p1_selected = epipolar_line(
                     current_cand['F'],
                     (float(p_left[0]), float(p_left[1])), w)
-                dbg_epi_line.set_data(
-                    [p0_selected[0], p1_selected[0]],
-                    [p0_selected[1], p1_selected[1]])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    dbg_epi_line.set_data(
+                        [p0_selected[0], p1_selected[0]],
+                        [p0_selected[1], p1_selected[1]])
             except Exception:
-                dbg_epi_line.set_data([], [])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    dbg_epi_line.set_data([], [])
         else:
-            dbg_epi_line.set_data([], [])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_epi_line.set_data([], [])
 
-        top1_line = ConnectionPatch(
-            xyA=p_left, xyB=p_top1,
-            coordsA='data', coordsB='data',
-            axesA=ax_debug_A, axesB=ax_debug_B,
-            color='#39FF14', lw=1.7, alpha=0.9, zorder=10)
-        ax_debug_B.add_artist(top1_line)
-        debug_audit_artists.append(top1_line)
-        if p_top2 is not None:
-            top2_line = ConnectionPatch(
-                xyA=p_left, xyB=p_top2,
+        if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+            top1_line = ConnectionPatch(
+                xyA=p_left, xyB=p_top1,
                 coordsA='data', coordsB='data',
                 axesA=ax_debug_A, axesB=ax_debug_B,
-                color='#FF3333', lw=1.2, linestyle='--',
-                alpha=0.8, zorder=9)
-            ax_debug_B.add_artist(top2_line)
-            debug_audit_artists.append(top2_line)
+                color='#39FF14', lw=1.7, alpha=0.9, zorder=10)
+        else:
+            top1_line = None
+        if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.add_artist(top1_line)
+        if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+            debug_audit_artists.append(top1_line)
+        if p_top2 is not None:
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                top2_line = ConnectionPatch(
+                    xyA=p_left, xyB=p_top2,
+                    coordsA='data', coordsB='data',
+                    axesA=ax_debug_A, axesB=ax_debug_B,
+                    color='#FF3333', lw=1.2, linestyle='--',
+                    alpha=0.8, zorder=9)
+            else:
+                top2_line = None
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                ax_debug_B.add_artist(top2_line)
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                debug_audit_artists.append(top2_line)
         accepted_pR_for_line = record.get('accepted_pR')
         if (record.get('support_source') == 'TOP2_GEO_RESCUE'
                 and accepted_pR_for_line is not None):
-            top2_selected_line = ConnectionPatch(
-                xyA=p_left,
-                xyB=np.asarray(accepted_pR_for_line, dtype=np.float32),
-                coordsA='data', coordsB='data',
-                axesA=ax_debug_A, axesB=ax_debug_B,
-                color='#FFD700', lw=2.4, alpha=1.0, zorder=11)
-            ax_debug_B.add_artist(top2_selected_line)
-            debug_audit_artists.append(top2_selected_line)
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                top2_selected_line = ConnectionPatch(
+                    xyA=p_left,
+                    xyB=np.asarray(accepted_pR_for_line, dtype=np.float32),
+                    coordsA='data', coordsB='data',
+                    axesA=ax_debug_A, axesB=ax_debug_B,
+                    color='#FFD700', lw=2.4, alpha=1.0, zorder=11)
+            else:
+                top2_selected_line = None
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                ax_debug_B.add_artist(top2_selected_line)
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                debug_audit_artists.append(top2_selected_line)
 
         d2_text = (
             'N/A' if record.get('d2') is None
@@ -6305,26 +6398,28 @@ def main():
             else:
                 guided_detail = f"\nGUIDED: {guided_decision}"
 
-        dbg_info_A.set_text(
-            debug_audit_state.get('base_left_text', '')
-            + f"\nSelected global-KNN {record['group_label']}"
-              f" #{record['audit_index']:03d} at "
-              f"({p_left[0]:.1f},{p_left[1]:.1f}); "
-              "click another raw point")
-        dbg_info_B.set_text(
-            debug_audit_state.get('base_right_text', '')
-            + f"\nGLOBAL {record['group_label']} #{record['audit_index']:03d}: "
-              f"d1={record['d1']:.3f}, d2={d2_text}, "
-              f"d1/d2={ratio_text} (need <{ratio_limit:.2f}) "
-              f"=> {record['decision']}"
-            + f"\nabs d1<{match_threshold:g}: {abs_text} | "
-              f"Lowe gate: {ratio_gate_text} | mutual gate: {mutual_text}"
-            + f"\nd2-d1={gap_text} | Top1↔Top2={spatial_text}"
-            + f"\n{geometry_role}: epi={epi_text} | seedΔ={seed_text}"
-            + guided_detail
-            + f"\nfinal interpolation support: {support_text}"
-            + "\nlime circle=Top1, red square=Top2, magenta x=local seed; "
-              "gold line=Top2-Geo selection; yellow line=selected pL epiline")
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_info_A.set_text(
+                debug_audit_state.get('base_left_text', '')
+                + f"\nSelected global-KNN {record['group_label']}"
+                  f" #{record['audit_index']:03d} at "
+                  f"({p_left[0]:.1f},{p_left[1]:.1f}); "
+                  "click another raw point")
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_info_B.set_text(
+                debug_audit_state.get('base_right_text', '')
+                + f"\nGLOBAL {record['group_label']} #{record['audit_index']:03d}: "
+                  f"d1={record['d1']:.3f}, d2={d2_text}, "
+                  f"d1/d2={ratio_text} (need <{ratio_limit:.2f}) "
+                  f"=> {record['decision']}"
+                + f"\nabs d1<{match_threshold:g}: {abs_text} | "
+                  f"Lowe gate: {ratio_gate_text} | mutual gate: {mutual_text}"
+                + f"\nd2-d1={gap_text} | Top1↔Top2={spatial_text}"
+                + f"\n{geometry_role}: epi={epi_text} | seedΔ={seed_text}"
+                + guided_detail
+                + f"\nfinal interpolation support: {support_text}"
+                + "\nlime circle=Top1, red square=Top2, magenta x=local seed; "
+                  "gold line=Top2-Geo selection; yellow line=selected pL epiline")
 
         if announce:
             print(
@@ -6406,6 +6501,10 @@ def main():
 
     def select_region_sift_debug_point(index=None, screen_xy=None,
                                        announce=False, refresh=False):
+        if not (DEBUG_LEFT_PANEL_ENABLED or DEBUG_RIGHT_PANEL_ENABLED):
+            return False
+        if screen_xy is not None and not DEBUG_LEFT_PANEL_ENABLED:
+            return False
         records = debug_region_state.get('records', [])
         if not records:
             return False
@@ -6427,7 +6526,8 @@ def main():
         record = records[selected]
         debug_region_state['selected_index'] = selected
         point_left = np.asarray(record['left_point'], dtype=np.float32)
-        dbg_audit_selected_A.set_offsets([point_left])
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_audit_selected_A.set_offsets([point_left])
 
         label = 'P' if record.get('is_click') else f"#{selected + 1:02d}"
         cell_text = (
@@ -6448,6 +6548,8 @@ def main():
         for support_ax, support_point, radius_key in (
                 (ax_debug_A, point_left, 'left_support_radius_px'),
                 (ax_debug_B, point_warp, 'right_support_radius_px')):
+            if not debug_axis_enabled(support_ax):
+                continue
             radius = float(record.get(radius_key, 0.0))
             support_box = Rectangle(
                 (support_point[0] - radius, support_point[1] - radius),
@@ -6457,28 +6559,30 @@ def main():
             support_artists.append(support_box)
         debug_region_artists.extend(support_artists)
         debug_region_state['support_artists'] = support_artists
-        dbg_info_A.set_text(
-            debug_region_state.get('base_left_text', '')
-            + f"\nSelected {label}: cell={cell_text}, "
-              f"level={record.get('gradient_label')}, "
-              f"gradient={float(record.get('gradient_magnitude', 0.0)):.2f}"
-            + f"\nL frame: size={float(record.get('left_scale_px', 0.0)):.1f}px, "
-              f"angle={float(record.get('left_angle_deg', 0.0)):.1f}deg, "
-              f"support={float(record.get('left_support_radius_px', 0.0)):.1f}px"
-            + f"\nreliable scale/angle pair={record.get('scale_pair_reliable')}/"
-              f"{record.get('angle_pair_reliable')}; dotted=full support bounds")
-        dbg_info_B.set_text(
-            debug_region_state.get('base_right_text', '')
-            + f"\n{label}: {distance_label}={float(record['l2_distance']):.3f}, "
-              f"rank={int(record['distance_rank'])}/{len(records)} => {keep_text}"
-            + f"\nL=({point_left[0]:.1f},{point_left[1]:.1f}), "
-              f"RW=({point_warp[0]:.1f},{point_warp[1]:.1f}), "
-              f"R=({point_right[0]:.1f},{point_right[1]:.1f})"
-            + f"\nR frame: size={float(record.get('right_scale_px', 0.0)):.1f}px, "
-              f"angle={float(record.get('right_angle_deg', 0.0)):.1f}deg | "
-              f"scale-ratio={float(record.get('scale_ratio', 0.0)):.2f}, "
-              f"dAngle={float(record.get('angle_delta_deg', 0.0)):+.1f}deg"
-            + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px")
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_info_A.set_text(
+                debug_region_state.get('base_left_text', '')
+                + f"\nSelected {label}: cell={cell_text}, "
+                  f"level={record.get('gradient_label')}, "
+                  f"gradient={float(record.get('gradient_magnitude', 0.0)):.2f}"
+                + f"\nL frame: size={float(record.get('left_scale_px', 0.0)):.1f}px, "
+                  f"angle={float(record.get('left_angle_deg', 0.0)):.1f}deg, "
+                  f"support={float(record.get('left_support_radius_px', 0.0)):.1f}px"
+                + f"\nreliable scale/angle pair={record.get('scale_pair_reliable')}/"
+                  f"{record.get('angle_pair_reliable')}; dotted=full support bounds")
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_info_B.set_text(
+                debug_region_state.get('base_right_text', '')
+                + f"\n{label}: {distance_label}={float(record['l2_distance']):.3f}, "
+                  f"rank={int(record['distance_rank'])}/{len(records)} => {keep_text}"
+                + f"\nL=({point_left[0]:.1f},{point_left[1]:.1f}), "
+                  f"RW=({point_warp[0]:.1f},{point_warp[1]:.1f}), "
+                  f"R=({point_right[0]:.1f},{point_right[1]:.1f})"
+                + f"\nR frame: size={float(record.get('right_scale_px', 0.0)):.1f}px, "
+                  f"angle={float(record.get('right_angle_deg', 0.0)):.1f}deg | "
+                  f"scale-ratio={float(record.get('scale_ratio', 0.0)):.2f}, "
+                  f"dAngle={float(record.get('angle_delta_deg', 0.0)):+.1f}deg"
+                + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px")
         if announce:
             print(
                 f"   [Region-SIFT point] {label} cell={cell_text} "
@@ -6500,6 +6604,12 @@ def main():
 
     def update_region_sift_debug_views(res, u, v):
         """Draw the exact Region-SIFT inputs and the winning shared shift."""
+        region_diagnostic_latest['result'] = res
+        if not (DEBUG_LEFT_PANEL_ENABLED or DEBUG_RIGHT_PANEL_ENABLED):
+            if (block_accuracy_state['mode'] == 'idle' and not auto_calc_active
+                    and not (height_profile is not None and height_profile.enabled)):
+                show_region_diagnostics(result=res)
+            return
         empty = np.empty((0, 2), dtype=np.float32)
         clear_region_sift_debug_artists()
         clear_metric_block_debug_artists()
@@ -6523,23 +6633,33 @@ def main():
                         dbg_inlier_mid_A, dbg_inlier_mid_B, dbg_pred_B,
                         dbg_audit_top1_B, dbg_audit_top2_B,
                         dbg_audit_local_seed_B):
+            if not debug_artist_enabled(scatter):
+                continue
             scatter.set_offsets(empty)
-        dbg_hull_line.set_data([], [])
-        dbg_hull_line_B.set_data([], [])
-        dbg_search_rect.set_visible(False)
-        dbg_raw_B.set_offsets(empty)
-        dbg_audit_selected_A.set_offsets(empty)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_hull_line.set_data([], [])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_hull_line_B.set_data([], [])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_search_rect.set_visible(False)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_raw_B.set_offsets(empty)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_audit_selected_A.set_offsets(empty)
 
-        ax_debug_A.set_title(
-            'Region-SIFT Debug - Left 3x3 Sampling Grid', color='#8FD3FF',
-            fontsize=10, fontweight='bold', pad=5)
-        ax_debug_B.set_title(
-            'Region-SIFT Debug - Warped Right / Epipolar Band', color='#FFD29A',
-            fontsize=10, fontweight='bold', pad=5)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_title(
+                'Region-SIFT Debug - Left 3x3 Sampling Grid', color='#8FD3FF',
+                fontsize=10, fontweight='bold', pad=5)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_title(
+                'Region-SIFT Debug - Warped Right / Epipolar Band', color='#FFD29A',
+                fontsize=10, fontweight='bold', pad=5)
         debug_left_gray = res.get('debug_left_gray')
         if debug_left_gray is not None:
-            im_debug_A.set_data(cv2.cvtColor(
-                np.asarray(debug_left_gray), cv2.COLOR_GRAY2RGB))
+            if DEBUG_LEFT_PANEL_ENABLED:
+                im_debug_A.set_data(cv2.cvtColor(
+                    np.asarray(debug_left_gray), cv2.COLOR_GRAY2RGB))
 
         debug = res.get('region_debug')
         region_diagnostic_latest['result'] = res
@@ -6549,19 +6669,27 @@ def main():
                 region_diagnostics.show(res)
             debug_right_gray = res.get('debug_right_gray')
             if debug_right_gray is not None:
-                im_debug_B.set_data(cv2.cvtColor(
-                    np.asarray(debug_right_gray), cv2.COLOR_GRAY2RGB))
-            dbg_click_A.set_offsets([[float(u), float(v)]])
-            dbg_seed_B.set_offsets(empty)
-            dbg_final_B.set_offsets(empty)
-            dbg_epi_line.set_data([], [])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    im_debug_B.set_data(cv2.cvtColor(
+                        np.asarray(debug_right_gray), cv2.COLOR_GRAY2RGB))
+            if DEBUG_LEFT_PANEL_ENABLED:
+                dbg_click_A.set_offsets([[float(u), float(v)]])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_seed_B.set_offsets(empty)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_final_B.set_offsets(empty)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_epi_line.set_data([], [])
             fail_reason = res.get('fail_reason') or 'Region-SIFT unavailable'
-            dbg_info_A.set_text('Region-SIFT did not produce debug point data')
-            dbg_info_B.set_text(f"Region-SIFT failed: {fail_reason}")
+            if DEBUG_LEFT_PANEL_ENABLED:
+                dbg_info_A.set_text('Region-SIFT did not produce debug point data')
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_info_B.set_text(f"Region-SIFT failed: {fail_reason}")
             return
 
         warped_right = np.asarray(debug['warped_right_gray'])
-        im_debug_B.set_data(cv2.cvtColor(warped_right, cv2.COLOR_GRAY2RGB))
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            im_debug_B.set_data(cv2.cvtColor(warped_right, cv2.COLOR_GRAY2RGB))
         left_points = np.asarray(debug['left_points'], dtype=np.float32).reshape(-1, 2)
         right_points = np.asarray(debug['best_points_warp'], dtype=np.float32).reshape(-1, 2)
         records = list(debug.get('point_metadata', []))
@@ -6579,33 +6707,71 @@ def main():
             color_map.get(str(records[index].get('gradient_label')), '#B084FF')
             for index in range(auto_count)
         ]
-        left_scatter = ax_debug_A.scatter(
-            auto_left[:, 0], auto_left[:, 1], s=40, c=auto_colors,
-            edgecolors='black', linewidths=0.45, zorder=7)
-        debug_region_artists.append(left_scatter)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            left_scatter = ax_debug_A.scatter(
+                auto_left[:, 0], auto_left[:, 1], s=40, c=auto_colors,
+                edgecolors='black', linewidths=0.45, zorder=7)
+        else:
+            left_scatter = None
+        if DEBUG_LEFT_PANEL_ENABLED:
+            debug_region_artists.append(left_scatter)
         kept_auto = keep_mask[:auto_count]
         if np.any(kept_auto):
-            kept_scatter = ax_debug_B.scatter(
-                auto_right[kept_auto, 0], auto_right[kept_auto, 1], s=44,
-                facecolors='none', edgecolors='#00FF66', linewidths=1.4,
-                zorder=8)
-            debug_region_artists.append(kept_scatter)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                kept_scatter = ax_debug_B.scatter(
+                    auto_right[kept_auto, 0], auto_right[kept_auto, 1], s=44,
+                    facecolors='none', edgecolors='#00FF66', linewidths=1.4,
+                    zorder=8)
+            else:
+                kept_scatter = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                debug_region_artists.append(kept_scatter)
         if np.any(~kept_auto):
-            trim_scatter = ax_debug_B.scatter(
-                auto_right[~kept_auto, 0], auto_right[~kept_auto, 1], s=34,
-                c='#888888', marker='x', linewidths=1.1, zorder=7)
-            debug_region_artists.append(trim_scatter)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                trim_scatter = ax_debug_B.scatter(
+                    auto_right[~kept_auto, 0], auto_right[~kept_auto, 1], s=34,
+                    c='#888888', marker='x', linewidths=1.1, zorder=7)
+            else:
+                trim_scatter = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                debug_region_artists.append(trim_scatter)
 
-        dbg_click_A.set_offsets([left_points[-1]])
-        dbg_seed_B.set_offsets([np.asarray(debug['seed_on_line']).reshape(2)])
-        dbg_final_B.set_offsets([np.asarray(debug['best_center_warp']).reshape(2)])
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_click_A.set_offsets([left_points[-1]])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_seed_B.set_offsets([np.asarray(debug['seed_on_line']).reshape(2)])
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_final_B.set_offsets([np.asarray(debug['best_center_warp']).reshape(2)])
+        refinement = debug.get('refinement', {})
+        if refinement.get('applied'):
+            refined_center = np.asarray(refinement['refined_center_warp'])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                marker = ax_debug_B.scatter([refined_center[0]], [refined_center[1]],
+                    marker='*', s=150, c='#FF8800', edgecolors='black', zorder=12)
+            else:
+                marker = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                debug_region_artists.append(marker)
+            refined_points = np.asarray(refinement['refined_points_warp'])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                marker = ax_debug_B.scatter(refined_points[:, 0], refined_points[:, 1],
+                    marker='+', s=28, c='#FF8800', zorder=10)
+            else:
+                marker = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                debug_region_artists.append(marker)
 
         polygon = np.asarray(debug['search_band_polygon_warp'], dtype=np.float32)
-        band_patch = Polygon(
-            polygon, closed=True, fill=False, edgecolor='#FF00FF',
-            linewidth=1.3, linestyle='--', alpha=0.9, zorder=5)
-        ax_debug_B.add_patch(band_patch)
-        debug_region_artists.append(band_patch)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            band_patch = Polygon(
+                polygon, closed=True, fill=False, edgecolor='#FF00FF',
+                linewidth=1.3, linestyle='--', alpha=0.9, zorder=5)
+        else:
+            band_patch = None
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.add_patch(band_patch)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            debug_region_artists.append(band_patch)
 
         line = np.asarray(debug['line_warp'], dtype=np.float64).reshape(3)
         image_h, image_w = warped_right.shape[:2]
@@ -6617,40 +6783,59 @@ def main():
             line_x = -(line[1] * line_y + line[2]) / line[0]
         else:
             line_x = line_y = np.array([], dtype=np.float64)
-        dbg_epi_line.set_data(line_x, line_y)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_epi_line.set_data(line_x, line_y)
 
         x0, y0, roi_w, roi_h = [float(value) for value in debug['left_roi']]
         cfg = debug['config']
         for col in range(int(cfg.grid_cols) + 1):
             x = x0 + col * float(cfg.cell_width_px)
-            grid_line, = ax_debug_A.plot(
-                [x, x], [y0, y0 + roi_h], color='white', lw=0.55,
-                alpha=0.55, zorder=4)
-            debug_region_artists.append(grid_line)
+            if DEBUG_LEFT_PANEL_ENABLED:
+                grid_line, = ax_debug_A.plot(
+                    [x, x], [y0, y0 + roi_h], color='white', lw=0.55,
+                    alpha=0.55, zorder=4)
+            else:
+                grid_line = None
+            if DEBUG_LEFT_PANEL_ENABLED:
+                debug_region_artists.append(grid_line)
         for row in range(int(cfg.grid_rows) + 1):
             y = y0 + row * float(cfg.cell_height_px)
-            grid_line, = ax_debug_A.plot(
-                [x0, x0 + roi_w], [y, y], color='white', lw=0.55,
-                alpha=0.55, zorder=4)
-            debug_region_artists.append(grid_line)
+            if DEBUG_LEFT_PANEL_ENABLED:
+                grid_line, = ax_debug_A.plot(
+                    [x0, x0 + roi_w], [y, y], color='white', lw=0.55,
+                    alpha=0.55, zorder=4)
+            else:
+                grid_line = None
+            if DEBUG_LEFT_PANEL_ENABLED:
+                debug_region_artists.append(grid_line)
 
         for index in range(auto_count):
             color = '#00FF66' if keep_mask[index] else '#AAAAAA'
-            label_a = ax_debug_A.text(
-                left_points[index, 0] + 0.7, left_points[index, 1] - 0.7,
-                str(index + 1), color=auto_colors[index], fontsize=6,
-                fontweight='bold', zorder=9)
-            label_b = ax_debug_B.text(
-                right_points[index, 0] + 0.7, right_points[index, 1] - 0.7,
-                str(index + 1), color=color, fontsize=6,
-                fontweight='bold', zorder=9)
-            connection = ConnectionPatch(
-                xyA=left_points[index], xyB=right_points[index],
-                coordsA='data', coordsB='data', axesA=ax_debug_A,
-                axesB=ax_debug_B, color=color, lw=0.5, alpha=0.25,
-                zorder=4)
-            ax_debug_B.add_artist(connection)
-            debug_region_artists.extend([label_a, label_b, connection])
+            if DEBUG_LEFT_PANEL_ENABLED:
+                label_a = ax_debug_A.text(
+                    left_points[index, 0] + 0.7, left_points[index, 1] - 0.7,
+                    str(index + 1), color=auto_colors[index], fontsize=6,
+                    fontweight='bold', zorder=9)
+            else:
+                label_a = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                label_b = ax_debug_B.text(
+                    right_points[index, 0] + 0.7, right_points[index, 1] - 0.7,
+                    str(index + 1), color=color, fontsize=6,
+                    fontweight='bold', zorder=9)
+            else:
+                label_b = None
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                connection = ConnectionPatch(
+                    xyA=left_points[index], xyB=right_points[index],
+                    coordsA='data', coordsB='data', axesA=ax_debug_A,
+                    axesB=ax_debug_B, color=color, lw=0.5, alpha=0.25,
+                    zorder=4)
+            else:
+                connection = None
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                ax_debug_B.add_artist(connection)
+            debug_region_artists.extend(artist for artist in [label_a, label_b, connection] if artist is not None)
 
         # Each short ray is the independently estimated SIFT frame: its
         # length follows keypoint size and its direction follows orientation.
@@ -6674,26 +6859,40 @@ def main():
                 [np.cos(angle_r), np.sin(angle_r)], dtype=np.float32)
             color_l = 'white' if index == len(left_points) - 1 else auto_colors[index]
             color_r = '#00FF66' if keep_mask[index] else '#888888'
-            frame_l, = ax_debug_A.plot(
-                [left_points[index, 0], end_l[0]],
-                [left_points[index, 1], end_l[1]],
-                color=color_l, lw=1.0, alpha=0.9, zorder=8)
-            frame_r, = ax_debug_B.plot(
-                [right_points[index, 0], end_r[0]],
-                [right_points[index, 1], end_r[1]],
-                color=color_r, lw=1.0, alpha=0.9, zorder=8)
-            debug_region_artists.extend([frame_l, frame_r])
-        p_label_a = ax_debug_A.text(
-            left_points[-1, 0] + 1.0, left_points[-1, 1] - 1.0, 'P',
-            color='white', fontsize=8, fontweight='bold', zorder=10)
-        p_label_b = ax_debug_B.text(
-            right_points[-1, 0] + 1.0, right_points[-1, 1] - 1.0, "P'",
-            color='#00FF66', fontsize=8, fontweight='bold', zorder=10)
-        debug_region_artists.extend([p_label_a, p_label_b])
+            if DEBUG_LEFT_PANEL_ENABLED:
+                frame_l, = ax_debug_A.plot(
+                    [left_points[index, 0], end_l[0]],
+                    [left_points[index, 1], end_l[1]],
+                    color=color_l, lw=1.0, alpha=0.9, zorder=8)
+            else:
+                frame_l = None
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                frame_r, = ax_debug_B.plot(
+                    [right_points[index, 0], end_r[0]],
+                    [right_points[index, 1], end_r[1]],
+                    color=color_r, lw=1.0, alpha=0.9, zorder=8)
+            else:
+                frame_r = None
+            debug_region_artists.extend(artist for artist in [frame_l, frame_r] if artist is not None)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            p_label_a = ax_debug_A.text(
+                left_points[-1, 0] + 1.0, left_points[-1, 1] - 1.0, 'P',
+                color='white', fontsize=8, fontweight='bold', zorder=10)
+        else:
+            p_label_a = None
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            p_label_b = ax_debug_B.text(
+                right_points[-1, 0] + 1.0, right_points[-1, 1] - 1.0, "P'",
+                color='#00FF66', fontsize=8, fontweight='bold', zorder=10)
+        else:
+            p_label_b = None
+        debug_region_artists.extend(artist for artist in [p_label_a, p_label_b] if artist is not None)
 
         pad = max(5.0, float(np.max(debug['left_frames']['support_radius_px'])))
-        ax_debug_A.set_xlim(max(-0.5, x0 - pad), min(float(image_w) - 0.5, x0 + roi_w + pad))
-        ax_debug_A.set_ylim(min(float(image_h) - 0.5, y0 + roi_h + pad), max(-0.5, y0 - pad))
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_xlim(max(-0.5, x0 - pad), min(float(image_w) - 0.5, x0 + roi_w + pad))
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_ylim(min(float(image_h) - 0.5, y0 + roi_h + pad), max(-0.5, y0 - pad))
         debug_zoom_home['A'] = (ax_debug_A.get_xlim(), ax_debug_A.get_ylim())
         right_radii = np.asarray(debug['right_frames']['support_radius_px']).reshape(-1, 1)
         right_cloud = np.vstack([right_points - right_radii,
@@ -6702,8 +6901,10 @@ def main():
         rx1 = min(float(image_w) - 0.5, float(np.max(right_cloud[:, 0])) + 7.0)
         ry0 = max(-0.5, float(np.min(right_cloud[:, 1])) - 7.0)
         ry1 = min(float(image_h) - 0.5, float(np.max(right_cloud[:, 1])) + 7.0)
-        ax_debug_B.set_xlim(rx0, rx1)
-        ax_debug_B.set_ylim(ry1, ry0)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_xlim(rx0, rx1)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_ylim(ry1, ry0)
         debug_zoom_home['B'] = (ax_debug_B.get_xlim(), ax_debug_B.get_ylim())
 
         delta = np.asarray(debug['best_displacement_warp']).reshape(2)
@@ -6740,6 +6941,13 @@ def main():
                if cfg.group_balance_weight > 0 else
                "green=TrimK, gray=trimmed; CellAll diagnostic only (weight=0)")
             + "; flat frames skip consistency penalty")
+        refinement = debug.get('refinement')
+        if refinement is not None:
+            base_right_text += f"\nLocalPlane: {refinement['status']} | {refinement['reason']}"
+            if refinement.get('applied'):
+                base_right_text += (f"\nORIGINAL scores above; orange *=refined P', +=refined anchors | "
+                    f"shift={refinement['center_shift_px']:+.3f}px | "
+                    f"refined G={refinement['refined_group_score']:.2f}")
         if cfg.use_masked_sift:
             coverage = debug['right_frames'].get('masked_common_fraction')
             if coverage is not None:
@@ -6749,8 +6957,10 @@ def main():
         debug_region_state['records'] = records
         debug_region_state['base_left_text'] = base_left_text
         debug_region_state['base_right_text'] = base_right_text
-        dbg_info_A.set_text(base_left_text)
-        dbg_info_B.set_text(base_right_text)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_info_A.set_text(base_left_text)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_info_B.set_text(base_right_text)
         # Default to P so its descriptor contribution is visible immediately.
         select_region_sift_debug_point(index=len(records) - 1)
 
@@ -6789,13 +6999,17 @@ def main():
         if view_state.get('region_sift', False):
             update_region_sift_debug_views(res, u, v)
             return
+        if not (DEBUG_LEFT_PANEL_ENABLED or DEBUG_RIGHT_PANEL_ENABLED):
+            return
         clear_region_sift_debug_artists()
-        ax_debug_A.set_title(
-            'Grad-SIFT/ORB Debug - Left ROI (wheel zoom; double-click reset)',
-            color='#8FD3FF', fontsize=10, fontweight='bold', pad=5)
-        ax_debug_B.set_title(
-            'Grad-SIFT/ORB Debug - Right ROI (wheel zoom; double-click reset)',
-            color='#FFD29A', fontsize=10, fontweight='bold', pad=5)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_title(
+                'Grad-SIFT/ORB Debug - Left ROI (wheel zoom; double-click reset)',
+                color='#8FD3FF', fontsize=10, fontweight='bold', pad=5)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_title(
+                'Grad-SIFT/ORB Debug - Right ROI (wheel zoom; double-click reset)',
+                color='#FFD29A', fontsize=10, fontweight='bold', pad=5)
         empty = np.empty((0, 2), dtype=np.float32)
 
         def as_points(value):
@@ -6822,13 +7036,15 @@ def main():
         if debug_left_gray is not None:
             debug_left_gray = np.asarray(debug_left_gray)
             if debug_left_gray.ndim == 2 and debug_left_gray.size:
-                im_debug_A.set_data(
-                    cv2.cvtColor(debug_left_gray, cv2.COLOR_GRAY2RGB))
+                if DEBUG_LEFT_PANEL_ENABLED:
+                    im_debug_A.set_data(
+                        cv2.cvtColor(debug_left_gray, cv2.COLOR_GRAY2RGB))
         if debug_right_gray is not None:
             debug_right_gray = np.asarray(debug_right_gray)
             if debug_right_gray.ndim == 2 and debug_right_gray.size:
-                im_debug_B.set_data(
-                    cv2.cvtColor(debug_right_gray, cv2.COLOR_GRAY2RGB))
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    im_debug_B.set_data(
+                        cv2.cvtColor(debug_right_gray, cv2.COLOR_GRAY2RGB))
 
         # Remove click-specific ConnectionPatch/text/residual artists from the
         # previous measurement.  Persistent scatters are updated in place below.
@@ -6844,10 +7060,14 @@ def main():
         ref_b = as_points(res.get('g_refB'))
         ref_a_high, ref_a_mid = split_groups(ref_a, res.get('g_refA_groups'))
         ref_b_high, ref_b_mid = split_groups(ref_b, res.get('g_refB_groups'))
-        dbg_ref_high_A.set_offsets(ref_a_high)
-        dbg_ref_mid_A.set_offsets(ref_a_mid)
-        dbg_ref_high_B.set_offsets(ref_b_high)
-        dbg_ref_mid_B.set_offsets(ref_b_mid)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_ref_high_A.set_offsets(ref_a_high)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_ref_mid_A.set_offsets(ref_a_mid)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_ref_high_B.set_offsets(ref_b_high)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_ref_mid_B.set_offsets(ref_b_mid)
 
         pts_a = as_points(res.get('g_ptsA'))
         pts_b = as_points(res.get('g_ptsB'))
@@ -6861,10 +7081,14 @@ def main():
             pair_groups = np.asarray(pair_groups, dtype=object).reshape(-1)[:pair_count]
         in_a_high, in_a_mid = split_groups(pts_a, pair_groups)
         in_b_high, in_b_mid = split_groups(pts_b, pair_groups)
-        dbg_inlier_high_A.set_offsets(in_a_high)
-        dbg_inlier_mid_A.set_offsets(in_a_mid)
-        dbg_inlier_high_B.set_offsets(in_b_high)
-        dbg_inlier_mid_B.set_offsets(in_b_mid)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_inlier_high_A.set_offsets(in_a_high)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_inlier_mid_A.set_offsets(in_a_mid)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_inlier_high_B.set_offsets(in_b_high)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_inlier_mid_B.set_offsets(in_b_mid)
 
         metric_block_audit = None
         if view_state.get('show_metric_blocks', False):
@@ -6883,7 +7107,8 @@ def main():
             clear_metric_block_debug_artists()
 
         click_pt = np.array([float(u), float(v)], dtype=np.float32)
-        dbg_click_A.set_offsets([click_pt])
+        if DEBUG_LEFT_PANEL_ENABLED:
+            dbg_click_A.set_offsets([click_pt])
 
         seed_pt = None
         seed_method = "N/A"
@@ -6893,7 +7118,8 @@ def main():
             seed_pt = np.asarray(seed_value, dtype=np.float32).reshape(2)
         except Exception:
             seed_pt = None
-        dbg_seed_B.set_offsets([seed_pt] if seed_pt is not None else empty)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_seed_B.set_offsets([seed_pt] if seed_pt is not None else empty)
 
         raw_pt = res.get('pt_raw')
         raw_pt = (None if raw_pt is None else
@@ -6901,28 +7127,36 @@ def main():
         final_pt = res.get('pt')
         final_pt = (None if final_pt is None else
                     np.asarray(final_pt, dtype=np.float32).reshape(2))
-        dbg_raw_B.set_offsets([raw_pt] if raw_pt is not None else empty)
-        dbg_final_B.set_offsets([final_pt] if final_pt is not None else empty)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_raw_B.set_offsets([raw_pt] if raw_pt is not None else empty)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_final_B.set_offsets([final_pt] if final_pt is not None else empty)
 
         if current_cand.get('F') is not None:
             try:
                 p0_dbg, p1_dbg = epipolar_line(
                     current_cand['F'], (float(u), float(v)), w)
-                dbg_epi_line.set_data(
-                    [p0_dbg[0], p1_dbg[0]], [p0_dbg[1], p1_dbg[1]])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    dbg_epi_line.set_data(
+                        [p0_dbg[0], p1_dbg[0]], [p0_dbg[1], p1_dbg[1]])
             except Exception:
-                dbg_epi_line.set_data([], [])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    dbg_epi_line.set_data([], [])
         else:
-            dbg_epi_line.set_data([], [])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_epi_line.set_data([], [])
 
         rect = res.get('g_rect')
         if rect is not None:
             rx, ry, rw, rh = [float(value) for value in rect]
-            dbg_search_rect.set_bounds(rx, ry, rw, rh)
-            dbg_search_rect.set_visible(True)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_search_rect.set_bounds(rx, ry, rw, rh)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_search_rect.set_visible(True)
         else:
             rx = ry = rw = rh = None
-            dbg_search_rect.set_visible(False)
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_search_rect.set_visible(False)
 
         # Show where the plane homography predicts every accepted left support
         # point.  The short magenta residual segment ends at the actual match.
@@ -6960,10 +7194,12 @@ def main():
             if len(predicted_b) == pair_count and pair_count > 0
             else np.zeros(pair_count, dtype=bool)
         )
-        dbg_pred_B.set_offsets(
-            predicted_b[valid_pred] if np.any(valid_pred) else empty)
-        dbg_pred_B.set_visible(
-            view_state.get('show_homography_residual', True))
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_pred_B.set_offsets(
+                predicted_b[valid_pred] if np.any(valid_pred) else empty)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_pred_B.set_visible(
+                view_state.get('show_homography_residual', True))
 
         # Accepted correspondences are numbered consistently in both zoomed
         # panels.  Only the nearest 30 labels are drawn to prevent text clutter.
@@ -6974,30 +7210,46 @@ def main():
         for index, (point_a, point_b) in enumerate(zip(pts_a, pts_b)):
             is_mid = pair_groups[index] == "mid"
             color = '#FF8C00' if is_mid else '#00BFFF'
-            connection = ConnectionPatch(
-                xyA=point_a, xyB=point_b,
-                coordsA="data", coordsB="data",
-                axesA=ax_debug_A, axesB=ax_debug_B,
-                color=color, lw=0.85, alpha=0.55, zorder=5)
-            ax_debug_B.add_artist(connection)
-            debug_pair_artists.append(connection)
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                connection = ConnectionPatch(
+                    xyA=point_a, xyB=point_b,
+                    coordsA="data", coordsB="data",
+                    axesA=ax_debug_A, axesB=ax_debug_B,
+                    color=color, lw=0.85, alpha=0.55, zorder=5)
+            else:
+                connection = None
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                ax_debug_B.add_artist(connection)
+            if DEBUG_LEFT_PANEL_ENABLED and DEBUG_RIGHT_PANEL_ENABLED:
+                debug_pair_artists.append(connection)
             if index < len(valid_pred) and valid_pred[index]:
-                residual_line, = ax_debug_B.plot(
-                    [predicted_b[index, 0], point_b[0]],
-                    [predicted_b[index, 1], point_b[1]],
-                    color='#FF00FF', lw=0.75, alpha=0.65, zorder=5,
-                    visible=view_state.get(
-                        'show_homography_residual', True))
-                debug_pair_artists.append(residual_line)
-                debug_homography_residual_artists.append(residual_line)
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    residual_line, = ax_debug_B.plot(
+                        [predicted_b[index, 0], point_b[0]],
+                        [predicted_b[index, 1], point_b[1]],
+                        color='#FF00FF', lw=0.75, alpha=0.65, zorder=5,
+                        visible=view_state.get(
+                            'show_homography_residual', True))
+                else:
+                    residual_line = None
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    debug_pair_artists.append(residual_line)
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    debug_homography_residual_artists.append(residual_line)
             if index in label_ids:
-                label_a = ax_debug_A.text(
-                    point_a[0] + 1.2, point_a[1] - 1.2, str(index),
-                    color=color, fontsize=7, fontweight='bold', zorder=8)
-                label_b = ax_debug_B.text(
-                    point_b[0] + 1.2, point_b[1] - 1.2, str(index),
-                    color=color, fontsize=7, fontweight='bold', zorder=8)
-                debug_pair_artists.extend([label_a, label_b])
+                if DEBUG_LEFT_PANEL_ENABLED:
+                    label_a = ax_debug_A.text(
+                        point_a[0] + 1.2, point_a[1] - 1.2, str(index),
+                        color=color, fontsize=7, fontweight='bold', zorder=8)
+                else:
+                    label_a = None
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    label_b = ax_debug_B.text(
+                        point_b[0] + 1.2, point_b[1] - 1.2, str(index),
+                        color=color, fontsize=7, fontweight='bold', zorder=8)
+                else:
+                    label_b = None
+                debug_pair_artists.extend(artist for artist in [label_a, label_b] if artist is not None)
 
         hull_state = "N/A"
         hull_area = 0.0
@@ -7014,33 +7266,43 @@ def main():
                 hull_area = float(cv2.contourArea(hull.astype(np.float32)))
                 if len(hull) >= 3 and hull_area > 1e-6:
                     hull_closed = np.vstack([hull, hull[0]])
-                    dbg_hull_line.set_data(hull_closed[:, 0], hull_closed[:, 1])
+                    if DEBUG_LEFT_PANEL_ENABLED:
+                        dbg_hull_line.set_data(hull_closed[:, 0], hull_closed[:, 1])
                     right_hull = pts_b[hull_indices].astype(np.float32)
                     right_hull_closed = np.vstack([right_hull, right_hull[0]])
-                    dbg_hull_line_B.set_data(
-                        right_hull_closed[:, 0], right_hull_closed[:, 1])
+                    if DEBUG_RIGHT_PANEL_ENABLED:
+                        dbg_hull_line_B.set_data(
+                            right_hull_closed[:, 0], right_hull_closed[:, 1])
                     inside = cv2.pointPolygonTest(
                         hull.astype(np.float32), (float(u), float(v)), False) >= 0
                     hull_state = "inside" if inside else "OUTSIDE"
                 else:
-                    dbg_hull_line.set_data([], [])
-                    dbg_hull_line_B.set_data([], [])
+                    if DEBUG_LEFT_PANEL_ENABLED:
+                        dbg_hull_line.set_data([], [])
+                    if DEBUG_RIGHT_PANEL_ENABLED:
+                        dbg_hull_line_B.set_data([], [])
                     hull_state = "degenerate"
             except Exception:
-                dbg_hull_line.set_data([], [])
-                dbg_hull_line_B.set_data([], [])
+                if DEBUG_LEFT_PANEL_ENABLED:
+                    dbg_hull_line.set_data([], [])
+                if DEBUG_RIGHT_PANEL_ENABLED:
+                    dbg_hull_line_B.set_data([], [])
                 hull_state = "error"
         else:
-            dbg_hull_line.set_data([], [])
-            dbg_hull_line_B.set_data([], [])
+            if DEBUG_LEFT_PANEL_ENABLED:
+                dbg_hull_line.set_data([], [])
+            if DEBUG_RIGHT_PANEL_ENABLED:
+                dbg_hull_line_B.set_data([], [])
 
         left_radius = max(float(LEFT_PATCH_SEARCH_RADIUS) + 7.0, 30.0)
         left_x0 = max(-0.5, float(u) - left_radius)
         left_x1 = min(float(w) - 0.5, float(u) + left_radius)
         left_y0 = max(-0.5, float(v) - left_radius)
         left_y1 = min(float(h) - 0.5, float(v) + left_radius)
-        ax_debug_A.set_xlim(left_x0, left_x1)
-        ax_debug_A.set_ylim(left_y1, left_y0)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_xlim(left_x0, left_x1)
+        if DEBUG_LEFT_PANEL_ENABLED:
+            ax_debug_A.set_ylim(left_y1, left_y0)
         debug_zoom_home['A'] = (
             (left_x0, left_x1), (left_y1, left_y0))
 
@@ -7075,8 +7337,10 @@ def main():
             right_x0, right_x1 = 0.0, float(w)
         if right_y1 <= right_y0:
             right_y0, right_y1 = 0.0, float(h)
-        ax_debug_B.set_xlim(right_x0, right_x1)
-        ax_debug_B.set_ylim(right_y1, right_y0)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_xlim(right_x0, right_x1)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            ax_debug_B.set_ylim(right_y1, right_y0)
         debug_zoom_home['B'] = (
             (right_x0, right_x1), (right_y1, right_y0))
 
@@ -7386,6 +7650,8 @@ def main():
 
     def reset_debug_zoom(ax):
         """Restore the click-specific home ROI for one lower debug view."""
+        if not debug_axis_enabled(ax):
+            return False
         key = 'A' if ax is ax_debug_A else 'B'
         home = debug_zoom_home.get(key)
         if home is None:
@@ -7396,6 +7662,8 @@ def main():
         return True
 
     def on_press(event):
+        if not debug_axis_enabled(event.inaxes):
+            return
         if height_profile is not None and height_profile.on_press(event):
             return
         if block_accuracy_state['mode'] in ('running', 'preview') and event.inaxes in (ax_A, ax_B):
@@ -7444,6 +7712,7 @@ def main():
         pan_state.update({'pressing': True, 'dragged': False, 'x': event.x, 'y': event.y, 'ax': event.inaxes})
  
     def on_release(event):
+        release_started_at = time.perf_counter()
         if height_profile is not None and height_profile.on_release(event):
             return
         if pan_state.get('dragging_hud', False):
@@ -7493,13 +7762,14 @@ def main():
                         redraw_grad_lines(nearest_idx)
                         request_blit_refresh()
                     elif view_state['manual_pt_A']:
-                        do_measure(view_state['manual_pt_A'][0], view_state['manual_pt_A'][1], manual_match_pt=np.array([ux, vx]))
+                        do_measure(view_state['manual_pt_A'][0], view_state['manual_pt_A'][1],
+                                   manual_match_pt=np.array([ux, vx]), release_started_at=release_started_at)
             else:
                 if pan_state['ax'] == ax_A:
                     nonlocal active_u, active_v
                     active_u = int(round(ux))
                     active_v = int(round(vx))
-                    do_measure(active_u, active_v)
+                    do_measure(active_u, active_v, release_started_at=release_started_at)
                 elif pan_state['ax'] == ax_B and view_state.get('grad_data'):
                     ptsB_arr = view_state['grad_data']['ptsB']
                     dists = np.linalg.norm(ptsB_arr - np.array([ux, vx]), axis=1)
@@ -7509,6 +7779,8 @@ def main():
                     redraw_grad_lines(nearest_idx)
                     request_blit_refresh()
     def on_motion(event):
+        if not debug_axis_enabled(event.inaxes):
+            return
         if height_profile is not None and height_profile.on_motion(event):
             return
         if pan_state.get('dragging_hud', False):
@@ -7535,6 +7807,8 @@ def main():
         request_view_refresh(ax)
 
     def on_scroll(event):
+        if not debug_axis_enabled(event.inaxes):
+            return
         if height_profile is not None and height_profile.mode == 'drawing':
             return
         if event.inaxes not in (ax_A, ax_B, ax_debug_A, ax_debug_B):
@@ -7630,8 +7904,8 @@ def main():
     btn_hide_R = Button(ax_btn_hide_R, "顯示右圖", **btn_style)
     if view_state['region_sift']:
         ax_B.set_visible(True)
-        ax_debug_B.set_visible(True)
-        ax_debug_info_B.set_visible(True)
+        ax_debug_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
+        ax_debug_info_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
         btn_hide_R.label.set_text('隱藏右圖')
     
     ax_btn_norm = fig.add_axes([0.88, control_row_y[0], 0.08, control_h])
@@ -7760,6 +8034,13 @@ def main():
     btn_sift_backend.label.set_color('#E0E0E0')
     btn_sift_backend.label.set_fontsize(7)
 
+    ax_btn_region_refine = fig.add_axes([0.705, control_row_y[4], 0.07, control_h])
+    btn_region_refine = Button(ax_btn_region_refine,
+        '視差微調: On' if REGION_SIFT_CONFIG.local_plane_refine else '視差微調: Off',
+        useblit=False, **btn_opt_style)
+    btn_region_refine.label.set_color('#E0E0E0')
+    btn_region_refine.label.set_fontsize(7)
+
     def apply_region_settings(updated):
         global REGION_SIFT_CONFIG
         if height_profile is not None and height_profile.enabled:
@@ -7769,6 +8050,7 @@ def main():
         previous = REGION_SIFT_CONFIG
         REGION_SIFT_CONFIG = updated
         btn_sift_backend.label.set_text('Descriptor: 自製' if updated.use_masked_sift else 'Descriptor: OpenCV')
+        btn_region_refine.label.set_text('視差微調: On' if updated.local_plane_refine else '視差微調: Off')
         # Left descriptor cache keys include the whole immutable config;
         # the next measurement also creates a new click-local cache.
         for name, value in vars(updated).items():
@@ -7787,6 +8069,17 @@ def main():
             request_blit_refresh()
 
     btn_sift_backend.on_clicked(on_sift_backend)
+
+    def on_region_refine(event):
+        from dataclasses import replace
+        try:
+            apply_region_settings(replace(REGION_SIFT_CONFIG,
+                local_plane_refine=not REGION_SIFT_CONFIG.local_plane_refine))
+        except ValueError as exc:
+            depth_text.set_text(str(exc))
+            request_blit_refresh()
+
+    btn_region_refine.on_clicked(on_region_refine)
 
     def on_region_settings(event):
         if block_accuracy_state['mode'] != 'idle':
@@ -8136,8 +8429,8 @@ def main():
     def on_hide_R(event):
         visible = ax_B.get_visible()
         ax_B.set_visible(not visible)
-        ax_debug_B.set_visible(not visible)
-        ax_debug_info_B.set_visible(not visible)
+        ax_debug_B.set_visible((not visible) and DEBUG_RIGHT_PANEL_ENABLED)
+        ax_debug_info_B.set_visible((not visible) and DEBUG_RIGHT_PANEL_ENABLED)
         btn_hide_R.label.set_text("顯示右圖" if visible else "隱藏右圖")
         # Debug 版下方已有 ROI 圖，HUD 固定留在上方主圖區，
         # 避免右圖隱藏時掉到最下方蓋住 Debug 圖。
@@ -8543,7 +8836,8 @@ def main():
             "H-Resid: On" if visible else "H-Resid: Off")
         btn_h_residual.ax.patch.set_facecolor(
             '#145A32' if visible else '#1A1A1A')
-        dbg_pred_B.set_visible(visible)
+        if DEBUG_RIGHT_PANEL_ENABLED:
+            dbg_pred_B.set_visible(visible)
         for artist in debug_homography_residual_artists:
             artist.set_visible(visible)
         print(
@@ -8570,7 +8864,7 @@ def main():
                    btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
                    btn_top2_geo, btn_h_residual, btn_rt_warp_view]
         widgets.extend([text_region_u, text_region_v, btn_region_replay,
-                        btn_region_settings, btn_sift_backend, btn_specular_settings,
+                        btn_region_settings, btn_sift_backend, btn_region_refine, btn_specular_settings,
                         btn_specular_v2, btn_specular_v2_settings])
         return widgets
 
@@ -8880,8 +9174,8 @@ def main():
         btn_auto_calc.label.set_text('連續計算: 關')
         pan_state.update(pressing=False, dragging_hud=False)
         ax_B.set_visible(True)
-        ax_debug_B.set_visible(True)
-        ax_debug_info_B.set_visible(True)
+        ax_debug_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
+        ax_debug_info_B.set_visible((True) and DEBUG_RIGHT_PANEL_ENABLED)
         btn_hide_R.label.set_text('隱藏右圖')
         widgets = block_accuracy_control_widgets() + [
             btn_block_accuracy, btn_block_cancel, btn_block_mae, btn_region_diagnostics]
@@ -8923,7 +9217,8 @@ def main():
         ('#00BFFF', [ax_c1, ax_c2, ax_c18, ax_c3, ax_c4, ax_c5, ax_c6, ax_c7, ax_c8, ax_c9,
                      ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19,
                      ax_region_u, ax_region_v, ax_btn_region_replay, ax_btn_region_settings,
-                     ax_btn_region_diagnostics, ax_btn_height_profile, ax_btn_sift_backend]),
+                     ax_btn_region_diagnostics, ax_btn_height_profile, ax_btn_sift_backend,
+                     ax_btn_region_refine]),
         ('#00FF88', [ax_btn_specular_settings, ax_btn_specular_v2, ax_btn_specular_v2_settings]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
@@ -8985,6 +9280,7 @@ def main():
         if not blit_state['needs_refresh']:
             return True
         started = time.perf_counter()
+        latency_ticket = click_latency.pending
         pair = None if blit_state['full_refresh'] else blit_state['pair']
         # Consume before drawing so refresh requests raised during draw survive.
         blit_state.update(needs_refresh=False, full_refresh=False, pair=None)
@@ -9058,12 +9354,15 @@ def main():
         finally:
             for artist, was_visible in hidden_right_artists:
                 artist.set_visible(was_visible)
+        render_finished = time.perf_counter()
+        click_latency.complete(latency_ticket, started, prepared, render_finished,
+                               main_drawn=pair is None or pair == 0)
         if first_render:
             first_render = False
             startup_timer.stage("首次繪製")
             startup_timer.report()
         if UI_RENDER_PROFILE:
-            finished = time.perf_counter()
+            finished = render_finished
             render_stats.append(((prepared - started) * 1000,
                                  (finished - prepared) * 1000, rebuilt))
             if len(render_stats) >= 60:

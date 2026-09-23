@@ -8,6 +8,12 @@ from Algorithm.region_sift_frames import _scale_specs
 
 
 LABELS = {
+    'local_plane_refine': '【局部微調】啟用視差斜面修正（原匹配成功後；主按鈕同步）',
+    'refine_radius_px': '【局部微調】每點沿極線最大修正 px',
+    'refine_sample_step_px': '【局部微調】距離表取樣間距 px（半徑須為間距整數倍）',
+    'refine_model_levels': '【局部微調】查表模型搜尋層數 1~5',
+    'refine_slope_penalty': '【局部微調】區域邊緣斜率位移平方懲罰權重',
+    'refine_min_gain': '【局部微調】實算 Objective 最小改善（扣除形變懲罰）',
     'use_masked_sift': '【自製算子】True=遮罩式 SIFT；False=OpenCV（主畫面按鈕同步）',
     'masked_extra_margin_px': '【自製算子】反光遮罩額外擴張 px（原遮罩已有膨脹）',
     'masked_min_blur_weight': '【自製算子】Gaussian 平滑最低有效權重 (0,1]',

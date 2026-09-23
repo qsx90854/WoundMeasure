@@ -24,7 +24,9 @@ def score_grid(debug, key):
 class RegionSIFTDiagnostics:
     """One reusable figure. Click an anchor in any crop to inspect all frames."""
 
-    def __init__(self):
+    def __init__(self, *, show_search=True, show_ambiguity=True):
+        self.show_search = bool(show_search)
+        self.show_ambiguity = bool(show_ambiguity)
         self.figure = None
         self.search_figure = None
         self.options = [False, False, False, False]
@@ -56,9 +58,17 @@ class RegionSIFTDiagnostics:
         if self.figure is not None and event.canvas is self.figure.canvas:
             self._disconnect_widgets()
             self.figure = None
-            if self.search_figure is not None:
-                plt.close(self.search_figure)
-                self.search_figure = None
+
+    def _close_ambiguity(self):
+        if self.figure is not None:
+            self._disconnect_widgets()
+            figure, self.figure = self.figure, None
+            plt.close(figure)
+
+    def _close_search(self):
+        if self.search_figure is not None:
+            figure, self.search_figure = self.search_figure, None
+            plt.close(figure)
 
     def _ensure_window(self):
         if self.figure is None or not plt.fignum_exists(self.figure.number):
@@ -79,6 +89,9 @@ class RegionSIFTDiagnostics:
         self.result = result
         self.debug = result.get('region_debug')
         self._show_search_history(result)
+        if not self.show_ambiguity:
+            self._close_ambiguity()
+            return
         self.gt = None
         self.gt_error = ''
         self._ensure_window()
@@ -105,6 +118,9 @@ class RegionSIFTDiagnostics:
         self._present()
 
     def _show_search_history(self, result):
+        if not self.show_search:
+            self._close_search()
+            return
         from Algorithm.region_sift_search_debug import draw_search_history
         history = result.get('region_search_history') or (self.debug or {}).get('search_history')
         if not history:
@@ -253,7 +269,10 @@ class RegionSIFTDiagnostics:
             f"ObjRatio={d['objective_score_ratio']:.4f}  separation={separation:.2f}px\n"
             f"Candidate H (single frame, mm): best={heights[0]:.3f}, second={heights[1]:.3f}, "
             f"difference={abs(heights[0]-heights[1]):.3f} | {d.get('diagnostic_plane_label', 'plane unavailable')}\n"
-            + status, fontsize=10)
+            + status
+            + (f"\nLocalPlane: {d['refinement']['status']} | ORIGINAL best/second above; "
+               f"refined single-frame H={heights[2] if len(heights) > 2 else float('nan'):.3f} mm"
+               if 'refinement' in d else ''), fontsize=10)
 
     def _images(self):
         d = self.debug

@@ -99,6 +99,14 @@ class RegionSIFTConfig:
     valley_min_valid_fraction: float = 0.7
     valley_max_basin_ratio: float = 0.95
 
+    # Post-search local disparity plane; rejected searches are never rescued.
+    local_plane_refine: bool = False
+    refine_radius_px: float = 2.0
+    refine_sample_step_px: float = 1.0
+    refine_model_levels: int = 3
+    refine_slope_penalty: float = 0.5
+    refine_min_gain: float = 0.5
+
     # Robust group score.  keep_best_count, when set, overrides the ratio.
     keep_best_ratio: float = 0.75
     keep_best_count: Optional[int] = None
@@ -142,6 +150,8 @@ def _validate_config(config: RegionSIFTConfig) -> None:
         raise RegionSIFTError(str(exc)) from exc
     from Algorithm.region_sift_search import validate_search_config
     validate_search_config(config)
+    from Algorithm.region_sift_refinement import validate_refinement_config
+    validate_refinement_config(config)
     if config.grid_rows <= 0 or config.grid_cols <= 0:
         raise RegionSIFTError("grid_rows/grid_cols must be positive")
     if config.grid_rows % 2 == 0 or config.grid_cols % 2 == 0:
@@ -639,6 +649,9 @@ def run_region_sift_matching(
             sift=sift, config=config, left_cache=left_cache,
             reject_specular=reject_specular, left_spec_mask=left_spec_mask,
             right_spec_mask=right_spec_mask)
+    standalone = _session is None
+    if standalone:
+        _session = {}
     started = time.perf_counter()
     timing_ms: Dict[str, float] = {}
     timing_stage = '初始化與快取檢查'
@@ -1181,6 +1194,10 @@ def run_region_sift_matching(
             "method": f"Region-SIFT({keep_count}/{point_count})" + ('+MaskedSIFT' if config.use_masked_sift else ''),
             "region_debug": debug,
         })
+        if standalone and config.local_plane_refine:
+            timing_next('局部視差斜面微調')
+            from Algorithm.region_sift_refinement import refine_match
+            refine_match(base_result, point_p, config, sift=sift, session=_session)
         return base_result
     except (RegionSIFTError, cv2.error, KeyError, ValueError, np.linalg.LinAlgError) as exc:
         base_result["reject_reason"] = str(exc)

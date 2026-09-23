@@ -538,6 +538,13 @@ def run_two_stage(engine, left, right, point, cand, K_L, *, sift, config, left_c
             break
     except (RegionSIFTError, ValueError, KeyError, cv2.error, np.linalg.LinAlgError) as exc:
         result.update(m_pt=None, method='', reject_reason=f'匹配失敗: two-stage search: {exc}')
+    if config.local_plane_refine:
+        from Algorithm.region_sift_refinement import refine_match
+        refine_match(result, point, effective, sift=sift, session=session)
+        report = result.get('refinement', {})
+        totals['局部視差斜面微調'] = report.get('elapsed_ms', 0.)
+        counts['right_descriptor_rows'] += report.get('descriptor_rows', 0)
+        counts['right_descriptor_batches'] += report.get('descriptor_batches', 0)
     elapsed = (time.perf_counter()-started)*1000.
     totals['兩階段控制與低谷分析'] = max(0., elapsed-sum(totals.values()))
     counts.update(reject_specular=bool(kwargs.get('reject_specular') or config.use_masked_sift),

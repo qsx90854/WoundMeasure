@@ -68,7 +68,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
                        get_selected_height_plane=lambda: (np.array([0, 0, 1]), np.zeros(3), 'Shared Pattern Plane'),
                        VIDEO_PATH='test.mp4', MEASURE_MODE='dual_direct',
                        DEFAULT_WOUND_HEIGHT_OFFSET_MM=0, shared_height_plane_diag={},
-                       REGION_SIFT_CONFIG=SimpleNamespace(group_balance_weight=0.35, use_masked_sift=False), KL=np.eye(3),
+                       REGION_SIFT_CONFIG=SimpleNamespace(group_balance_weight=0.35, use_masked_sift=False, local_plane_refine=False), KL=np.eye(3),
                        scatter_A=SimpleNamespace(set_offsets=Mock()),
                        do_measure=Mock(return_value={'height_display_mm': 12.5, 'fail_reason': ''}))
         widget_names = [f'c{i}' for i in range(1, 20)] + [
@@ -79,7 +79,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
             'btn_metric_blocks', 'btn_shared_plane', 'btn_top2_geo', 'btn_h_residual',
             'btn_rt_warp_view', 'btn_block_accuracy', 'btn_block_cancel', 'btn_block_mae',
             'text_region_u', 'text_region_v', 'btn_region_replay', 'btn_region_settings',
-            'btn_height_profile', 'btn_sift_backend', 'btn_specular_settings',
+            'btn_height_profile', 'btn_sift_backend', 'btn_region_refine', 'btn_specular_settings',
             'btn_specular_v2', 'btn_specular_v2_settings']
         self.ns.update({name: FakeWidget() for name in widget_names})
         tree = ast.parse(SOURCE.read_text(encoding='utf-8-sig'))
@@ -147,7 +147,7 @@ class BlockAccuracyCallbackTests(unittest.TestCase):
 
     def test_region_settings_apply_is_atomic_and_blocked_during_batch(self):
         previous = self.ns['REGION_SIFT_CONFIG']
-        updated = SimpleNamespace(group_balance_weight=0.5, use_masked_sift=True)
+        updated = SimpleNamespace(group_balance_weight=0.5, use_masked_sift=True, local_plane_refine=False)
         self.state['mode'] = 'running'
         with self.assertRaises(ValueError):
             self.callbacks['apply_region_settings'](updated)
