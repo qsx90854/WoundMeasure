@@ -241,6 +241,63 @@ class MaskedSIFTTests(unittest.TestCase):
             cropped['region_debug']['distances'], full['region_debug']['distances'])
         self.assertEqual(cropped['method'], full['method'])
 
+    def test_numba_kernel_matches_numpy_reference_bit_for_bit(self):
+        """The compiled descriptor kernel must reproduce the NumPy loop exactly.
+
+        The kernel mirrors the NumPy version's accumulation order and keeps
+        fastmath off, so results should be bit-identical -- but that also
+        depends on the installed numba/numpy agreeing on exp/floor/mod, which
+        can change with versions or CPU. This test is the guard: if they ever
+        diverge, descriptors would silently drift instead of failing loudly."""
+        if not masked.HAVE_NUMBA:
+            self.skipTest('numba not installed; only the NumPy path is in use')
+        self.mask[96:112, 112:130] = 255
+        context = masked.create_context(self.image, self.mask, self.cfg)
+        available = [e['size'] for e in context['entries']]
+        rng = np.random.default_rng(4)
+        n = 400
+        points = np.concatenate([
+            rng.uniform(0, min(self.image.shape), size=(n // 2, 2)),   # includes borders
+            rng.uniform(30, 180, size=(n - n // 2, 2)),                # interior
+        ]).astype(np.float32)
+        exact = np.array([available[i % len(available)] for i in range(n)])
+        # The real pipeline stores frame sizes as float32, so they reach the
+        # descriptor slightly off entry['size']; the kernel must use each
+        # point's own size, not the entry's, or this case drifts.
+        rounded = exact.astype(np.float32).astype(float)
+        self.assertTrue(np.any(rounded != exact))
+        angles = rng.uniform(-720, 720, size=n)
+        for sizes in (exact, rounded):
+            compiled = masked.compute_descriptors(context, points, sizes, angles, self.cfg)
+            with patch.object(masked, 'HAVE_NUMBA', False):
+                reference = masked.compute_descriptors(context, points, sizes, angles, self.cfg)
+            for key in reference:
+                np.testing.assert_array_equal(compiled[key], reference[key], err_msg=key)
+
+    def test_cached_gradient_polar_matches_per_window_recomputation(self):
+        """Perf change: compute_descriptors reads gradient magnitude/direction
+        from per-entry maps built once (_entry_gradient_polar) instead of
+        calling hypot/arctan2 over every point's window. Both are elementwise,
+        so gathering from the map must equal recomputing on the gathered
+        window, bit for bit -- otherwise descriptors would silently drift."""
+        self.mask[100:106, 118:124] = 255
+        context = masked.create_context(self.image, self.mask, self.cfg)
+        for entry in context['entries']:
+            strength, direction = masked._entry_gradient_polar(entry)
+            radius = int(entry['nominal_radius'])
+            cx, cy = 130, 110
+            ys, xs = np.mgrid[cy-radius:cy+radius+1, cx-radius:cx+radius+1]
+            ys = np.clip(ys, 0, self.image.shape[0]-1)
+            xs = np.clip(xs, 0, self.image.shape[1]-1)
+            gx, gy = entry['gx'][ys, xs], entry['gy'][ys, xs]
+            np.testing.assert_array_equal(strength[ys, xs], np.hypot(gx, gy))
+            np.testing.assert_array_equal(direction[ys, xs], np.degrees(np.arctan2(gy, gx)))
+        # The cache must also be stable: a second call returns the same arrays.
+        first = masked._entry_gradient_polar(context['entries'][0])
+        second = masked._entry_gradient_polar(context['entries'][0])
+        self.assertIs(first[0], second[0])
+        self.assertIs(first[1], second[1])
+
     def test_right_reflected_anchor_center_is_not_whole_candidate_veto(self):
         right_mask = self.mask.copy()
         right_mask[110, 130] = 255

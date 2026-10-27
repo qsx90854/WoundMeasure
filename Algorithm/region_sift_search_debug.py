@@ -12,22 +12,28 @@ def draw_search_history(figure, history, status=''):
         stages = [stage for stage in history if stage['round'] == round_id]
         last = stages[-1]
         for stage in stages:
-            if 'candidate_group_scores' not in stage:
+            if 'candidate_objective_scores' not in stage:
                 continue
             x = np.unique(stage['candidate_along_offsets'])
             y = []
             for a in x:
                 ids = np.flatnonzero(stage['candidate_along_offsets'] == a)
-                i = ids[np.argmin(stage['candidate_objective_scores'][ids])]
-                value = stage['candidate_group_scores'][i]
+                value = np.min(stage['candidate_objective_scores'][ids])
                 y.append(value if np.isfinite(value) else np.nan)
             ax.plot(x, y, '.-', lw=1, ms=3, color=colors.get(stage['stage']),
                 label=f"{stage['stage']}: {stage['candidate_count']} samples, "
                       f"{stage['descriptor_rows']} new rows, {stage['elapsed_ms']:.0f} ms")
+        coarse = next((stage for stage in stages if stage['stage'] == 'coarse'), None)
+        if coarse is not None and coarse is not last:
+            coarse_valley = coarse.get('valley', {})
+            if 'along' in coarse_valley:
+                ax.axvline(coarse_valley['along'], color=colors['coarse'], ls='--', lw=1.2,
+                           label=f"coarse min Objective: {coarse_valley['along']:+.1f} px")
         valley = last.get('valley', {})
         if 'along' in valley:
             ax.axvline(valley['along'], color='red', ls=':',
-                       label='valley minimum' if valley.get('clear') else 'lowest sample (unclear)')
+                       label=f"{last['stage']} min Objective: {valley['along']:+.1f} px "
+                             f"({'clear' if valley.get('clear') else 'unclear'} valley)")
         if 'basin_bounds' in valley:
             ax.axvspan(*valley['basin_bounds'], color='green', alpha=.12, label='valley bottom')
         if last.get('fine_bounds') is not None:
@@ -38,7 +44,7 @@ def draw_search_history(figure, history, status=''):
             f"valleyDrop={valley.get('relative_depth', float('nan')):.3f}, "
             f"basin ratio={valley.get('basin_ratio', float('nan')):.3f} | {last['reason']}",
             width=125), fontsize=9)
-        ax.set(xlabel='Along epipolar offset (warped px)', ylabel='GroupScore')
+        ax.set(xlabel='Along epipolar offset (warped px)', ylabel='Objective (lower is better)')
         ax.grid(alpha=.2)
         if ax.lines:
             ax.legend(fontsize=7, loc='best', ncol=2)
@@ -47,6 +53,8 @@ def draw_search_history(figure, history, status=''):
                     ha='center', transform=ax.transAxes)
     figure.suptitle(textwrap.fill('Coarse-to-fine search | '+str(status), width=130), fontsize=10)
     figure.text(.02, .01, 'Compare curves only within a round (anchors change on expansion). '
-                'Across envelope selects by Objective; shown ordinate is GroupScore.\n'
+                'Blue dashed = coarse minimum; red dotted = final-stage minimum. '
+                'Each curve shows the lowest Objective across the evaluated width at each along position.\n'
+                'valleyDrop and shaded basin bounds are computed from GroupScore. '
                 'Only evaluated positions are shown; gaps are not interpolated. Coarse coverage is not exhaustive.', fontsize=8)
     figure.tight_layout(rect=(0, .065, 1, .93))

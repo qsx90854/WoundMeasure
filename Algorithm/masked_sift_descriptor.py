@@ -13,6 +13,20 @@ import numpy as np
 from Algorithm import region_sift_frames as frames
 from Algorithm.region_sift_profiling import timed, DetailTimer
 
+try:  # Optional: the NumPy path below stays the reference and the fallback.
+    # cache=True writes compiled code next to this file (Algorithm/__pycache__).
+    # If that folder is not writable, set NUMBA_CACHE_DIR to a writable path,
+    # otherwise the first call can stall while numba tries to save the cache.
+    from numba import njit as _njit
+    HAVE_NUMBA = True
+except ImportError:  # pragma: no cover - exercised only without numba installed
+    HAVE_NUMBA = False
+
+    def _njit(**_kwargs):
+        def wrap(function):
+            return function
+        return wrap
+
 
 def validate_config(config):
     for name in ('masked_min_blur_weight', 'masked_min_valid_fraction',
@@ -140,6 +154,185 @@ def _normalize(hist, config):
     return values
 
 
+def _entry_gradient_polar(entry):
+    """Per-pixel gradient magnitude and direction for one entry, cached on it.
+
+    Both depend only on that entry's gx/gy maps, never on which point is being
+    described or at what angle, yet the per-point loop below used to recompute
+    them over every point's whole window (thousands of arctan2/hypot calls per
+    point). Computing each map once and gathering from it is bit-identical:
+    these are elementwise functions, so a pixel's value is the same whether it
+    is evaluated alone or as part of the full map.
+    """
+    cached = entry.get('_gradient_polar')
+    if cached is None:
+        gx, gy = entry['gx'], entry['gy']
+        cached = (np.hypot(gx, gy), np.degrees(np.arctan2(gy, gx)))
+        entry['_gradient_polar'] = cached
+    return cached
+
+
+def _entry_window_grid(entry):
+    """Integer (yy, xx) offsets covering one entry's descriptor window.
+
+    Depends only on the entry's nominal radius, so it is rebuilt once per
+    entry instead of per point.
+    """
+    grid = entry.get('_window_grid')
+    if grid is None:
+        radius = int(entry['nominal_radius'])
+        grid = np.mgrid[-radius:radius+1, -radius:radius+1]
+        entry['_window_grid'] = grid
+    return grid
+
+
+@_njit(cache=True, fastmath=False)
+def _descriptor_kernel(cx_all, cy_all, cos_all, sin_all, angle_all, cell_width_all, radius,
+                       strength_map, direction_map, valid_map,
+                       histograms, totals, observeds):
+    """Compiled twin of the NumPy per-point loop below; must match it bit for bit.
+
+    Every float operation is kept in the same order and grouping as the NumPy
+    version, and fastmath is off, so the compiler may not reassociate. In
+    particular the four spatial corners are still accumulated into separate
+    temporaries that are added into the running totals one corner at a time,
+    exactly as `hist += np.bincount(...)` does per corner, because floating
+    point addition is not associative.
+    """
+    height, width = valid_map.shape
+    size = 2 * radius + 1
+    capacity = size * size
+    # Sample buffers, filled in the window's row-major order -- the same order
+    # np.bincount walks its inputs in.
+    b_ix = np.empty(capacity, np.int64)
+    b_iy = np.empty(capacity, np.int64)
+    b_io = np.empty(capacity, np.int64)
+    b_fx = np.empty(capacity, np.float64)
+    b_fy = np.empty(capacity, np.float64)
+    b_fo = np.empty(capacity, np.float64)
+    b_gauss = np.empty(capacity, np.float64)
+    b_mag = np.empty(capacity, np.float64)
+    b_good = np.empty(capacity, np.float64)
+    corner16_total = np.empty(16, np.float64)
+    corner16_obs = np.empty(16, np.float64)
+    corner128_lo = np.empty(128, np.float64)
+    corner128_hi = np.empty(128, np.float64)
+
+    for p in range(cx_all.shape[0]):
+        cx = cx_all[p]
+        cy = cy_all[p]
+        ct = cos_all[p]
+        st = sin_all[p]
+        angle = angle_all[p]
+        cell_width = cell_width_all[p]
+        count = 0
+        for i in range(-radius, radius + 1):
+            for j in range(-radius, radius + 1):
+                x = (ct * j + st * i) / cell_width
+                y = (-st * j + ct * i) / cell_width
+                bx = x + 1.5
+                by = y + 1.5
+                if bx <= -1. or bx >= 4. or by <= -1. or by >= 4.:
+                    continue
+                xs = cx + j
+                ys = cy + i
+                in_image = 0 <= xs < width and 0 <= ys < height
+                xs_c = min(max(xs, 0), width - 1)
+                ys_c = min(max(ys, 0), height - 1)
+                good = 1. if (in_image and valid_map[ys_c, xs_c]) else 0.
+                gauss = np.exp(-(x * x + y * y) / 8.)
+                ob = ((angle - direction_map[ys_c, xs_c]) % 360.) / 45.
+                fix = np.floor(bx)
+                fiy = np.floor(by)
+                fio = np.floor(ob)
+                b_ix[count] = np.int64(fix)
+                b_iy[count] = np.int64(fiy)
+                b_io[count] = np.int64(fio)
+                b_fx[count] = bx - fix
+                b_fy[count] = by - fiy
+                b_fo[count] = ob - fio
+                b_gauss[count] = gauss
+                b_mag[count] = strength_map[ys_c, xs_c] * gauss * good
+                b_good[count] = good
+                count += 1
+
+        for dx in range(2):
+            for dy in range(2):
+                for c in range(16):
+                    corner16_total[c] = 0.
+                    corner16_obs[c] = 0.
+                for c in range(128):
+                    corner128_lo[c] = 0.
+                    corner128_hi[c] = 0.
+                for k in range(count):
+                    sx = b_ix[k] + dx
+                    sy = b_iy[k] + dy
+                    if sx < 0 or sx >= 4 or sy < 0 or sy >= 4:
+                        continue
+                    cell = sy * 4 + sx
+                    fx = b_fx[k] if dx == 1 else 1. - b_fx[k]
+                    fy = b_fy[k] if dy == 1 else 1. - b_fy[k]
+                    spatial = fx * fy
+                    weighted = spatial * b_gauss[k]
+                    corner16_total[cell] += weighted
+                    corner16_obs[cell] += weighted * b_good[k]
+                    mass = spatial * b_mag[k]
+                    fo = b_fo[k]
+                    io = b_io[k]
+                    corner128_lo[cell * 8 + (io % 8)] += mass * (1. - fo)
+                    corner128_hi[cell * 8 + ((io + 1) % 8)] += mass * fo
+                for c in range(16):
+                    totals[p, c] += corner16_total[c]
+                    observeds[p, c] += corner16_obs[c]
+                for c in range(128):
+                    histograms[p, c] += corner128_lo[c]
+                for c in range(128):
+                    histograms[p, c] += corner128_hi[c]
+
+
+def _fill_descriptors_numba(context, pts, sizes, angles, histograms, coverage, fractions):
+    """Group points by scale, run the compiled kernel, finish in NumPy.
+
+    Points are grouped only so one kernel call can share an entry's radius and
+    maps; each point's result depends on nothing but its own inputs, so the
+    grouping cannot change any value. The final coverage/fraction reductions
+    stay in NumPy so their summation order matches the reference loop.
+    """
+    height, width = context['image_shape']
+    entries = context['entries']
+    entry_sizes = np.array([e['size'] for e in entries])
+    # Same tie-break as min(entries, key=...): first entry at the smallest gap.
+    nearest = np.argmin(np.abs(entry_sizes[None, :] - sizes[:, None]), axis=1)
+    cx_all = np.rint(pts[:, 0]).astype(np.int64)
+    cy_all = np.rint(pts[:, 1]).astype(np.int64)
+    in_bounds = (cx_all >= 0) & (cx_all < width) & (cy_all >= 0) & (cy_all < height)
+    for entry_index in np.unique(nearest):
+        entry = entries[int(entry_index)]
+        matched = nearest == entry_index
+        if not np.all(np.isclose(entry['size'], sizes[matched], rtol=1e-5)):
+            raise ValueError('Descriptor scale is absent from masked context')
+        rows = np.flatnonzero(matched & in_bounds)
+        if not len(rows):
+            continue
+        strength_map, direction_map = _entry_gradient_polar(entry)
+        group_angles = angles[rows]
+        theta = np.deg2rad(group_angles)
+        group_hist = np.zeros((len(rows), 128), np.float64)
+        group_total = np.zeros((len(rows), 16), np.float64)
+        group_observed = np.zeros((len(rows), 16), np.float64)
+        # Per-point size, as the NumPy loop uses: the caller's size may differ
+        # from entry['size'] within the isclose tolerance (e.g. float32 frames).
+        _descriptor_kernel(
+            cx_all[rows], cy_all[rows], np.cos(theta), np.sin(theta), group_angles,
+            3 * sizes[rows] / 2., int(entry['nominal_radius']),
+            strength_map, direction_map, entry['gradient_valid'],
+            group_hist, group_total, group_observed)
+        histograms[rows] = group_hist
+        coverage[rows] = group_observed / np.maximum(group_total, 1e-12)
+        fractions[rows] = (group_observed.sum(axis=1)
+                           / np.maximum(group_total.sum(axis=1), 1e-12))
+
+
 @timed('descriptor')
 def compute_descriptors(context, points, sizes_px, angles_deg, config):
     """Preserve N rows; validity is evidence coverage, NOT gradient strength."""
@@ -155,15 +348,22 @@ def compute_descriptors(context, points, sizes_px, angles_deg, config):
     coverage = np.zeros((len(pts), 16), np.float32)
     fractions = np.zeros(len(pts), np.float32)
     height, width = context['image_shape']
+    if HAVE_NUMBA:
+        _fill_descriptors_numba(context, pts, sizes, angles,
+                                histograms, coverage, fractions)
+        detail.count('custom_rows', len(pts))
+        detail.mark('自製遮罩 descriptor 與有效覆蓋累加')
+        return dict(descriptors=_normalize(histograms, config), histograms=histograms,
+                    cell_valid_fraction=coverage, valid_fraction=fractions,
+                    valid_points=fractions >= config.masked_min_valid_fraction)
     for i, (point, size, angle) in enumerate(zip(pts, sizes, angles)):
         entry = min(context['entries'], key=lambda e: abs(e['size']-size))
         if not np.isclose(entry['size'], size, rtol=1e-5):
             raise ValueError('Descriptor scale is absent from masked context')
-        radius = int(entry['nominal_radius'])
         cx, cy = np.rint(point).astype(int)
         if not (0 <= cx < width and 0 <= cy < height):
             continue
-        yy, xx = np.mgrid[-radius:radius+1, -radius:radius+1]
+        yy, xx = _entry_window_grid(entry)
         theta = np.deg2rad(angle)
         cell_width = 3 * size / 2.
         x = (np.cos(theta)*xx + np.sin(theta)*yy) / cell_width
@@ -175,28 +375,37 @@ def compute_descriptors(context, points, sizes_px, angles_deg, config):
         in_image = (xs >= 0) & (xs < width) & (ys >= 0) & (ys < height)
         xs, ys = np.clip(xs, 0, width-1), np.clip(ys, 0, height-1)
         good = in_image & entry['gradient_valid'][ys, xs]
-        gx, gy = entry['gx'][ys, xs], entry['gy'][ys, xs]
+        strength_map, direction_map = _entry_gradient_polar(entry)
         gaussian = np.exp(-(x*x+y*y)/8.)
-        magnitude = np.hypot(gx, gy) * gaussian * good
+        magnitude = strength_map[ys, xs] * gaussian * good
         # OpenCV descriptor bins use a y-up gradient; keypoint angles use
         # image coordinates (y-down). Keep that bin order for comparability.
-        ob = ((angle-np.degrees(np.arctan2(gy, gx))) % 360) / 45.
+        ob = ((angle-direction_map[ys, xs]) % 360) / 45.
         ix, iy, io = np.floor(bx).astype(int), np.floor(by).astype(int), np.floor(ob).astype(int)
         fx, fy, fo = bx-ix, by-iy, ob-io
         histogram = np.zeros(128, float)
         total, observed = np.zeros(16, float), np.zeros(16, float)
+        # Everything below is compacted by `keep` before the arithmetic rather
+        # than after it. Elementwise products commute with selection, and the
+        # bincount accumulation order per corner is unchanged, so the result
+        # is bit-identical -- it just stops multiplying the ~1/3 of samples
+        # that the corner then discards, and stops recomputing shared terms.
         for dx in (0, 1):
             for dy in (0, 1):
                 sx, sy = ix+dx, iy+dy
                 keep = (sx >= 0) & (sx < 4) & (sy >= 0) & (sy < 4)
                 cells = (sy[keep]*4+sx[keep])
-                spatial = (fx if dx else 1-fx) * (fy if dy else 1-fy)
-                total += np.bincount(cells, weights=(spatial*gaussian)[keep], minlength=16)
-                observed += np.bincount(cells, weights=(spatial*gaussian*good)[keep], minlength=16)
+                spatial = ((fx if dx else 1-fx) * (fy if dy else 1-fy))[keep]
+                weighted = spatial*gaussian[keep]
+                total += np.bincount(cells, weights=weighted, minlength=16)
+                observed += np.bincount(cells, weights=weighted*good[keep], minlength=16)
+                io_keep, fo_keep = io[keep], fo[keep]
+                cell_bins = cells*8
+                mass = spatial*magnitude[keep]
                 for do in (0, 1):
-                    bins = cells*8 + ((io[keep]+do) % 8)
-                    mass = spatial*magnitude*(fo if do else 1-fo)
-                    histogram += np.bincount(bins, weights=mass[keep], minlength=128)
+                    bins = cell_bins + ((io_keep+do) % 8)
+                    histogram += np.bincount(
+                        bins, weights=mass*(fo_keep if do else 1-fo_keep), minlength=128)
         histograms[i] = histogram
         coverage[i] = observed / np.maximum(total, 1e-12)
         fractions[i] = observed.sum() / max(total.sum(), 1e-12)

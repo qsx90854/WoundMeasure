@@ -216,8 +216,8 @@ GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback use
 # blends best-21 with cell-balanced ALL-row L2; only reliable frames add a penalty.
 # Display-only switches; no effect on matching, search history or terminal logs.
 # False skips window creation AND drawing, including the SIFT Debug button.
-REGION_SIFT_SHOW_COARSE_FINE_WINDOW = False
-REGION_SIFT_SHOW_AMBIGUITY_WINDOW = False
+REGION_SIFT_SHOW_COARSE_FINE_WINDOW = True
+REGION_SIFT_SHOW_AMBIGUITY_WINDOW = True
 
 REGION_SIFT_CONFIG = RegionSIFTConfig(
     two_stage_search=True,
