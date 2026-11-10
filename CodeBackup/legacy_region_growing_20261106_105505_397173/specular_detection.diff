@@ -1,0 +1,90 @@
+--- backup/Algorithm/specular_detection.py
++++ Algorithm/specular_detection.py
+@@ -50,6 +50,14 @@
+     open_kernel_px: int = 1
+     close_kernel_px: int = 5
+     dilate_px: int = SPEC_MASK_DILATE
++    # Opt-in refinement, shared by standalone viewers and GradSIFTDebug.
++    enable_region_growing: bool = False
++    grow_radius_px: int = 3
++    grow_local_hot_min: float = 5.0
++    grow_gray_min: float = 80.0
++    grow_s_max: float = 150.0
++    grow_whiteness_max: float = 90.0
++    grow_color_max: float = 60.0
+ 
+ 
+ def validate_block_spatial_specular_config(config):
+@@ -66,6 +74,14 @@
+     if (not isinstance(config.dilate_px, (int, np.integer))
+             or isinstance(config.dilate_px, (bool, np.bool_)) or config.dilate_px < 0):
+         raise ValueError('dilate_px must be a nonnegative integer')
++    if not isinstance(config.enable_region_growing,(bool,np.bool_)):
++        raise ValueError('enable_region_growing must be boolean')
++    if (not isinstance(config.grow_radius_px,(int,np.integer))
++            or isinstance(config.grow_radius_px,(bool,np.bool_)) or not 0<=config.grow_radius_px<=32):
++        raise ValueError('grow_radius_px must be an integer in [0, 32]')
++    for name in ('grow_local_hot_min','grow_gray_min','grow_s_max','grow_whiteness_max','grow_color_max'):
++        if not np.isfinite(getattr(config,name)) or not 0<=getattr(config,name)<=255:
++            raise ValueError(f'{name} must be in [0, 255]')
+     for name, value in vars(config).items():
+         if isinstance(value, (bool, np.bool_)):
+             continue
+@@ -86,6 +102,33 @@
+     if config.prominence_mad_multiplier < 0:
+         raise ValueError('prominence_mad_multiplier must be nonnegative')
+     return config
++
++
++def _grow_specular_region(bgr, seeds, eligible, radius, color_max):
++    """8-connected growth, at most radius steps from immutable original seeds.
++
++    Color is max-channel-normalized BGR (0..255), L-infinity distance to
++    the nearest ORIGINAL seed. This permits dimmer edges without gradual
++    color drift. A pixel failing its nearest seed's color check is excluded
++    even if another, farther seed would accept it (conservative policy).
++    """
++    grown=seeds.copy()
++    if radius==0 or not np.any(seeds) or np.all(seeds):return grown
++    distance,labels=cv2.distanceTransformWithLabels(
++        (~seeds).astype(np.uint8),cv2.DIST_C,3,labelType=cv2.DIST_LABEL_PIXEL)
++    color=bgr.astype(np.float32)
++    color*=255.0/np.maximum(color.max(axis=2,keepdims=True),1.0)
++    seed_colors=np.zeros((int(labels.max())+1,3),np.float32)
++    seed_colors[labels[seeds]]=color[seeds]
++    color_ok=np.max(np.abs(color-seed_colors[labels]),axis=2)<=color_max
++    allowed=eligible & color_ok & (distance<=radius)
++    kernel=np.ones((3,3),np.uint8)
++    for _ in range(radius):
++        expanded=(cv2.dilate(grown.astype(np.uint8),kernel)>0)&allowed
++        updated=grown|expanded
++        if np.array_equal(updated,grown):break
++        grown=updated
++    return grown
+ 
+ 
+ def compute_specular_mask_bgr_block_adaptive(
+@@ -158,6 +201,12 @@
+             strong = ((v >= config.strong_v_min) & (s <= config.strong_s_max)
+                       & (whiteness <= config.strong_whiteness_max))
+             selected = selected | strong
++    seed_mask = selected
++    if config.enable_region_growing:
++        eligible = ((gray >= config.grow_gray_min) & (local_hot >= config.grow_local_hot_min)
++                    & ((s <= config.grow_s_max) | (whiteness <= config.grow_whiteness_max)))
++        selected = _grow_specular_region(bgr, seed_mask, eligible,
++                                         config.grow_radius_px, config.grow_color_max)
+     mask = selected.astype(np.uint8) * 255
+     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((config.open_kernel_px,) * 2, np.uint8))
+     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((config.close_kernel_px,) * 2, np.uint8))
+@@ -170,7 +219,9 @@
+                       'prominence_threshold_map': thresholds[3] if config.enable_prominence_gate else None,
+                       'candidate_mask': candidates.astype(np.uint8) * 255,
+                       'strong_highlight_mask': strong.astype(np.uint8) * 255,
+-                      'selected_before_morphology': selected.astype(np.uint8) * 255}
++                      'selected_before_morphology': selected.astype(np.uint8) * 255,
++                      'region_growing_seed_mask': seed_mask.astype(np.uint8) * 255,
++                      'region_growing_added_mask': (selected & ~seed_mask).astype(np.uint8) * 255}
+     return mask
+ 
+ 

@@ -8,6 +8,35 @@ from Algorithm.region_sift_frames import _scale_specs
 
 
 LABELS = {
+    'center_refine_enabled': '【中心精修】原搜尋成功後才精修 Top 1；與 LocalPlane 互斥',
+    'center_refine_points': '【中心精修】自動取點數（另加 P，3~64）',
+    'center_refine_width_px': '【中心精修】獨立取點區域寬 px',
+    'center_refine_height_px': '【中心精修】獨立取點區域高 px',
+    'center_refine_max_support_radius_px': '【中心精修】nominal descriptor 半徑上限（不含 Gaussian halo）',
+    'center_refine_radius_px': '【中心精修】初始 along 搜尋半徑 px',
+    'center_refine_step_px': '【中心精修】along 步長 px；across 固定',
+    'center_refine_max_radius_px': '【中心精修】邊界持續改善時擴搜半徑上限 px',
+    'center_refine_spatial_sigma_px': '【中心精修】距離 P 的 Gaussian 權重 sigma px',
+    'center_refine_min_point_distance_px': '【中心精修】取點最小間距 px',
+    'center_refine_min_points': '【中心精修】最低有效點數（另受比例門檻約束）',
+    'center_refine_min_group_fraction': '【中心精修】最低有效點比例',
+    'center_refine_min_weight_fraction': '【中心精修】最低有效空間權重比例',
+    'center_refine_min_valid_fraction': '【中心精修／自製】每個 descriptor 最低有效覆蓋',
+    'center_refine_min_quadrants': '【中心精修】有效近點至少涵蓋的象限數 1~4',
+    'center_refine_min_gain': '【中心精修】相對 0px 的最小分數改善',
+    'center_refine_min_relative_gain': '【中心精修】相對 0px 的最小改善比例',
+    'center_refine_min_valley_depth': '【中心精修】局部低谷相對兩側肩部的最低深度',
+    'center_refine_max_score_ratio': '【中心精修】最佳／排除鄰域後競爭位置分數比上限',
+    'center_refine_competitor_exclusion_px': '【中心精修】競爭位置排除沿線半徑 px',
+    'center_refine_max_score': '【中心精修】中心加權分數上限（不是原 GroupScore）',
+    'confidence_mode': '【可信度】legacy=原規則；shadow=旁路分析；active=新低谷/定位判斷',
+    'confidence_cell_stability': '【可信度】搜尋末端逐一排除 Region cell，重用距離檢查穩定性',
+    'confidence_score_band_relative': '【可信度】近似最佳候選分數帶（比例；非統計信賴區間）',
+    'confidence_basin_prominence_relative': '【可信度】兩局部低點間的最小相對山脊高度',
+    'confidence_max_width_px': '【可信度】active 允許同谷候選最大沿線跨度 px',
+    'confidence_min_cell_stability': '【可信度】active 逐 cell 排除仍留在同谷的最低比例',
+    'confidence_height_span_max_mm': '【可信度】主 UI active 高度跨度上限 mm；None=只顯示',
+    'masked_sampling_gradient': '【自製算子】用局部遮罩感知梯度選點（獨立於 shadow 開關）',
     'local_plane_refine': '【局部微調】啟用視差斜面修正（原匹配成功後；主按鈕同步）',
     'refine_radius_px': '【局部微調】每點沿極線最大修正 px',
     'refine_sample_step_px': '【局部微調】距離表取樣間距 px（半徑須為間距整數倍）',
@@ -101,6 +130,8 @@ def format_value(value):
 
 def _parse_value(text, annotation):
     text = str(text).strip()
+    if annotation is str:
+        return text.lower()
     if get_origin(annotation) is Union:
         if text.lower() in ('', 'none'):
             return None
@@ -186,7 +217,10 @@ def show_region_sift_settings(parent, current, on_apply):
         ttk.Label(form, text=name).grid(row=row, column=0, sticky='w', padx=6, pady=4)
         variable = tk.StringVar(window, value=format_value(value))
         variables[name] = variable
-        if isinstance(value, bool):
+        if name == 'confidence_mode':
+            editor = ttk.Combobox(form, textvariable=variable,
+                                  values=('legacy', 'shadow', 'active'), state='readonly')
+        elif isinstance(value, bool):
             editor = ttk.Combobox(form, textvariable=variable, values=('True', 'False'), state='readonly')
         else:
             editor = ttk.Entry(form, textvariable=variable)

@@ -1,0 +1,282 @@
+--- Algorithm/Region_SIFT_Matching.py backup
+
++++ Algorithm/Region_SIFT_Matching.py
+
+@@ -1209,6 +1209,20 @@
+
+             "total_cell_count": config.grid_rows * config.grid_cols,
+             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+         }
++        if funnel.get('diagnostic_only'):
++            from Algorithm.masked_sift_descriptor import group_validity
++            gate = group_validity(best_right_frames['masked_point_valid'][None],
++                                  point_metadata, config, return_details=True)
++            debug.update(diagnostic_only=True, valid_candidate_count=0,
++                         diagnostic_valid_points=int(gate['valid_count'][0]),
++                         diagnostic_required_points=int(gate['required']),
++                         diagnostic_deficient_cells=int(gate['deficient_cell_count'][0]))
++            # Retain the selected rejected group only for inspection, never measurement.
++            debug['candidate_group_scores'] = np.full_like(group_scores, np.inf)
++            debug['candidate_objective_scores'] = np.full_like(objective_scores, np.inf)
++            base_result.update(region_debug=debug, m_pt=None, method='',
++                reject_reason='匹配失敗: 自製 SIFT 無候選具足夠有效／共同覆蓋或影像 support（顯示最接近通過候選，僅供診斷）')
++            return base_result
+         rejection = None
+         informative_left = (left_descriptors[left_masked['valid_points']]
+                             if left_masked is not None else left_descriptors)
+@@ -1257,11 +1271,13 @@
+
+         base_result["reject_reason"] = str(exc)
+         return base_result
+     finally:
+-        if standalone and config.confidence_mode != 'legacy':
++        if (standalone and config.confidence_mode != 'legacy'
++                and not (base_result.get('region_debug') or {}).get('diagnostic_only')):
+             timing_next('可信度分析（含 cell 穩定性）')
+             from Algorithm.region_sift_confidence import finalize_confidence
+             finalize_confidence(base_result, config)
+-        if standalone and config.center_refine_enabled:
++        if (standalone and config.center_refine_enabled
++                and not (base_result.get('region_debug') or {}).get('diagnostic_only')):
+             timing_next('中心局部精修')
+             from Algorithm.region_sift_center_refinement import refine_center
+             refine_center(base_result, img_left_gray, point_p, cand, K_L, config,
+--- Algorithm/region_sift_search.py backup
+
++++ Algorithm/region_sift_search.py
+
+@@ -106,6 +106,7 @@
+
+         funnel.setdefault(name, 0)
+     valid_count_samples, deficient_cell_samples = [], []
+     point_count = len(left_descriptors)
++    rejected_best = None
+     if len(pending):
+         timing_next('右圖尺度金字塔與響應圖')
+         context = frame_context(warped_right, config, session, 'right', warped_specular, warped_valid,
+@@ -142,8 +143,9 @@
+
+         funnel['new_frame_accepted'] = funnel.get('new_frame_accepted', 0) + int(np.count_nonzero(complete))
+         for i in pending[~complete]:
+             cache[keys[int(i)]] = None
+-        pending = pending[complete]
+-        right = {key: value[complete] for key, value in right.items()}
++        if not config.use_masked_sift:
++            pending = pending[complete]
++            right = {key: value[complete] for key, value in right.items()}
+         if config.use_masked_sift:
+             right['masked_point_valid'] = right['valid'].copy()
+         batch_size = max(1, int(config.descriptor_batch_size) // point_count)
+@@ -212,8 +214,7 @@
+
+                     cache[keys[int(i)]] = None
+                     counts['masked_coverage_rejected_candidates'] = counts.get('masked_coverage_rejected_candidates', 0) + 1
+                     counts['masked_invalid_point_pairs'] = counts.get('masked_invalid_point_pairs', 0) + int(np.count_nonzero(~pair_valid[j]))
+-                    continue
+-                if config.use_masked_sift:
++                if config.use_masked_sift and group_usable[j]:
+                     funnel['new_descriptor_group_accepted'] += 1
+                 cache[keys[int(i)]] = dict(
+                     group=float(components['group_score'][j]),
+@@ -229,6 +230,16 @@
+
+                     cache[keys[int(i)]]['frames']['masked_valid_fraction'] = packet['valid_fraction'][j].copy()
+                     cache[keys[int(i)]]['frames']['masked_common_fraction'] = common[j].copy()
+                     cache[keys[int(i)]]['frames']['masked_point_valid'] = pair_valid[j].copy()
++                    cache[keys[int(i)]]['frames']['masked_cell_fraction'] = packet['cell_valid_fraction'][j].copy()
++                    if not group_usable[j]:
++                        row = cache[keys[int(i)]]
++                        rank = (max(0, int(gate['required']) - int(gate['valid_count'][j])),
++                                max(0, int(gate['deficient_cell_count'][j]) - config.masked_max_deficient_cells),
++                                -float(np.mean(common[j])), row['objective'], int(i))
++                        if rejected_best is None or rank < rejected_best[0]:
++                            rejected_best = (rank, int(i), row)
++                        cache[keys[int(i)]] = None
++
+     timing_next('候選快取整理')
+     valid_indices = np.array([i for i in valid_indices if cache[keys[int(i)]] is not None], dtype=int)
+     funnel['new_descriptor_group_rejected'] = int(
+@@ -244,10 +255,16 @@
+
+         funnel.update(deficient_cells_min=int(values.min()),
+                       deficient_cells_median=float(np.median(values)),
+                       deficient_cells_max=int(values.max()))
++    diagnostic_record = None
++    if not len(valid_indices) and rejected_best is not None:
++        _, index, diagnostic_record = rejected_best
++        valid_indices = np.array([index], dtype=int)
++        funnel['diagnostic_only'] = True
+     if not len(valid_indices):
+         raise matcher.RegionSIFTError('匹配失敗: 自製 SIFT 無候選具足夠有效／共同覆蓋或影像 support'
+             if config.use_masked_sift else '匹配失敗: no search candidate has complete reflection-free per-scale SIFT support')
+-    records = [cache[keys[int(i)]] for i in valid_indices]
++    records = ([diagnostic_record] if diagnostic_record is not None else
++               [cache[keys[int(i)]] for i in valid_indices])
+     arrays = []
+     for name in ('group', 'objective', 'trimmed', 'balanced', 'penalty'):
+         values = np.full(len(all_positions), np.inf, dtype=np.float64)
+@@ -509,7 +526,7 @@
+
+             round_cache = initial_cache.setdefault('two_stage_rounds', {}).setdefault(iteration, {})
+             offsets = np.column_stack([along, np.zeros(len(along))])
+             stage, debug = evaluate(offsets, cache, round_cache, 'coarse', iteration)
+-            if debug is None:
++            if debug is None or debug.get('diagnostic_only'):
+                 break  # Geometry/support failures are not shallow-score valleys.
+             valley = search_valley(debug, effective, analyze_valley(debug, effective))
+             stage.update(valley=valley, reason=valley['reason'])
+@@ -517,7 +534,7 @@
+
+                 sides = [(a, b) for a in along for b in (-width_half, width_half)]
+                 offsets = _union_offsets(offsets, sides)
+                 stage, debug = evaluate(offsets, cache, round_cache, 'coarse+sides', iteration)
+-                if debug is None:
++                if debug is None or debug.get('diagnostic_only'):
+                     break
+                 valley = search_valley(debug, effective, analyze_valley(debug, effective))
+                 stage.update(valley=valley, reason=valley['reason'])
+@@ -534,7 +551,7 @@
+
+             fine = [(a, b) for a in fine_along for b in fine_across]
+             offsets = _union_offsets(offsets, fine)
+             stage, debug = evaluate(offsets, cache, round_cache, 'fine+global-coarse', iteration)
+-            if debug is None:
++            if debug is None or debug.get('diagnostic_only'):
+                 break
+             stage['fine_candidate_count'] = len(fine)
+             best = debug['best_along_offset_px']
+@@ -550,19 +567,20 @@
+
+             break
+     except (RegionSIFTError, ValueError, KeyError, cv2.error, np.linalg.LinAlgError) as exc:
+         result.update(m_pt=None, method='', reject_reason=f'匹配失敗: two-stage search: {exc}')
+-    if config.confidence_mode != 'legacy':
++    diagnostic_only = bool((result.get('region_debug') or {}).get('diagnostic_only'))
++    if config.confidence_mode != 'legacy' and not diagnostic_only:
+         confidence_started = time.perf_counter()
+         finalize_confidence(result, effective,
+             coarse_only=not history or history[-1]['stage'] != 'fine+global-coarse')
+         totals['可信度分析（含 cell 穩定性）'] = (time.perf_counter()-confidence_started)*1000.
+-    if config.local_plane_refine:
++    if config.local_plane_refine and not diagnostic_only:
+         from Algorithm.region_sift_refinement import refine_match
+         refine_match(result, point, effective, sift=sift, session=session)
+         report = result.get('refinement', {})
+         totals['局部視差斜面微調'] = report.get('elapsed_ms', 0.)
+         counts['right_descriptor_rows'] += report.get('descriptor_rows', 0)
+         counts['right_descriptor_batches'] += report.get('descriptor_batches', 0)
+-    if config.center_refine_enabled:
++    if config.center_refine_enabled and not diagnostic_only:
+         from Algorithm.region_sift_center_refinement import refine_center
+         refine_center(result, left, point, cand, K_L, effective,
+                       left_spec_mask=kwargs.get('left_spec_mask'))
+--- depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_GradSIFTDebug.py backup
+
++++ depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_GradSIFTDebug.py
+
+@@ -6618,6 +6618,7 @@
+
+             if support_artist in debug_region_artists:
+                 debug_region_artists.remove(support_artist)
+         support_artists = []
++        cell_summary = ''
+         for support_ax, support_point, radius_key in (
+                 (ax_debug_A, point_left, 'left_support_radius_px'),
+                 (ax_debug_B, point_warp, 'right_support_radius_px')):
+@@ -6630,6 +6631,49 @@
+
+                 edgecolor='#FFFF66', linestyle=':', linewidth=1.0, zorder=6)
+             support_ax.add_patch(support_box)
+             support_artists.append(support_box)
++            audit = debug_region_state.get('mask_debug')
++            if audit is not None and audit['config'].use_masked_sift:
++                left_cells = audit.get('left_masked_coverage')
++                right_cells = audit['right_frames'].get('masked_cell_fraction')
++                if left_cells is not None and right_cells is not None:
++                    lc, rc = np.asarray(left_cells[selected]), np.asarray(right_cells[selected])
++                    common_cells = np.maximum(0., lc + rc - 1.)
++                    threshold = audit['config'].masked_min_cell_fraction
++                    usable = common_cells >= threshold
++                    side = 'left' if support_ax is ax_debug_A else 'right'
++                    fractions = lc if side == 'left' else rc
++                    theta = np.deg2rad(record[side + '_angle_deg'])
++                    rotation = np.array([[np.cos(theta), -np.sin(theta)],
++                                         [np.sin(theta), np.cos(theta)]])
++                    width = 1.5 * record[side + '_scale_px']
++                    center = np.rint(support_point)
++                    for k in range(16):
++                        row, col = divmod(k, 4)
++                        corners = np.array([[col-2, row-2], [col-1, row-2],
++                                            [col-1, row-1], [col-2, row-1]])
++                        corners = (corners * width) @ rotation.T + center
++                        color = '#00E5FF' if usable[k] else '#FF5030'
++                        patch = Polygon(corners, closed=True, fill=not usable[k],
++                            facecolor=color, edgecolor=color, alpha=.22 if not usable[k] else .65,
++                            linestyle='--' if not usable[k] else ':', linewidth=1., zorder=6)
++                        support_ax.add_patch(patch)
++                        support_artists.append(patch)
++                        mid = corners.mean(axis=0)
++                        text = support_ax.text(*mid, f'{fractions[k]:.2f}', color=color,
++                            fontsize=6, ha='center', va='center', zorder=10,
++                            bbox=dict(facecolor='black', alpha=.5, pad=.2, edgecolor='none'))
++                        support_artists.append(text)
++                    left_fraction = float(audit['left_masked_packet']['valid_fraction'][selected])
++                    right_fraction = float(audit['right_frames']['masked_valid_fraction'][selected])
++                    aggregate = float(np.mean(np.where(usable, common_cells, 0.)))
++                    rejected = ','.join(f'{k//4+1}:{k%4+1}' for k in np.flatnonzero(~usable)) or 'none'
++                    cell_summary = (
++                        f"\n4x4 cells: cyan=used, red=excluded; labels=side coverage; cell common>={threshold:.2f}"
++                        f"\npoint coverage L/R={left_fraction:.2f}/{right_fraction:.2f}"
++                        f" (need {audit['config'].masked_min_valid_fraction:.2f}); common={aggregate:.2f}"
++                        f" (need {audit['config'].masked_min_common_fraction:.2f})"
++                        f"\nExcluded cells (row:col, 1-based): {rejected}; frame valid L/R="
++                        f"{bool(audit['left_frames']['valid'][selected])}/{bool(audit['right_frames']['valid'][selected])}")
+             mask_debug = debug_region_state.get('mask_debug')
+             if (mask_debug is not None and mask_debug['config'].use_masked_sift
+                     and mask_debug.get('reject_specular')):
+@@ -6680,7 +6724,7 @@
+
+                   f"angle={float(record.get('right_angle_deg', 0.0)):.1f}deg | "
+                   f"scale-ratio={float(record.get('scale_ratio', 0.0)):.2f}, "
+                   f"dAngle={float(record.get('angle_delta_deg', 0.0)):+.1f}deg"
+-                + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px")
++                + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px" + cell_summary)
+         if announce:
+             print(
+                 f"   [Region-SIFT point] {label} cell={cell_text} "
+@@ -7056,6 +7100,34 @@
+
+             coverage = debug['right_frames'].get('masked_common_fraction')
+             if coverage is not None:
+                 base_right_text += f'\nMasked common coverage min/mean={np.min(coverage):.2f}/{np.mean(coverage):.2f}'
++        if cfg.use_masked_sift:
++            valid_pairs = np.asarray(debug['right_frames'].get('masked_point_valid', []), bool)
++            deficient = []
++            for row in range(cfg.grid_rows):
++                for col in range(cfg.grid_cols):
++                    ids = [i for i, rec in enumerate(records)
++                           if rec['cell_row'] == row and rec['cell_col'] == col]
++                    count = int(valid_pairs[ids].sum()) if ids else 0
++                    if count < cfg.masked_min_points_per_cell:
++                        deficient.append(f'{row+1}:{col+1}={count}/{cfg.masked_min_points_per_cell}')
++                        for axis, shift in ((ax_debug_A, np.zeros(2)),
++                                            (ax_debug_B, np.asarray(debug['best_displacement_warp']))):
++                            if not debug_axis_enabled(axis):
++                                continue
++                            box = Rectangle((x0 + col*cfg.cell_width_px + shift[0],
++                                             y0 + row*cfg.cell_height_px + shift[1]),
++                                cfg.cell_width_px, cfg.cell_height_px,
++                                fill=False, edgecolor='#FF8800', linestyle='--',
++                                linewidth=2., zorder=5)
++                            axis.add_patch(box)
++                            debug_region_artists.append(box)
++
++            base_right_text += '\nDeficient Region cells (row:col=valid/required): ' + (', '.join(deficient) or 'none')
++        if debug.get('diagnostic_only'):
++            base_left_text = 'REJECTED CANDIDATE - DIAGNOSTIC ONLY\n' + base_left_text
++            base_right_text = (f"DIAGNOSTIC ONLY: valid points {debug['diagnostic_valid_points']}/"
++                f"{debug['diagnostic_required_points']} required; deficient Region cells "
++                f"{debug['diagnostic_deficient_cells']}/{cfg.masked_max_deficient_cells} allowed\n" + base_right_text)
+         if res.get('fail_reason'):
+             base_right_text += f"\nResult: {res['fail_reason']}"
+         debug_region_state['records'] = records

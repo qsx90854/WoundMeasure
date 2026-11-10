@@ -416,7 +416,35 @@ def compute_descriptors(context, points, sizes_px, angles_deg, config):
                 valid_points=fractions >= config.masked_min_valid_fraction)
 
 
-def compare_descriptors(left, right, config):
+def compute_masked_sampling_gradient(image, excluded, roi, config):
+    """Preserve raw Sobel ranking wherever its complete stencil is mask-free.
+
+    Do not smooth clean texture: that changes anchor selection even without
+    reflections. Reject contaminated stencils instead. Sobel arithmetic is
+    confined to the sampling ROI plus its exact finite filter halo.
+    """
+    x0, y0, x1, y1 = roi
+    radius = max(1, config.sobel_ksize // 2)
+    halo = radius
+    h, w = image.shape
+    xa, ya, xb, yb = max(0, x0-halo), max(0, y0-halo), min(w, x1+halo), min(h, y1+halo)
+    valid = (~np.asarray(excluded[ya:yb, xa:xb], bool)).astype(np.uint8)
+    good = cv2.erode(valid, np.ones((2*radius+1, 2*radius+1), np.uint8),
+                     borderType=cv2.BORDER_CONSTANT, borderValue=0) > 0
+    gx = cv2.Sobel(image[ya:yb, xa:xb], cv2.CV_32F, 1, 0, ksize=config.sobel_ksize)
+    gy = cv2.Sobel(image[ya:yb, xa:xb], cv2.CV_32F, 0, 1, ksize=config.sobel_ksize)
+    # Keep excluded values out of the magnitude kernel as well as its output;
+    # SIMD implementations may choose approximations from a vector's inputs.
+    gx[~good] = 0
+    gy[~good] = 0
+    magnitude = np.zeros(image.shape, np.float32)
+    sampling_valid = np.zeros(image.shape, bool)
+    magnitude[ya:yb, xa:xb] = np.where(good, cv2.magnitude(gx, gy), 0)
+    sampling_valid[ya:yb, xa:xb] = good
+    return magnitude, sampling_valid
+
+
+def compare_descriptors(left, right, config, *, return_details=False):
     """Cell-level common evidence; broadcast left N rows over right BxN rows.
 
     Common fraction uses the conservative intersection lower bound (l+r-1).
@@ -435,8 +463,16 @@ def compare_descriptors(left, right, config):
     # from CellAll. Nonnegative unit descriptors have maximum L2 sqrt(2).
     ceiling = np.sqrt(2.) * (1. if config.normalize_descriptors else 512.)
     distance = np.minimum(distance, ceiling)
+    texture = distance.copy() if return_details else None
     distance += config.masked_missing_penalty_weight * (1-common_fraction) * (ceiling-distance)
     distance = np.where(valid, distance, ceiling)
+    if return_details:
+        # An invalid row has no observed texture distance. Attribute its full
+        # ceiling cost to missing evidence when decomposing the original score.
+        raw = np.where(valid, texture, np.nan)
+        details = dict(texture_distance=raw,
+                       missing_penalty=distance-np.where(valid, texture, 0.))
+        return distance, valid, common_fraction, details
     return distance, valid, common_fraction
 
 
@@ -474,3 +510,28 @@ def group_validity(valid_points, metadata, config, return_details=False):
                     enough_points=enough_points, enough_cells=enough_cells,
                     deficient_cell_count=deficient_cell_count)
     return accepted
+
+
+def descriptor_exclusion_overlay(mask, point, size, angle, radius, config):
+    """Return local exclusion pixels inside the rotated histogram footprint.
+
+    This displays the actual mask (including the configured extra margin), not
+    uncertain pixels or all invalid gradients caused by blur/warp boundaries.
+    Coordinates are in the supplied image/mask frame, including warped right.
+    """
+    bad = exclusion_mask(mask, config) > 0
+    cx, cy = np.rint(point).astype(int)
+    r = int(np.ceil(radius))
+    h, w = bad.shape
+    x0, x1 = max(0, cx-r), min(w, cx+r+1)
+    y0, y1 = max(0, cy-r), min(h, cy+r+1)
+    if x0 >= x1 or y0 >= y1:
+        return np.zeros((0, 0), bool), (x0, y0)
+    yy, xx = np.mgrid[y0:y1, x0:x1]
+    theta = np.deg2rad(angle)
+    dx, dy = xx-cx, yy-cy
+    cell = 3 * float(size) / 2
+    bx = (np.cos(theta)*dx + np.sin(theta)*dy)/cell + 1.5
+    by = (-np.sin(theta)*dx + np.cos(theta)*dy)/cell + 1.5
+    inside = (bx > -1) & (bx < 4) & (by > -1) & (by < 4)
+    return bad[y0:y1, x0:x1] & inside, (x0, y0)

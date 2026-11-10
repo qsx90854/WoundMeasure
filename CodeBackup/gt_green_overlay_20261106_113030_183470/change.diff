@@ -1,0 +1,73 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -1,4 +1,4 @@
+-"""Single-video seven-panel frame difference / spatial-specular inspector.
++"""Single-video eight-panel frame difference / spatial-specular inspector.
+ Run: Scripts/python.exe video_frame_difference_ui.py
+ Frame indices are zero-based. Optional robust ROI calibration and positive-only difference.
+ """
+@@ -185,7 +185,7 @@
+         self.calibration_mode=tk.StringVar(value='Off');self.positive_only=tk.BooleanVar(value=False)
+         self.calibration_text=tk.StringVar(value='校正尚未啟用；先選兩幀皆無明顯反光且有灰階變化的區域。')
+         self.index1=tk.StringVar(value='0');self.index2=tk.StringVar(value='1');self.current=tk.StringVar(value='0')
+-        self.status=tk.StringVar(value='請載入影片；index 從 0 開始。滾輪縮放、左鍵拖曳，七個面板同步。')
++        self.status=tk.StringVar(value='請載入影片；index 從 0 開始。滾輪縮放、左鍵拖曳，八個面板同步。')
+         top=ttk.Frame(root,padding=5);top.pack(fill='x')
+         for label,fn in [('載入影片',self.load),('播放／暫停',self.toggle_play),('上一幀',lambda:self.step(-1)),
+                          ('下一幀',lambda:self.step(1)),('適合視窗',self.home)]:
+@@ -218,7 +218,7 @@
+         self.roi_button=ttk.Button(roi_bar,text='框選 ROI',command=self.toggle_roi);self.roi_button.pack(side='left',padx=3)
+         ttk.Button(roi_bar,text='清除 ROI／全圖',command=self.clear_roi).pack(side='left',padx=3)
+         ttk.Checkbutton(roi_bar,text='同步十字游標',variable=self.show_crosshair,command=self.hide_crosshair).pack(side='left',padx=8)
+-        self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用七個面板。')
++        self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用八個面板。')
+         ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
+         roi_values_bar=ttk.Frame(root,padding=5);roi_values_bar.pack(fill='x')
+         self.roi_values=[tk.StringVar(value='') for _ in range(4)]
+@@ -268,9 +268,9 @@
+         self.slider=ttk.Scale(root,from_=0,to=1,command=self.slider_seek);self.slider.pack(fill='x',padx=12)
+         ttk.Label(root,text='差異可選絕對差／單向變亮；校正只影響差異與 GT，不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
+         self.figure=Figure(figsize=(14,8),facecolor='#202020');self.axes=[];self.artists=[]
+-        titles=['Current frame','index1: original','index2: original','Absolute grayscale difference mask','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
++        titles=['Current frame','index1: original','index2: original','Absolute grayscale difference mask','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP','GT green overlay on index2']
+         for i,title in enumerate(titles):
+-            ax=self.figure.add_subplot(2,4,(1,2,3,5,6,7,4)[i],**(dict(sharex=self.axes[0],sharey=self.axes[0]) if self.axes else {}))
++            ax=self.figure.add_subplot(2,4,(1,2,3,5,6,7,4,8)[i],**(dict(sharex=self.axes[0],sharey=self.axes[0]) if self.axes else {}))
+             ax.set_facecolor('#111111');ax.tick_params(colors='white');ax.set_title(title,color='white',fontsize=10)
+             ax.set_aspect('equal',adjustable='box');self.axes.append(ax)
+             self.artists.append(ax.imshow(np.zeros((1,1,3),np.uint8),origin='upper',interpolation='nearest'))
+@@ -350,7 +350,7 @@
+         image=next((im for im in self.images if im is not None),None)
+         bounds=self.roi if self.roi is not None else ((0,0,image.shape[1],image.shape[0]) if image is not None else ('',)*4)
+         for var,value in zip(self.roi_values,bounds):var.set(str(value))
+-        if self.roi is None:self.roi_text.set('分析全圖；可在任一面板框選，同步套用七個面板。')
++        if self.roi is None:self.roi_text.set('分析全圖；可在任一面板框選，同步套用八個面板。')
+         else:
+             x0,y0,x1,y1=self.roi
+             self.roi_text.set(f'ROI x=[{x0}, {x1}), y=[{y0}, {y1})；寬={x1-x0}, 高={y1-y0}；面積={(x1-x0)*(y1-y0)} pixels。')
+@@ -562,8 +562,8 @@
+ 
+     def draw(self):
+         if not hasattr(self,'artists'):return
+-        frames=[self.images[0],self.images[1],self.images[2],None,None,None,None]
+-        titles=[f'Current F{self.current_index}','index1: original','index2: original','abs(gray1-gray2) > threshold','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
++        frames=[self.images[0],self.images[1],self.images[2],None,None,None,None,None]
++        titles=[f'Current F{self.current_index}','index1: original','index2: original','abs(gray1-gray2) > threshold','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP','GT green overlay on index2']
+         if self.pair_results is not None:
+             error=None
+             try:
+@@ -599,7 +599,14 @@
+                 (self.show_tp.get(),self.show_fn.get(),self.show_fp.get()))
+             titles[6]=(f'GT: {diff_mode} difference | Prediction: F{self.pair_indices[1]}\n'
+                        f'TP={counts["tp"]} FN={counts["fn"]} FP={counts["fp"]} | {scope}={counts["area"]} px')
++            frames[7]=self.images[2].copy()
++            active=mask>0
++            alpha=float(self.alpha.get())
++            frames[7][active]=np.clip((1-alpha)*frames[7][active].astype(np.float32)
++                                     +alpha*np.array([0,255,0],np.float32),0,255).astype(np.uint8)
++            titles[7]=f'F{self.pair_indices[1]} + GT (green)\n{scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
+             if error is not None:
++                titles[7]='GT unavailable - index2 only'
+                 # Do not display stale or seemingly valid GT when calibration failed.
+                 frames[6]=np.zeros_like(frames[3]);titles[3]='Difference unavailable - check calibration / threshold'
+                 titles[6]='GT comparison unavailable'

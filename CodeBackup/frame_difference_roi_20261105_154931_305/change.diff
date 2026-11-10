@@ -1,0 +1,161 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -17,11 +17,22 @@
+ from Algorithm.specular_model_v2_settings import show_specular_model_v2_settings
+ 
+ 
+-def frame_difference(first,second,threshold):
++def roi_slice(shape,roi):
++    h,w=shape[:2]
++    x0,y0,x1,y1=(0,0,w,h) if roi is None else roi
++    if not (0<=x0<x1<=w and 0<=y0<y1<=h):raise ValueError('ROI 超出影格範圍或沒有面積')
++    return (slice(y0,y1),slice(x0,x1)),(x1-x0)*(y1-y0)
++
++
++def frame_difference(first,second,threshold,roi=None):
+     if first.shape != second.shape: raise ValueError('兩影格尺寸不同')
+     if not 0 <= threshold <= 255: raise ValueError('門檻必須介於 0～255')
+-    difference=cv2.absdiff(cv2.cvtColor(first,cv2.COLOR_BGR2GRAY),cv2.cvtColor(second,cv2.COLOR_BGR2GRAY))
+-    return difference,(difference > threshold).astype(np.uint8)*255
++    region,_=roi_slice(first.shape,roi)
++    difference=np.zeros(first.shape[:2],np.uint8)
++    local=cv2.absdiff(cv2.cvtColor(first[region],cv2.COLOR_BGR2GRAY),cv2.cvtColor(second[region],cv2.COLOR_BGR2GRAY))
++    difference[region]=local
++    mask=np.zeros_like(difference);mask[region]=(local > threshold).astype(np.uint8)*255
++    return difference,mask
+ 
+ 
+ def read_index(source,index):
+@@ -43,6 +54,7 @@
+         self.current_index=0;self.desired_current=0
+         self.worker=ThreadPoolExecutor(max_workers=1);self.future=None;self.pending_pair=None;self.pending_current=None
+         self.closed=False;self.playing=False;self.play_timer=None;self.slider_timer=None;self.setting_slider=False
++        self.roi=None;self.roi_selecting=False;self.roi_drag=None;self.roi_patches=[]
+         self.drag=None;self.pair_revision=0;self.active_pair_revision=0;self.job=None
+         self.mode=tk.StringVar(value='V2' if enabled else 'Legacy');self.alpha=tk.DoubleVar(value=.55)
+         self.display=tk.StringVar(value='疊圖');self.threshold=tk.StringVar(value='30')
+@@ -72,6 +84,11 @@
+         combo=ttk.Combobox(pair,textvariable=self.display,values=('疊圖','遮罩'),width=6,state='readonly')
+         combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.draw())
+         ttk.Scale(pair,from_=0,to=1,variable=self.alpha,command=lambda v:self.draw()).pack(side='left',padx=5)
++        roi_bar=ttk.Frame(root,padding=5);roi_bar.pack(fill='x')
++        self.roi_button=ttk.Button(roi_bar,text='框選 ROI',command=self.toggle_roi);self.roi_button.pack(side='left',padx=3)
++        ttk.Button(roi_bar,text='清除 ROI／全圖',command=self.clear_roi).pack(side='left',padx=3)
++        self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用六個面板。')
++        ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
+         self.slider=ttk.Scale(root,from_=0,to=1,command=self.slider_seek);self.slider.pack(fill='x',padx=12)
+         ttk.Label(root,text='差異以原始灰階直接相減，不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
+         self.figure=Figure(figsize=(14,8),facecolor='#202020');self.axes=[];self.artists=[]
+@@ -81,12 +98,78 @@
+             ax.set_facecolor('#111111');ax.tick_params(colors='white');ax.set_title(title,color='white',fontsize=10)
+             ax.set_aspect('equal',adjustable='box');self.axes.append(ax)
+             self.artists.append(ax.imshow(np.zeros((1,1,3),np.uint8),origin='upper',interpolation='nearest'))
++        from matplotlib.patches import Rectangle
++        for ax in self.axes:
++            box=Rectangle((0,0),0,0,fill=False,edgecolor='yellow',linewidth=1.5,zorder=20,visible=False)
++            ax.add_patch(box);self.roi_patches.append(box)
+         self.figure.subplots_adjust(left=.035,right=.98,bottom=.04,top=.94,wspace=.12,hspace=.22)
+         self.canvas=FigureCanvasTkAgg(self.figure,master=root);self.canvas.get_tk_widget().pack(fill='both',expand=True)
+         for event,callback in [('scroll_event',self.scroll),('button_press_event',self.press),('motion_notify_event',self.motion),('button_release_event',self.release)]:self.canvas.mpl_connect(event,callback)
+         ttk.Label(root,textvariable=self.status,padding=5).pack(fill='x')
+-        root.protocol('WM_DELETE_WINDOW',self.close);root.bind('<Escape>',lambda e:self.release(None))
++        root.protocol('WM_DELETE_WINDOW',self.close);root.bind('<Escape>',lambda e:self.cancel_roi())
+         self.home()
++
++    def selected_roi(self,start,end):
++        image=next((im for im in self.images if im is not None),None)
++        if image is None:return None
++        h,w=image.shape[:2]
++        x0=int(np.clip(np.floor(np.round(min(start[0],end[0])+.5,9)),0,w))
++        y0=int(np.clip(np.floor(np.round(min(start[1],end[1])+.5,9)),0,h))
++        x1=int(np.clip(np.ceil(np.round(max(start[0],end[0])+.5,9)),0,w))
++        y1=int(np.clip(np.ceil(np.round(max(start[1],end[1])+.5,9)),0,h))
++        return (x0,y0,x1,y1) if x1>x0 and y1>y0 else None
++
++    def show_roi(self,roi):
++        for box in self.roi_patches:
++            box.set_visible(roi is not None)
++            if roi is not None:
++                x0,y0,x1,y1=roi;box.set_bounds(x0-.5,y0-.5,x1-x0,y1-y0)
++        self.canvas.draw_idle()
++
++    def toggle_roi(self):
++        if self.roi_selecting:self.cancel_roi();return
++        if all(im is None for im in self.images):return
++        self.pause();self.drag=None;self.roi_selecting=True
++        self.roi_button.configure(text='取消框選 (Esc)')
++        self.roi_text.set('在任一已有影像的面板按住左鍵框選；放開即套用，Esc 取消。')
++
++    def cancel_roi(self):
++        self.roi_selecting=False;self.roi_drag=None;self.drag=None
++        self.roi_button.configure(text='框選 ROI');self.show_roi(self.roi)
++        if self.roi is None:self.roi_text.set('分析全圖；可在任一面板框選，同步套用六個面板。')
++        else:
++            x0,y0,x1,y1=self.roi
++            self.roi_text.set(f'ROI x={x0}, y={y0}, 寬={x1-x0}, 高={y1-y0}；百分比分母={(x1-x0)*(y1-y0)} pixels。反光全圖偵測，僅顯示／統計 ROI。')
++
++    def clear_roi(self):
++        self.roi=None;self.cancel_roi();self.draw()
++
++    def press(self,event):
++        if not self.roi_selecting:return super().press(event)
++        if event.button!=1 or event.inaxes not in self.axes or event.xdata is None:return
++        panel=self.axes.index(event.inaxes)
++        if (panel==0 and self.images[0] is None) or (panel>0 and self.pair_results is None):return
++        self.roi_drag=(event.inaxes.transData.frozen().inverted(),(event.xdata,event.ydata))
++
++    def motion(self,event):
++        if self.roi_drag is None:
++            if not self.roi_selecting:super().motion(event)
++            return
++        if event.x is None or event.y is None:return
++        inverse,start=self.roi_drag;self.show_roi(self.selected_roi(start,inverse.transform((event.x,event.y))))
++
++    def release(self,event):
++        if self.roi_drag is None:return super().release(event)
++        inverse,start=self.roi_drag
++        if event is not None and event.x is not None and event.y is not None:
++            end=inverse.transform((event.x,event.y))
++            if np.linalg.norm(np.asarray(end)-start)>=1.:
++                roi=self.selected_roi(start,end)
++                if roi is not None:self.roi=roi
++        self.cancel_roi();self.draw()
++
++    def scroll(self,event):
++        if self.roi_drag is None:super().scroll(event)
+ 
+     def pause(self):
+         self.playing=False
+@@ -103,6 +186,7 @@
+         if self.source is not None:self.source.close()
+         self.source=source;self.pending_pair=None;self.pending_current=None
+         self.images=[source.image.copy(),None,None];self.pair_results=None;self.pair_indices=None
++        self.roi=None;self.cancel_roi()
+         self.current_index=self.desired_current=0;self.current.set('0');self.index1.set('0');self.index2.set(str(min(1,source.count-1)))
+         self.slider.configure(to=max(1,source.count-1));self.setting_slider=True;self.slider.set(0);self.setting_slider=False
+         self.video_info.configure(text=f'{Path(path).name} | {source.count} frames | {source.fps:g} FPS')
+@@ -202,15 +286,20 @@
+         frames=[self.images[0],self.images[1],self.images[2],None,None,None]
+         titles=[f'Current F{self.current_index}','index1: original','index2: original','abs(gray1-gray2) > threshold','index1: specular','index2: specular']
+         if self.pair_results is not None:
+-            try:threshold=float(self.threshold.get());difference,mask=frame_difference(self.images[1],self.images[2],threshold)
++            try:threshold=float(self.threshold.get());difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi)
+             except ValueError:
+                 self.status.set('門檻請輸入 0～255 的有效數字。');return
+             frames[3]=cv2.cvtColor(mask,cv2.COLOR_GRAY2BGR)
+-            titles[3]=f'abs(gray1-gray2) > {threshold:g} | {100*np.count_nonzero(mask)/mask.size:.2f}%'
++            region,area=roi_slice(mask.shape,self.roi)
++            scope='ROI' if self.roi is not None else 'full'
++            titles[3]=f'abs(gray1-gray2) > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
+             for i in range(2):
+-                frames[4+i]=render_video_frame(self.images[i+1],self.pair_results[i][0],self.display.get(),self.alpha.get())
++                shown_mask=np.zeros_like(self.pair_results[i][0])
++                shown_mask[region]=self.pair_results[i][0][region]
++                count=np.count_nonzero(shown_mask)
++                frames[4+i]=render_video_frame(self.images[i+1],shown_mask,self.display.get(),self.alpha.get())
+                 titles[i+1]=f'index{i+1}: F{self.pair_indices[i]}'
+-                titles[i+4]=f'F{self.pair_indices[i]} | {self.pair_mode} specular {100*np.count_nonzero(self.pair_results[i][0])/self.pair_results[i][0].size:.2f}%'
++                titles[i+4]=f'F{self.pair_indices[i]} | {self.pair_mode} {scope}: {count}/{area} ({100*count/area:.2f}%)'
+         for ax,artist,image,title in zip(self.axes,self.artists,frames,titles):
+             if image is None:continue
+             artist.set_data(cv2.cvtColor(image,cv2.COLOR_BGR2RGB));h,w=image.shape[:2];artist.set_extent((-.5,w-.5,h-.5,-.5));ax.set_title(title,color='white',fontsize=10)

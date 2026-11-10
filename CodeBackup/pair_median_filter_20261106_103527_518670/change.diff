@@ -1,0 +1,83 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -154,8 +154,10 @@
+     return source.read_at(index/source.fps)[0].copy()
+ 
+ 
+-def analyze_pair(source,indices,mode,legacy,v2):
++def analyze_pair(source,indices,mode,legacy,v2,median_filters=(False,False)):
++    # Filter full decoded frames once; these exact inputs feed both GT and detection.
+     images=[read_index(source,i) for i in indices]
++    images=[cv2.medianBlur(image,3) if enabled else image for image,enabled in zip(images,median_filters)]
+     return images,detect_pair(images,mode,legacy,v2)
+ 
+ 
+@@ -166,6 +168,7 @@
+         _,self.v2,_=read_main_defaults()
+         self.legacy=BALANCED_LEGACY_CONFIG
+         self.source=None;self.images=[None,None,None];self.pair_results=None;self.pair_indices=None
++        self.median_filters=[tk.BooleanVar(value=False),tk.BooleanVar(value=False)];self.pair_median_filters=(False,False)
+         self.current_index=0;self.desired_current=0
+         self.worker=ThreadPoolExecutor(max_workers=1);self.future=None;self.pending_pair=None;self.pending_current=None
+         self.closed=False;self.playing=False;self.play_timer=None;self.slider_timer=None;self.setting_slider=False
+@@ -207,6 +210,10 @@
+         combo=ttk.Combobox(pair,textvariable=self.display,values=('疊圖','遮罩'),width=6,state='readonly')
+         combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.draw())
+         ttk.Scale(pair,from_=0,to=1,variable=self.alpha,command=lambda v:self.draw()).pack(side='left',padx=5)
++        filter_bar=ttk.Frame(root,padding=3);filter_bar.pack(fill='x')
++        for i,var in enumerate(self.median_filters,1):
++            ttk.Checkbutton(filter_bar,text=f'frame{i} 中值濾波 3×3',variable=var,command=self.recompute).pack(side='left',padx=6)
++        ttk.Label(filter_bar,text='勾選後重算：GT 與反光偵測共用濾波影像；index 面板顯示實際輸入，當前播放幀維持原圖。').pack(side='left',padx=6)
+         roi_bar=ttk.Frame(root,padding=5);roi_bar.pack(fill='x')
+         self.roi_button=ttk.Button(roi_bar,text='框選 ROI',command=self.toggle_roi);self.roi_button.pack(side='left',padx=3)
+         ttk.Button(roi_bar,text='清除 ROI／全圖',command=self.clear_roi).pack(side='left',padx=3)
+@@ -242,7 +249,7 @@
+         combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.calibration_changed())
+         ttk.Checkbutton(change_bar,text='有色變白',variable=self.use_whitening,command=self.draw).pack(side='left',padx=6)
+         ttk.Checkbutton(change_bar,text='原本偏白：額外增亮',variable=self.use_white_brightening,command=self.draw).pack(side='left',padx=6)
+-        ttk.Label(change_bar,text='新模式使用原圖；局部中位數扣除背景變化；不使用相減門檻／線性校正。').pack(side='left',padx=6)
++        ttk.Label(change_bar,text='新模式使用目前影格輸入；局部中位數扣除背景變化；不使用相減門檻／線性校正。').pack(side='left',padx=6)
+         labels={'window':'視窗 px','extra_y':'額外亮度 >','saturation_drop':'S 下降 >','extra_s':'額外 S 下降 >',
+                 'target_v':'V2 ≥','target_s':'S2 ≤','color_s':'有色 S1 ≥','white_s':'偏白 S1 ≤','white_v':'偏白 V1 ≥'}
+         for offset in (0,5):
+@@ -477,7 +484,7 @@
+         try:indices=(self.valid_index(self.index1.get()),self.valid_index(self.index2.get()))
+         except ValueError as exc:messagebox.showerror('Index 錯誤',str(exc),parent=self.root);return
+         self.pair_revision+=1
+-        self.pending_pair=(indices,self.mode.get(),self.legacy,self.v2,self.pair_revision)
++        self.pending_pair=(indices,self.mode.get(),self.legacy,self.v2,self.pair_revision,tuple(var.get() for var in self.median_filters))
+         self.dispatch()
+ 
+     def recompute(self):
+@@ -525,9 +532,9 @@
+     def dispatch(self):
+         if self.future is not None or self.closed:return
+         if self.pending_pair is not None:
+-            indices,mode,legacy,v2,revision=self.pending_pair;self.pending_pair=None
+-            self.job=('pair',indices,revision,mode);self.status.set(f'分析 F{indices[0]} / F{indices[1]}，{mode}…')
+-            self.future=self.worker.submit(analyze_pair,self.source,indices,mode,legacy,v2)
++            indices,mode,legacy,v2,revision,median_filters=self.pending_pair;self.pending_pair=None
++            self.job=('pair',indices,revision,mode,median_filters);self.status.set(f'分析 F{indices[0]} / F{indices[1]}，{mode}；中值濾波={median_filters}…')
++            self.future=self.worker.submit(analyze_pair,self.source,indices,mode,legacy,v2,median_filters)
+         elif self.pending_current is not None:
+             index=self.pending_current;self.pending_current=None;self.job=('current',index)
+             self.future=self.worker.submit(read_index,self.source,index)
+@@ -542,7 +549,7 @@
+         except Exception as exc:
+             self.pause();messagebox.showerror('處理失敗',str(exc),parent=self.root);self.status.set('處理失敗，保留上次結果。');self.dispatch();return
+         if job[0]=='pair' and job[2]==self.pair_revision:
+-            self.images[1:]=result[0];self.pair_results=result[1];self.pair_indices=job[1];self.pair_mode=job[3]
++            self.images[1:]=result[0];self.pair_results=result[1];self.pair_indices=job[1];self.pair_mode=job[3];self.pair_median_filters=job[4]
+             self.calibration_cache=None;self.change_cache=None
+             self.status.set(f'已分析 F{job[1][0]} / F{job[1][1]} | {job[3]} | 左／右偵測 {result[1][0][1]:.1f}/{result[1][1][1]:.1f} ms')
+         elif job[0]=='current' and job[1]==self.desired_current:
+@@ -585,7 +592,8 @@
+                 shown_mask[region]=self.pair_results[i][0][region]
+                 count=np.count_nonzero(shown_mask)
+                 frames[4+i]=render_video_frame(self.images[i+1],shown_mask,self.display.get(),self.alpha.get())
+-                titles[i+1]=f'index{i+1}: F{self.pair_indices[i]}'
++                filter_label='median 3x3' if self.pair_median_filters[i] else 'original'
++                titles[i+1]=f'index{i+1}: F{self.pair_indices[i]} | {filter_label}'
+                 titles[i+4]=f'F{self.pair_indices[i]} | {self.pair_mode} {scope}: {count}/{area} ({100*count/area:.2f}%)'
+             frames[6],counts=compare_masks(mask,self.pair_results[1][0],self.roi,
+                 (self.show_tp.get(),self.show_fn.get(),self.show_fp.get()))

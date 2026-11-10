@@ -1,0 +1,6 @@
+{
+  "gt_pixels": 24274,
+  "baseline_FN": 14046,
+  "FN_not_candidates": 13942,
+  "FN_candidates_but_gate_rejected": 104
+}

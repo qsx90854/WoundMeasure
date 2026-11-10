@@ -1,0 +1,52 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -175,6 +175,15 @@
+         ttk.Checkbutton(roi_bar,text='同步十字游標',variable=self.show_crosshair,command=self.hide_crosshair).pack(side='left',padx=8)
+         self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用七個面板。')
+         ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
++        roi_values_bar=ttk.Frame(root,padding=5);roi_values_bar.pack(fill='x')
++        self.roi_values=[tk.StringVar(value='') for _ in range(4)]
++        for label,var in zip(('x 起點','y 起點','x 終點','y 終點'),self.roi_values):
++            ttk.Label(roi_values_bar,text=label).pack(side='left',padx=4)
++            entry=ttk.Entry(roi_values_bar,textvariable=var,width=7);entry.pack(side='left')
++            entry.bind('<Return>',lambda e:self.apply_roi_values())
++        ttk.Button(roi_values_bar,text='套用分析 ROI',command=self.apply_roi_values).pack(side='left',padx=6)
++        ttk.Button(roi_values_bar,text='複製 ROI 座標',command=self.copy_roi_values).pack(side='left',padx=4)
++        ttk.Label(roi_values_bar,text='原圖 pixel 座標；含起點、不含終點。框選後自動更新。').pack(side='left',padx=6)
+         norm_bar=ttk.Frame(root,padding=5);norm_bar.pack(fill='x')
+         self.normalize_button=ttk.Checkbutton(norm_bar,text='ROI 灰階 normalize 後相減',variable=self.normalize_gray,command=self.draw)
+         self.normalize_button.pack(side='left',padx=4)
+@@ -275,10 +284,32 @@
+         self.roi_selecting=False;self.roi_drag=None;self.drag=None
+         self.roi_button.configure(text='框選 ROI');self.show_roi(self.roi)
+         self.calibration_button.configure(text='框選校正 ROI');self.show_roi(self.calibration_roi,'calibration')
++        image=next((im for im in self.images if im is not None),None)
++        bounds=self.roi if self.roi is not None else ((0,0,image.shape[1],image.shape[0]) if image is not None else ('',)*4)
++        for var,value in zip(self.roi_values,bounds):var.set(str(value))
+         if self.roi is None:self.roi_text.set('分析全圖；可在任一面板框選，同步套用七個面板。')
+         else:
+             x0,y0,x1,y1=self.roi
+-            self.roi_text.set(f'ROI x={x0}, y={y0}, 寬={x1-x0}, 高={y1-y0}；百分比分母={(x1-x0)*(y1-y0)} pixels。反光全圖偵測，僅顯示／統計 ROI。')
++            self.roi_text.set(f'ROI x=[{x0}, {x1}), y=[{y0}, {y1})；寬={x1-x0}, 高={y1-y0}；面積={(x1-x0)*(y1-y0)} pixels。')
++
++    def apply_roi_values(self):
++        image=next((im for im in self.images if im is not None),None)
++        if image is None:self.status.set('請先載入影片再設定 ROI。');return
++        try:
++            roi=tuple(int(var.get()) for var in self.roi_values)
++            roi_slice(image.shape,roi)
++        except ValueError:
++            self.status.set(f'ROI 請輸入整數且滿足 0 <= x起點 < x終點 <= {image.shape[1]}、0 <= y起點 < y終點 <= {image.shape[0]}；未變更 ROI。');return
++        self.pause();self.roi=roi;self.cancel_roi();self.draw()
++        self.status.set(f'已套用分析 ROI：x=[{roi[0]}, {roi[2]}), y=[{roi[1]}, {roi[3]})')
++
++    def copy_roi_values(self):
++        image=next((im for im in self.images if im is not None),None)
++        if image is None:self.status.set('請先載入影片。');return
++        x0,y0,x1,y1=self.roi if self.roi is not None else (0,0,image.shape[1],image.shape[0])
++        text=f'x=[{x0}, {x1}), y=[{y0}, {y1}); ROI=(x0,y0,x1,y1)=({x0},{y0},{x1},{y1})'
++        self.root.clipboard_clear();self.root.clipboard_append(text)
++        self.status.set('已複製目前生效的 ROI 座標。')
+ 
+     def clear_calibration_roi(self):
+         self.calibration_roi=None;self.calibration_cache=None;self.cancel_roi();self.draw()

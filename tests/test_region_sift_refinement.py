@@ -150,6 +150,8 @@ class RefinementTests(unittest.TestCase):
                   height_profile=None, block_accuracy_state={'mode':'idle'},
                   btn_sift_backend=SimpleNamespace(label=SimpleNamespace(set_text=Mock())),
                   btn_region_refine=SimpleNamespace(label=SimpleNamespace(set_text=Mock())),
+                  btn_center_refine=SimpleNamespace(label=SimpleNamespace(set_text=Mock())),
+                  center_refinement_viewer=SimpleNamespace(close=Mock()),
                   depth_text=SimpleNamespace(set_text=Mock()), request_blit_refresh=Mock())
         exec(compile(ast.fix_missing_locations(ast.Module(body=functions, type_ignores=[])), str(source), 'exec'), ns)
         ns['on_region_refine'](None)

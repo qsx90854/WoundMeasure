@@ -1,0 +1,20 @@
+🔧 [World Marker+SIFT RT] enabled=True | SIFT residuals may refine final R/t after passing gates
+[Image pair] Fixed right/A=0, left/B=1; automatic frame selection disabled
+🧭 [Frame pair mode] fixed_image_pair | direction=auto | right/A=15.0deg, left/B=35.0deg
+🎯 [RT SIFT ROI config] enabled=True | ratio=(0.1, 0.1, 0.8, 0.8) | scale=0.500 | ArUco=full-frame | pair-geometry=full-frame
+[ArUco ID filter] allowed=ALL
+ℹ️ [Baseline candidate gate] MIN_BASELINE_MM=35.00 mm, margin=2.00 mm, effective_min=37.00 mm, max=220.00 mm
+🎬 載入固定影像對: .codex\diagnostics\pair_reject_20261110\pair.json，影像數: 2 (選幀範圍模式: fixed)
+🎯 [RT SIFT ROI-共用] x=192:1728, y=108:972 (1536x864)
+   ↳ [RT SIFT scaled crop] scale=0.500 | image=960x540 | crop=(96, 54, 864, 486)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] marker-map reference ID=2, mapped=[2], start=[2], end=[2]
+🧭 [時序姿態] observations=2, segments=1, map_ids=[2]
+[Pair gate] endpoints A/right=1, B/left=1 | branches A=[2], B=[2]
+[Pair gate REJECT] A/right F0 branch=0, B/left F1 branch=0 | baseline=19.434095 mm | baseline_low | allowed=37.000..220.000 mm | C_A=[73.091, 118.7818, 198.7445] | C_B=[89.2272, 108.1132, 196.8774]
+[Pair gate REJECT] A/right F0 branch=0, B/left F1 branch=1 | baseline=279.010711 mm | baseline_high | allowed=37.000..220.000 mm | C_A=[73.091, 118.7818, 198.7445] | C_B=[-89.2481, -108.1303, 196.7758]
+[Pair gate REJECT] A/right F0 branch=1, B/left F1 branch=0 | baseline=279.001437 mm | baseline_high | allowed=37.000..220.000 mm | C_A=[-73.0804, -118.8116, 198.6625] | C_B=[89.2272, 108.1132, 196.8774]
+[Pair gate REJECT] A/right F0 branch=1, B/left F1 branch=1 | baseline=19.469068 mm | baseline_low | allowed=37.000..220.000 mm | C_A=[-73.0804, -118.8116, 198.6625] | C_B=[-89.2481, -108.1303, 196.7758]
+[Pair gate summary] {'tested': 4, 'baseline_low': 2, 'baseline_high': 2, 'baseline_nonfinite': 0, 'reprojection_invalid': 0, 'angle': 0} | passed=0 | baseline range(mm)=19.434094826589405..279.0107109566761
+⚠️ 第 1 階段：無合格的匹配對 (Baseline gate: 37.00~220.0 mm)
+❌ [漸進式匹配] 無法在該影片中計算出任何影像對，分析失敗。

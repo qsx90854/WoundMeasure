@@ -2912,7 +2912,10 @@ def analyze_video_frames(
     local_window_config=None,
     angle_guided_config=None,
     allowed_marker_ids=None,
+    frames_are_undistorted=True,
 ):
+    # Existing frames_override callers supply rectified pixels. Raw still-image
+    # callers opt out so cached descriptors/plane preparation match video input.
     allowed_marker_ids = normalize_allowed_ids(allowed_marker_ids)
     log_and_print(f'[ArUco ID filter] allowed={sorted(allowed_marker_ids) if allowed_marker_ids is not None else "ALL"}')
     timer = StageTimer("影片分析明細")
@@ -5631,6 +5634,13 @@ def analyze_video_frames(
             list(executor.map(get_frame_sharpness, sharpness_indices))
 
         pairs = []
+        pair_gate_counts = dict(tested=0, baseline_low=0, baseline_high=0,
+                                baseline_nonfinite=0, reprojection_invalid=0, angle=0)
+        pair_baselines = []
+        log_and_print(
+            f'[Pair gate] endpoints A/right={len(valid_start)}, B/left={len(valid_end)} | '
+            f'branches A={[len(x["branches"]) for x in valid_start]}, '
+            f'B={[len(x["branches"]) for x in valid_end]}')
         for item_s in valid_start:
             for item_e in valid_end:
                 for bi_s, (R_s, t_s) in enumerate(item_s['branches']):
@@ -5644,12 +5654,28 @@ def analyze_video_frames(
                         C_e = _temporal_camera_center(R_e, t_e)
                         bsl = float(np.linalg.norm(C_s - C_e))
                         pair_candidate_min_baseline = float(runtime_pair_candidate_min_baseline)
+                        pair_gate_counts['tested'] += 1
+                        pair_baselines.append(bsl)
+                        pair_tag = (f'A/right F{item_s["idx"]} branch={bi_s}, '
+                                    f'B/left F{item_e["idx"]} branch={bi_e} | baseline={bsl:.6f} mm')
                         if not (pair_candidate_min_baseline <= bsl <= MAX_BASELINE_MM):
+                            cause = ('baseline_nonfinite' if not np.isfinite(bsl) else
+                                     'baseline_low' if bsl < pair_candidate_min_baseline else 'baseline_high')
+                            pair_gate_counts[cause] += 1
+                            if frames_override is not None:
+                                log_and_print(f'[Pair gate REJECT] {pair_tag} | {cause} | '
+                                    f'allowed={pair_candidate_min_baseline:.3f}..{MAX_BASELINE_MM:.3f} mm | '
+                                    f'C_A={np.asarray(C_s).reshape(-1).round(4).tolist()} | '
+                                    f'C_B={np.asarray(C_e).reshape(-1).round(4).tolist()}')
                             continue
                         err_pair, direct_stats = compute_pair_reprojection_error(
                             item_s, item_e, mtx_L, dist_L,
                             R_s=R_s, t_s=t_s, R_e=R_e, t_e=t_e, return_stats=True)
                         if err_pair == float('inf') or direct_stats is None:
+                            pair_gate_counts['reprojection_invalid'] += 1
+                            if frames_override is not None:
+                                log_and_print(f'[Pair gate REJECT] {pair_tag} | reprojection_invalid | '
+                                              f'error={err_pair}, stats_available={direct_stats is not None}')
                             continue
                         cand_s = item_s['branch_candidates'][bi_s]
                         cand_e = item_e['branch_candidates'][bi_e]
@@ -5658,6 +5684,9 @@ def analyze_video_frames(
                             branch_candidate_s=cand_s, branch_candidate_e=cand_e,
                             reprojection_stats=direct_stats)
                         if not pair_metrics.get('angle_guided_ok', True):
+                            pair_gate_counts['angle'] += 1
+                            if frames_override is not None:
+                                log_and_print(f'[Pair gate REJECT] {pair_tag} | angle_guided_ok=False')
                             continue
                         pair_metrics['marker_direct_ok'] = bool(
                             direct_stats['rms_px'] <= MARKER_CANDIDATE_RMS_MAX_PX
@@ -5680,6 +5709,14 @@ def analyze_video_frames(
                         pair_metrics['temporal_joint_min_marginal'] = None
                         pair_metrics['temporal_branch_prior_cost'] = 0.0
                         pairs.append((pair_score, err_pair, item_s, item_e, R_rel_cand, t_rel_cand, bsl, pair_metrics))
+                        if frames_override is not None:
+                            log_and_print(f'[Pair gate PASS] {pair_tag} | reproj RMS={direct_stats["rms_px"]:.4f}px, '
+                                f'max={direct_stats["max_px"]:.4f}px | marker_direct_ok={pair_metrics["marker_direct_ok"]} '
+                                '(ranking candidate; final geometry checks still pending)')
+        finite_baselines = [b for b in pair_baselines if np.isfinite(b)]
+        log_and_print(f'[Pair gate summary] {pair_gate_counts} | passed={len(pairs)} | '
+            f'baseline range(mm)={min(finite_baselines) if finite_baselines else None}..'
+            f'{max(finite_baselines) if finite_baselines else None}')
         add_pair_detail(
             'candidate_pair_branch_score', time.perf_counter() - _detail_start)
 
@@ -6699,7 +6736,7 @@ def analyze_video_frames(
 
     # 預先在背景執行去畸變、平面擬合與 SIFT 特徵提取，優化 UI 載入速度
     h_raw, w_raw = frame_height, frame_width
-    if frames_override is None:
+    if frames_override is None or not frames_are_undistorted:
         newKL_o, _ = cv2.getOptimalNewCameraMatrix(
             mtx_L, dist_L, (w_raw, h_raw), 1, (w_raw, h_raw))
         _map1, _map2 = cv2.initUndistortRectifyMap(

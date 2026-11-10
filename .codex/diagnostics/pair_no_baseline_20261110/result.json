@@ -1,0 +1,181 @@
+{
+  "baseline": 21.867510362872153,
+  "R_rel": [
+    [
+      0.4585345809947511,
+      0.8879065022788827,
+      -0.036987582279047616
+    ],
+    [
+      -0.8767969792687316,
+      0.45879564938278883,
+      0.14399169855464491
+    ],
+    [
+      0.144820907251665,
+      -0.03359457275075393,
+      0.9888874099231413
+    ]
+  ],
+  "t_rel": [
+    [
+      9.005185421978318
+    ],
+    [
+      -19.37327510366434
+    ],
+    [
+      4.6659250683920845
+    ]
+  ],
+  "rt_quality": {
+    "score": 0.4329108364086843,
+    "err": 0.06688197961852616,
+    "baseline": 19.434094826589405,
+    "baseline_gate_min_mm": 0.0,
+    "marker_parallax_deg": 5.174657966064902,
+    "triangulation_median_deg": 5.174657966064902,
+    "triangulation_p10_deg": 4.2300273115396605,
+    "overlap_ratio": 0.65,
+    "predicted_depth_sigma_mm": 1.7241971252035184,
+    "pair_nominal_depth_mm": 200.0,
+    "pair_nominal_depth_source": "legacy_fixed_200mm",
+    "baseline_to_depth": 0.09717047413294702,
+    "shared_markers": 4,
+    "sharpness_min": 128.47414394961572,
+    "coverage": 0.250331124395168,
+    "measurement_confidence": 0.75,
+    "measurement_mode_start": "SINGLE",
+    "measurement_mode_end": "SINGLE",
+    "marker_direct": {
+      "mean_px": 0.06688197961852616,
+      "rms_px": 0.06841902547576724,
+      "max_px": 0.08203870229766928,
+      "endpoint_A": {
+        "marker_count": 1,
+        "marker_ids": [
+          2
+        ],
+        "rms_px": 0.08129070026255726,
+        "mean_px": 0.08128742423985846,
+        "median_px": 0.0812945068825437,
+        "max_px": 0.08203870229766928,
+        "per_marker": [
+          {
+            "marker_id": 2,
+            "rms_px": 0.08129070026255726,
+            "max_px": 0.08203870229766928
+          }
+        ]
+      },
+      "endpoint_B": {
+        "marker_count": 1,
+        "marker_ids": [
+          2
+        ],
+        "rms_px": 0.05247997851495791,
+        "mean_px": 0.05247653499719386,
+        "median_px": 0.05248339769983064,
+        "max_px": 0.05329495808401268,
+        "per_marker": [
+          {
+            "marker_id": 2,
+            "rms_px": 0.05247997851495791,
+            "max_px": 0.05329495808401268
+          }
+        ]
+      },
+      "shared_marker_count": 1
+    },
+    "pattern_observability_start": {},
+    "pattern_observability_end": {},
+    "pattern_guided": null,
+    "angle_guided": null,
+    "angle_guided_ok": true,
+    "marker_direct_ok": true,
+    "marker_bidir_ok": true,
+    "marker_bidir_rms_px": 0.06841902547576724,
+    "marker_bidir_max_px": 0.08203870229766928,
+    "marker_left_to_right_rms_px": 0.05247997851495791,
+    "marker_right_to_left_rms_px": 0.08129070026255726,
+    "branch": [
+      0,
+      0
+    ],
+    "temporal_candidate_indices": [
+      0,
+      0
+    ],
+    "temporal_branch_selected": true,
+    "temporal_branch_confidence": null,
+    "temporal_joint_min_marginal": {
+      "cost": 2.8246399007164826,
+      "best_cost": 2.8246399007164826,
+      "excess_cost": 0.0,
+      "normalized_excess_cost": 0.0,
+      "prior_cost": 0.0,
+      "segment_id": 0
+    },
+    "temporal_branch_prior_cost": 0.0,
+    "feat_epi_px": 0.418922129396089,
+    "feat_epi_p90_px": 0.9159059985035647,
+    "feature_model_epi_px": 0.3394794005588766,
+    "feature_quality_ok": true,
+    "feature_strong": true,
+    "feature_inliers": 121,
+    "feature_matches": 151,
+    "feature_inlier_ratio": 0.8013245033112583,
+    "feature_grid_coverage": 0.4583333333333333,
+    "feature_hull_coverage": 0.2073246273021927,
+    "feature_parallax_deg": 5.349252986528933,
+    "feature_parallax_p10_deg": 4.8560252519656375,
+    "feature_model_parallax_deg": 6.751727281359257,
+    "feature_planar_degenerate": false,
+    "feature_rot_agreement_deg": 1.4151295808696351,
+    "combined_score": 0.17638686836888004,
+    "final_feature_epi_px": 0.1992900697552781,
+    "final_feature_stats": {
+      "inlier_count": 121,
+      "inlier_median_px": 0.1992900697552781,
+      "inlier_p90_px": 0.5744371766201612,
+      "all_median_px": 0.1992900697552781,
+      "all_p90_px": 0.5744371766201612,
+      "seed_median_px": 0.1992900697552781,
+      "seed_p90_px": 0.5744371766201612,
+      "holdout_median_px": null,
+      "holdout_p90_px": null
+    },
+    "marker_bidir": {
+      "marker_count": 2,
+      "left_to_right_rms_px": 0.08281564017449797,
+      "right_to_left_rms_px": 0.10338218241102687,
+      "rms_px": 0.09366511062711332,
+      "median_px": 0.09206059303193,
+      "max_px": 0.13837754816722814,
+      "per_marker": [
+        {
+          "endpoint": "A",
+          "marker_id": 2,
+          "rms_px": 0.10338218241102687,
+          "max_px": 0.13837754816722814
+        },
+        {
+          "endpoint": "B",
+          "marker_id": 2,
+          "rms_px": 0.08281564017449797,
+          "max_px": 0.10808267727890805
+        }
+      ]
+    },
+    "marker_reproj_px": 0.09366511062711332,
+    "marker_pnp_self_reproj_px": 0.08488396603463669,
+    "feature_final_ok": true,
+    "rt_reliable": true,
+    "temporal_pose": {
+      "status": "OK_TEMPORAL_EXACT_DP",
+      "reference_marker_id": 2,
+      "path_margin": null,
+      "observation_count": 2
+    }
+  }
+}

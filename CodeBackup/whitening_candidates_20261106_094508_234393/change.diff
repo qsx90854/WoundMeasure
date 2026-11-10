@@ -1,0 +1,129 @@
+--- backup/video_frame_difference_ui.py
++++ video_frame_difference_ui.py
+@@ -13,6 +13,7 @@
+ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+ from specular_image_pair_ui import SpecularPairUI, read_main_defaults, detect_pair
+ from specular_video_pair_ui import VideoSource, render_video_frame
++from Algorithm.frame_specular_candidates import DEFAULTS as CHANGE_DEFAULTS, specular_change_candidates
+ from Algorithm.specular_settings import show_specular_settings
+ from Algorithm.specular_model_v2_settings import show_specular_model_v2_settings
+ 
+@@ -141,6 +142,8 @@
+         self.show_tp=tk.BooleanVar(value=True);self.show_fn=tk.BooleanVar(value=True);self.show_fp=tk.BooleanVar(value=True)
+         self.show_crosshair=tk.BooleanVar(value=False)
+         self.normalize_gray=tk.BooleanVar(value=False)
++        self.gt_mode=tk.StringVar(value='相減');self.use_whitening=tk.BooleanVar(value=True);self.use_white_brightening=tk.BooleanVar(value=True)
++        self.change_values={key:tk.StringVar(value=str(value)) for key,value in CHANGE_DEFAULTS.items()};self.change_cache=None
+         self.calibration_mode=tk.StringVar(value='Off');self.positive_only=tk.BooleanVar(value=False)
+         self.calibration_text=tk.StringVar(value='校正尚未啟用；先選兩幀皆無明顯反光且有灰階變化的區域。')
+         self.index1=tk.StringVar(value='0');self.index2=tk.StringVar(value='1');self.current=tk.StringVar(value='0')
+@@ -160,8 +163,8 @@
+             ttk.Button(pair,text='取目前幀',command=lambda v=var:self.capture_current(v)).pack(side='left',padx=3)
+         ttk.Button(pair,text='分析兩幀',command=self.apply_pair).pack(side='left',padx=5)
+         ttk.Label(pair,text='差異門檻 >').pack(side='left',padx=5)
+-        entry=ttk.Entry(pair,textvariable=self.threshold,width=6);entry.pack(side='left');entry.bind('<Return>',lambda e:self.draw())
+-        ttk.Button(pair,text='更新門檻',command=self.draw).pack(side='left',padx=3)
++        self.threshold_entry=ttk.Entry(pair,textvariable=self.threshold,width=6);self.threshold_entry.pack(side='left');self.threshold_entry.bind('<Return>',lambda e:self.draw())
++        self.threshold_button=ttk.Button(pair,text='更新門檻',command=self.draw);self.threshold_button.pack(side='left',padx=3)
+         ttk.Label(pair,text='反光模式').pack(side='left',padx=5)
+         combo=ttk.Combobox(pair,textvariable=self.mode,values=('Legacy','V2','Fixed'),width=8,state='readonly')
+         combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.recompute())
+@@ -194,8 +197,26 @@
+         ttk.Button(calibration_bar,text='清除校正 ROI',command=self.clear_calibration_roi).pack(side='left',padx=3)
+         ttk.Label(calibration_bar,text='Robust 線性校正').pack(side='left',padx=5)
+         combo=ttk.Combobox(calibration_bar,textvariable=self.calibration_mode,values=('Off','Gray','BGR'),width=7,state='readonly')
++        self.calibration_combo=combo
+         combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.calibration_changed())
+-        ttk.Checkbutton(calibration_bar,text='單向差異：只找 index2 變亮',variable=self.positive_only,command=self.draw).pack(side='left',padx=8)
++        self.positive_button=ttk.Checkbutton(calibration_bar,text='單向差異：只找 index2 變亮',variable=self.positive_only,command=self.draw)
++        self.positive_button.pack(side='left',padx=8)
++        change_bar=ttk.Frame(root,padding=5);change_bar.pack(fill='x')
++        ttk.Label(change_bar,text='GT 候選模式').pack(side='left',padx=4)
++        combo=ttk.Combobox(change_bar,textvariable=self.gt_mode,values=('相減','變白／局部增亮'),width=18,state='readonly')
++        combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.calibration_changed())
++        ttk.Checkbutton(change_bar,text='有色變白',variable=self.use_whitening,command=self.draw).pack(side='left',padx=6)
++        ttk.Checkbutton(change_bar,text='原本偏白：額外增亮',variable=self.use_white_brightening,command=self.draw).pack(side='left',padx=6)
++        ttk.Label(change_bar,text='新模式使用原圖；局部中位數扣除背景變化；不使用相減門檻／線性校正。').pack(side='left',padx=6)
++        labels={'window':'視窗 px','extra_y':'額外亮度 >','saturation_drop':'S 下降 >','extra_s':'額外 S 下降 >',
++                'target_v':'V2 ≥','target_s':'S2 ≤','color_s':'有色 S1 ≥','white_s':'偏白 S1 ≤','white_v':'偏白 V1 ≥'}
++        for offset in (0,5):
++            row=ttk.Frame(root,padding=2);row.pack(fill='x')
++            for key in list(CHANGE_DEFAULTS)[offset:offset+5]:
++                ttk.Label(row,text=labels[key]).pack(side='left',padx=4)
++                entry=ttk.Entry(row,textvariable=self.change_values[key],width=6);entry.pack(side='left')
++                entry.bind('<Return>',lambda e:self.draw())
++            if offset==5:ttk.Button(row,text='更新候選門檻',command=self.draw).pack(side='left',padx=6)
+         ttk.Label(root,textvariable=self.calibration_text,wraplength=1450).pack(anchor='w',padx=10)
+         compare_bar=ttk.Frame(root,padding=5);compare_bar.pack(fill='x')
+         ttk.Label(compare_bar,text='比較圖（差異 mask 作為 GT，index2 反光 mask 作為預測）：').pack(side='left',padx=4)
+@@ -315,10 +336,25 @@
+         self.calibration_roi=None;self.calibration_cache=None;self.cancel_roi();self.draw()
+ 
+     def calibration_changed(self):
+-        enabled=self.calibration_mode.get()!='Off'
++        candidate_mode=self.gt_mode.get()!='相減'
++        enabled=candidate_mode or self.calibration_mode.get()!='Off'
+         if enabled:self.normalize_gray.set(False)
++        self.calibration_combo.configure(state='disabled' if candidate_mode else 'readonly')
++        for widget in (self.threshold_entry,self.threshold_button,self.positive_button):
++            widget.configure(state='disabled' if candidate_mode else 'normal')
+         self.normalize_button.configure(state='disabled' if enabled else 'normal')
+         self.draw()
++
++    def change_candidate_mask(self):
++        options={key:(int(var.get()) if key=='window' else float(var.get())) for key,var in self.change_values.items()}
++        key=(id(self.images[1]),id(self.images[2]),self.roi,self.use_whitening.get(),self.use_white_brightening.get(),tuple(options.items()))
++        if self.change_cache is None or self.change_cache[0]!=key:
++            mask,info=specular_change_candidates(self.images[1],self.images[2],self.roi,
++                whitening=self.use_whitening.get(),white_brightening=self.use_white_brightening.get(),**options)
++            self.change_cache=(key,mask,info)
++        _,mask,info=self.change_cache
++        self.calibration_text.set(f'候選：有色變白={info["whitening"]}；偏白額外增亮={info["white_brightening"]}；重疊={info["overlap"]}；聯集={info["total"]} pixels。S/V 為 0～255；只使用 ROI 內的背景樣本。')
++        return mask
+ 
+     def calibrated_reference(self):
+         mode=self.calibration_mode.get()
+@@ -385,7 +421,7 @@
+         if self.source is not None:self.source.close()
+         self.source=source;self.pending_pair=None;self.pending_current=None
+         self.images=[source.image.copy(),None,None];self.pair_results=None;self.pair_indices=None
+-        self.hide_crosshair()
++        self.hide_crosshair();self.change_cache=None
+         self.roi=None;self.calibration_roi=None;self.calibration_cache=None;self.cancel_roi()
+         self.current_index=self.desired_current=0;self.current.set('0');self.index1.set('0');self.index2.set(str(min(1,source.count-1)))
+         self.slider.configure(to=max(1,source.count-1));self.setting_slider=True;self.slider.set(0);self.setting_slider=False
+@@ -472,7 +508,7 @@
+             self.pause();messagebox.showerror('處理失敗',str(exc),parent=self.root);self.status.set('處理失敗，保留上次結果。');self.dispatch();return
+         if job[0]=='pair' and job[2]==self.pair_revision:
+             self.images[1:]=result[0];self.pair_results=result[1];self.pair_indices=job[1];self.pair_mode=job[3]
+-            self.calibration_cache=None
++            self.calibration_cache=None;self.change_cache=None
+             self.status.set(f'已分析 F{job[1][0]} / F{job[1][1]} | {job[3]} | 左／右偵測 {result[1][0][1]:.1f}/{result[1][1][1]:.1f} ms')
+         elif job[0]=='current' and job[1]==self.desired_current:
+             self.images[0]=result;self.current_index=job[1];self.current.set(str(job[1]))
+@@ -489,9 +525,12 @@
+         if self.pair_results is not None:
+             error=None
+             try:
+-                threshold=float(self.threshold.get())
+-                predicted=self.calibrated_reference()
+-                difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi,self.normalize_gray.get(),self.positive_only.get(),predicted)
++                threshold=0
++                if self.gt_mode.get()!='相減':mask=self.change_candidate_mask()
++                else:
++                    threshold=float(self.threshold.get())
++                    predicted=self.calibrated_reference()
++                    difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi,self.normalize_gray.get(),self.positive_only.get(),predicted)
+             except ValueError as exc:
+                 error=str(exc);self.calibration_text.set(f'差異／GT 尚未產生：{error}')
+                 mask=np.zeros(self.images[1].shape[:2],np.uint8)
+@@ -503,6 +542,9 @@
+             direction='positive' if self.positive_only.get() else 'absolute'
+             diff_mode=f'{diff_mode} {direction}'
+             titles[3]=f'{diff_mode} diff > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
++            if self.gt_mode.get()!='相減':
++                diff_mode='whitening / extra brightening'
++                titles[3]=f'Whitening / extra brightening\n{scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
+             for i in range(2):
+                 shown_mask=np.zeros_like(self.pair_results[i][0])
+                 shown_mask[region]=self.pair_results[i][0][region]

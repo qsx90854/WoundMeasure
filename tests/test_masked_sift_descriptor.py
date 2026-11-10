@@ -373,9 +373,9 @@ class MaskedSIFTTests(unittest.TestCase):
 
     def test_pipeline_keeps_27_valid_pairs_and_never_keeps_missing_pair(self):
         original = masked.compare_descriptors
-        def one_missing(left, right, config):
+        def one_missing(left, right, config, **kwargs):
             right['valid_points'][..., 0] = False
-            return original(left, right, config)
+            return original(left, right, config, **kwargs)
         with patch.object(masked, 'compare_descriptors', side_effect=one_missing):
             result = self.match(replace(self.cfg, search_length_px=5, search_width_px=1,
                                         max_objective_score_ratio=None))

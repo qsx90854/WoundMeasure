@@ -1,0 +1,98 @@
+🔧 [World Marker+SIFT RT] enabled=True | SIFT residuals may refine final R/t after passing gates
+[Image pair] Fixed right/A=0, left/B=1; automatic frame selection disabled
+🧭 [Frame pair mode] original | direction=auto | right/A=15.0deg, left/B=35.0deg
+🎯 [RT SIFT ROI config] enabled=True | ratio=(0.1, 0.1, 0.8, 0.8) | scale=0.500 | ArUco=full-frame | pair-geometry=full-frame
+[ArUco ID filter] allowed=ALL
+ℹ️ [Baseline candidate gate] MIN_BASELINE_MM=35.00 mm, margin=2.00 mm, effective_min=37.00 mm, max=220.00 mm
+🎬 載入固定影像對: D:\Lightglue\lg_env\.codex\diagnostics\image_pair_input_20261109\image_pair_20261109_160857_897918\image_pair.json，影像數: 2 (選幀範圍模式: fixed)
+🎯 [RT SIFT ROI-共用] x=192:1728, y=108:972 (1536x864)
+   ↳ [RT SIFT scaled crop] scale=0.500 | image=960x540 | crop=(96, 54, 864, 486)
+🔄 評估自適應跨段候選幀對...
+📌 [第 1 階段] marker-map reference ID=2, mapped=[2], start=[2], end=[2]
+🧭 [時序姿態] observations=2, segments=1, map_ids=[2]
+   [ArUco候選] A=F0 B=F1 baseline=67.24mm parallax=17.69deg depth_sigma=0.43mm score=0.420
+   [topK] A=F0 B=F1 branch=(0, 0) marker_bidir=0.042px feature_inlier_epi=2.549px E_epi=0.337px inliers=19/35 grid=0.29 parallax=16.492° score=0.420 combined=0.254
+   [topK] A=F0 B=F1 branch=(1, 1) marker_bidir=0.273px feature_inlier_epi=46.826px E_epi=0.337px inliers=19/35 grid=0.29 parallax=11.979° score=0.739 combined=0.889
+   [topK] A=F0 B=F1 branch=(1, 0) marker_bidir=0.202px feature_inlier_epi=64.010px E_epi=0.337px inliers=19/35 grid=0.29 parallax=38.972° score=0.597 combined=0.925
+   [topK] A=F0 B=F1 branch=(0, 1) marker_bidir=0.188px feature_inlier_epi=70.988px E_epi=0.337px inliers=19/35 grid=0.29 parallax=35.187° score=0.644 combined=0.932
+🎯 [pair quality] score=0.420 | reproj=0.042px | marker_bidir=0.042px | feature_inlier_epi=2.549px | E_epi=0.337px | baseline=67.24mm | shared=4 | marker_parallax=17.69deg | predicted_depth_sigma=0.43mm | feature_grid=0.29 | parallax=16.492°
+🎉 第 1 階段搜尋成功！特徵極線殘差 0.337 px < 0.8 px | hypothesis (0, 0) | reproj 0.042 px
+ℹ️ [逐幀 hypothesis] 採用 (s=0:SINGLE, e=0:SINGLE)
+================================================================================================
+📐 [WORLD RT AUDIT：最佳化前／Marker-only／最終 RT 比較]
+📐 [RT Audit] ids A/B=[2]/[2] | corners=4/4 | SIFT=ON | role=joint_world_marker_sift
+   PRE seed (ArUco/temporal; not guaranteed raw solvePnP): R=[ 0.997015,-0.017206,-0.075267, 0.036177, 0.965323, 0.25854 , 0.068209,
+ -0.260491, 0.963064] | t=[ 16.2861,-65.2075,  2.0741] mm | baseline=67.2425 mm | marker RMS=0.0425px, max=0.0480px
+   MARKER-ONLY: R=[ 0.997071,-0.017278,-0.074509, 0.036041, 0.965356, 0.258434, 0.067463,
+ -0.260362, 0.963151] | t=[ 16.1011,-65.1953,  1.9939] mm | baseline=67.1837 mm | marker RMS=0.0424px, max=0.0494px
+   PRE→MARKER: ΔR=0.044296 deg | Δt=0.201962 mm | Δt_xyz=[-0.184971, 0.01223 ,-0.080153] | Δbaseline=-0.058855 mm
+   FINAL: R=[ 0.999096,-0.036123,-0.022433, 0.041093, 0.955823, 0.291056, 0.010928,
+ -0.291715, 0.956443] | t=[  3.9099,-73.4901,  1.7099] mm | baseline=73.6139 mm | marker RMS=0.3496px, max=0.5810px
+   MARKER→FINAL: ΔR=3.730591 deg | Δt=14.748217 mm | Δt_xyz=[-12.191165, -8.294864, -0.283966] | Δbaseline=+6.430274 mm
+   SIFT epipolar MARKER-ONLY→FINAL (same 19 pairs, inlier≤1.500px):
+      inliers 7/19→18/19 | inlier median 1.1950→0.3871px | P90 1.3236→1.0610px
+      all-pair median 2.6294→0.3978px | P90 5.2508→1.2902px
+================================================================================================
+✅ [World RT聯合精修-best] role=joint_world_marker_sift marker=0.350px feature_p90=1.061px baseline=73.61mm
+📍 [RT SIFT像素] 19/35 | role=final_rt
+ℹ️ [次佳配對] 未找到通過特徵幾何驗證的額外影格 (E 極線門檻 1.5 px, Baseline 35.0~220.0 mm)。
+✅ 挑選結果：
+  - 右圖 (Frame A) 索引: 0
+  - 左圖 (Frame B) 索引: 1
+  - 計算 Baseline: 73.61 mm
+ℹ️ [RT品質] marker 雙向重投影 L→R=0.296px, R→L=0.396px, max=0.581px | Feature inliers=18/35, median=0.387px, p90=1.061px
+🧾 [RT SIFT診斷] 已輸出: D:\Lightglue\lg_env\.codex\diagnostics\image_pair_input_20261109\image_pair_20261109_160857_897918\image_pair_rt_sift_diagnostics.txt
+📐 [三角化平面] 角點數 4 | 平面 RMS 殘差 0.016 mm
+✅ [參考平面] 由 ref 標籤 ID:2 的三角化角點定義 (其他標籤不參與平面)
+⏱️ [選幀/RT耗時] angle_scan=0.000s | total=0.954s | mode=original | status=DISABLED
+⏱️ [影片分析明細] 總耗時 0.95 s
+   - 影片索引建立(2 幀)                     5.2 ms (  0.5%)
+   - ArUco偵測+配對搜尋(含極線重排)           688.5 ms ( 72.2%)
+   - 混合RT精修+次佳打包                   177.5 ms ( 18.6%)
+   - 最終RT閉環+品質驗證                     1.9 ms (  0.2%)
+   - RT SIFT診斷檔輸出                   18.8 ms (  2.0%)
+   - 診斷狀態封裝                          0.1 ms (  0.0%)
+   - 影像去畸變+輸出幀準備                    32.7 ms (  3.4%)
+   - 基準平面建立                         29.3 ms (  3.1%)
+   - 深度匹配特徵延後計算                      0.0 ms (  0.0%)
+      ↳ [ArUco+配對搜尋細分；依算法執行順序] parent=688.5 ms
+         1. 角度掃描/端點提案                            0.0 ms (  0.0% of search)
+             - 1.1 影格解碼+ArUco偵測                     0.0 ms (  0.0% of stage)
+             - 1.2 PnP角度+方向判斷+候選排序                  0.0 ms (100.0% of stage)
+         2. Marker map+時序姿態DP                  181.8 ms ( 26.4% of search)
+             - 2.1 稀疏probe解碼+ArUco偵測              152.1 ms ( 83.7% of stage)
+                 · 2.1.1 影片seek/grab+目標幀解碼          0.0 ms (  0.0% of 2.1)
+                 · 2.1.2 BGR轉灰階                    15.6 ms ( 10.2% of 2.1)
+                 · 2.1.3 CLAHE對比增強                 41.3 ms ( 27.1% of 2.1)
+                 · 2.1.4 ArUco候選偵測                 89.3 ms ( 58.7% of 2.1)
+                 · 2.1.5 cornerSubPix角點精修           4.5 ms (  3.0% of 2.1)
+                 · 2.1.6 Cache+資料整理                 1.4 ms (  0.9% of 2.1)
+             - 2.2 共視圖建圖+剛體Marker map              16.7 ms (  9.2% of stage)
+             - 2.3 IPPE逐幀姿態假設                       9.8 ms (  5.4% of stage)
+             - 2.4 時序DP最佳路徑                         3.0 ms (  1.6% of stage)
+             - 2.5 資料整理+診斷輸出                        0.2 ms (  0.1% of stage)
+         3. Pattern-guided候選擴充                   0.0 ms (  0.0% of search)
+             - 3.1 Core pair幾何可用性評估                 0.0 ms (  0.0% of stage)
+             - 3.2 額外probe+時序路徑重建                   0.0 ms (  0.0% of stage)
+             - 3.3 狀態更新+控制開銷                        0.0 ms (100.0% of stage)
+         4. Local window+KLT重排                   0.0 ms (  0.0% of search)
+             - 4.1 暫定端點pair評分                       0.0 ms (  0.0% of stage)
+             - 4.2 鄰幀解碼+ArUco偵測                     0.0 ms (  0.0% of stage)
+             - 4.3 鄰幀IPPE姿態假設                       0.0 ms (  0.0% of stage)
+             - 4.4 相鄰幀KLT追蹤                         0.0 ms (  0.0% of stage)
+             - 4.5 Local DP+清晰度/KLT重排               0.0 ms (  0.0% of stage)
+             - 4.6 合併鄰幀後重建全域DP                      0.0 ms (  0.0% of stage)
+             - 4.7 詳細選幀原因Log輸出                      0.0 ms (  0.0% of stage)
+             - 4.8 Window建立+資料整理                    0.0 ms (100.0% of stage)
+         5. Pair/IPPE分支枚舉評分                     74.0 ms ( 10.8% of search)
+             - 5.1 端點時序分支封裝                         0.0 ms (  0.1% of stage)
+             - 5.2 Pair×IPPE組合幾何評分                 73.9 ms ( 99.9% of stage)
+             - 5.3 排序+Top-K預算配置                     0.1 ms (  0.1% of stage)
+             - 5.4 控制開銷                             0.0 ms (  0.0% of stage)
+         6. SIFT+Essential極線重排                 429.8 ms ( 62.4% of search)
+             - 6.1 SIFT特徵提取                       235.3 ms ( 54.8% of stage)
+             - 6.2 ratio+mutual+網格匹配               21.1 ms (  4.9% of stage)
+             - 6.3 Essential RANSAC+recoverPose    166.1 ms ( 38.6% of stage)
+             - 6.4 極線/視差評分+最終重排                     5.1 ms (  1.2% of stage)
+             - 6.5 候選控制+快取開銷                        2.2 ms (  0.5% of stage)
+         7. 其餘跨階段控制與日誌開銷                      2.9 ms (  0.4% of search)

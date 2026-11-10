@@ -11,6 +11,7 @@ import cv2
 
 from Algorithm import region_sift_frames as frames
 from Algorithm.region_sift_profiling import on_side, merge_profile
+from Algorithm.region_sift_confidence import search_valley, finalize_confidence
 
 
 def validate_search_config(config):
@@ -105,6 +106,7 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
         funnel.setdefault(name, 0)
     valid_count_samples, deficient_cell_samples = [], []
     point_count = len(left_descriptors)
+    rejected_best = None
     if len(pending):
         timing_next('右圖尺度金字塔與響應圖')
         context = frame_context(warped_right, config, session, 'right', warped_specular, warped_valid,
@@ -141,8 +143,9 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
         funnel['new_frame_accepted'] = funnel.get('new_frame_accepted', 0) + int(np.count_nonzero(complete))
         for i in pending[~complete]:
             cache[keys[int(i)]] = None
-        pending = pending[complete]
-        right = {key: value[complete] for key, value in right.items()}
+        if not config.use_masked_sift:
+            pending = pending[complete]
+            right = {key: value[complete] for key, value in right.items()}
         if config.use_masked_sift:
             right['masked_point_valid'] = right['valid'].copy()
         batch_size = max(1, int(config.descriptor_batch_size) // point_count)
@@ -160,7 +163,8 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
                 right_coverage_valid = packet['valid_points'].copy()
                 right_frame_valid = right['valid'][rows]
                 packet['valid_points'] &= right['valid'][rows]
-                distances, pair_valid, common = compare_descriptors(left_masked, packet, config)
+                distances, pair_valid, common, evidence = compare_descriptors(
+                    left_masked, packet, config, return_details=True)
                 gate = group_validity(pair_valid, point_metadata, config, return_details=True)
                 group_usable = gate['valid']
                 valid_count_samples.extend(np.asarray(gate['valid_count'], int).tolist())
@@ -193,15 +197,24 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
             matrices = descriptors.reshape(len(indices), point_count, 128)
             if not config.use_masked_sift:
                 distances = np.linalg.norm(matrices - left_descriptors[None, :, :], axis=2)
+                pair_valid = np.ones_like(distances, dtype=bool)
+                common = np.ones_like(distances)
+                evidence = dict(texture_distance=distances,
+                                missing_penalty=np.zeros_like(distances))
             components = matcher.score_candidate_groups(distances, point_metadata, left_frames,
                 {key: value[rows] for key, value in right.items()}, config)
+            # Small per-anchor arrays, never duplicate 128-bin histograms.
+            for field in ('texture_distance', 'missing_penalty', 'common_fraction', 'pair_valid'):
+                if field not in right:
+                    right[field] = np.zeros_like(right['size_px'], dtype=(bool if field == 'pair_valid' else np.float32))
+                value = common if field == 'common_fraction' else pair_valid if field == 'pair_valid' else evidence[field]
+                right[field][rows] = value
             for j, i in enumerate(indices):
                 if config.use_masked_sift and not group_usable[j]:
                     cache[keys[int(i)]] = None
                     counts['masked_coverage_rejected_candidates'] = counts.get('masked_coverage_rejected_candidates', 0) + 1
                     counts['masked_invalid_point_pairs'] = counts.get('masked_invalid_point_pairs', 0) + int(np.count_nonzero(~pair_valid[j]))
-                    continue
-                if config.use_masked_sift:
+                if config.use_masked_sift and group_usable[j]:
                     funnel['new_descriptor_group_accepted'] += 1
                 cache[keys[int(i)]] = dict(
                     group=float(components['group_score'][j]),
@@ -217,6 +230,16 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
                     cache[keys[int(i)]]['frames']['masked_valid_fraction'] = packet['valid_fraction'][j].copy()
                     cache[keys[int(i)]]['frames']['masked_common_fraction'] = common[j].copy()
                     cache[keys[int(i)]]['frames']['masked_point_valid'] = pair_valid[j].copy()
+                    cache[keys[int(i)]]['frames']['masked_cell_fraction'] = packet['cell_valid_fraction'][j].copy()
+                    if not group_usable[j]:
+                        row = cache[keys[int(i)]]
+                        rank = (max(0, int(gate['required']) - int(gate['valid_count'][j])),
+                                max(0, int(gate['deficient_cell_count'][j]) - config.masked_max_deficient_cells),
+                                -float(np.mean(common[j])), row['objective'], int(i))
+                        if rejected_best is None or rank < rejected_best[0]:
+                            rejected_best = (rank, int(i), row)
+                        cache[keys[int(i)]] = None
+
     timing_next('候選快取整理')
     valid_indices = np.array([i for i in valid_indices if cache[keys[int(i)]] is not None], dtype=int)
     funnel['new_descriptor_group_rejected'] = int(
@@ -232,10 +255,16 @@ def evaluate_positions(warped_right, all_positions, valid_indices, warped_valid,
         funnel.update(deficient_cells_min=int(values.min()),
                       deficient_cells_median=float(np.median(values)),
                       deficient_cells_max=int(values.max()))
+    diagnostic_record = None
+    if not len(valid_indices) and rejected_best is not None:
+        _, index, diagnostic_record = rejected_best
+        valid_indices = np.array([index], dtype=int)
+        funnel['diagnostic_only'] = True
     if not len(valid_indices):
         raise matcher.RegionSIFTError('匹配失敗: 自製 SIFT 無候選具足夠有效／共同覆蓋或影像 support'
             if config.use_masked_sift else '匹配失敗: no search candidate has complete reflection-free per-scale SIFT support')
-    records = [cache[keys[int(i)]] for i in valid_indices]
+    records = ([diagnostic_record] if diagnostic_record is not None else
+               [cache[keys[int(i)]] for i in valid_indices])
     arrays = []
     for name in ('group', 'objective', 'trimmed', 'balanced', 'penalty'):
         values = np.full(len(all_positions), np.inf, dtype=np.float64)
@@ -497,17 +526,17 @@ def run_two_stage(engine, left, right, point, cand, K_L, *, sift, config, left_c
             round_cache = initial_cache.setdefault('two_stage_rounds', {}).setdefault(iteration, {})
             offsets = np.column_stack([along, np.zeros(len(along))])
             stage, debug = evaluate(offsets, cache, round_cache, 'coarse', iteration)
-            if debug is None:
+            if debug is None or debug.get('diagnostic_only'):
                 break  # Geometry/support failures are not shallow-score valleys.
-            valley = analyze_valley(debug, effective)
+            valley = search_valley(debug, effective, analyze_valley(debug, effective))
             stage.update(valley=valley, reason=valley['reason'])
             if not valley['clear'] and config.coarse_side_rescue and width_half > 0:
                 sides = [(a, b) for a in along for b in (-width_half, width_half)]
                 offsets = _union_offsets(offsets, sides)
                 stage, debug = evaluate(offsets, cache, round_cache, 'coarse+sides', iteration)
-                if debug is None:
+                if debug is None or debug.get('diagnostic_only'):
                     break
-                valley = analyze_valley(debug, effective)
+                valley = search_valley(debug, effective, analyze_valley(debug, effective))
                 stage.update(valley=valley, reason=valley['reason'])
             if not valley['clear']:
                 result.update(m_pt=None, method='', reject_reason='匹配失敗: coarse localization unclear: '+valley['reason'])
@@ -522,11 +551,11 @@ def run_two_stage(engine, left, right, point, cand, K_L, *, sift, config, left_c
             fine = [(a, b) for a in fine_along for b in fine_across]
             offsets = _union_offsets(offsets, fine)
             stage, debug = evaluate(offsets, cache, round_cache, 'fine+global-coarse', iteration)
-            if debug is None:
+            if debug is None or debug.get('diagnostic_only'):
                 break
             stage['fine_candidate_count'] = len(fine)
             best = debug['best_along_offset_px']
-            final_valley = analyze_valley(debug, effective)
+            final_valley = search_valley(debug, effective, analyze_valley(debug, effective))
             stage['valley'] = final_valley
             if best <= fine_bounds[0]+1e-6 or best >= fine_bounds[1]-1e-6:
                 result.update(m_pt=None, method='', reject_reason='匹配失敗: fine optimum reaches/outside local search boundary')
@@ -538,13 +567,27 @@ def run_two_stage(engine, left, right, point, cand, K_L, *, sift, config, left_c
             break
     except (RegionSIFTError, ValueError, KeyError, cv2.error, np.linalg.LinAlgError) as exc:
         result.update(m_pt=None, method='', reject_reason=f'匹配失敗: two-stage search: {exc}')
-    if config.local_plane_refine:
+    diagnostic_only = bool((result.get('region_debug') or {}).get('diagnostic_only'))
+    if config.confidence_mode != 'legacy' and not diagnostic_only:
+        confidence_started = time.perf_counter()
+        finalize_confidence(result, effective,
+            coarse_only=not history or history[-1]['stage'] != 'fine+global-coarse')
+        totals['可信度分析（含 cell 穩定性）'] = (time.perf_counter()-confidence_started)*1000.
+    if config.local_plane_refine and not diagnostic_only:
         from Algorithm.region_sift_refinement import refine_match
         refine_match(result, point, effective, sift=sift, session=session)
         report = result.get('refinement', {})
         totals['局部視差斜面微調'] = report.get('elapsed_ms', 0.)
         counts['right_descriptor_rows'] += report.get('descriptor_rows', 0)
         counts['right_descriptor_batches'] += report.get('descriptor_batches', 0)
+    if config.center_refine_enabled and not diagnostic_only:
+        from Algorithm.region_sift_center_refinement import refine_center
+        refine_center(result, left, point, cand, K_L, effective,
+                      left_spec_mask=kwargs.get('left_spec_mask'))
+        center_report = result.get('center_refinement', {})
+        totals['中心局部精修'] = center_report.get('elapsed_ms', 0.)
+        counts['right_descriptor_rows'] += center_report.get('descriptor_rows', 0)
+        counts['right_descriptor_batches'] += center_report.get('descriptor_batches', 0)
     elapsed = (time.perf_counter()-started)*1000.
     totals['兩階段控制與低谷分析'] = max(0., elapsed-sum(totals.values()))
     counts.update(reject_specular=bool(kwargs.get('reject_specular') or config.use_masked_sift),

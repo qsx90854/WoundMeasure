@@ -74,6 +74,16 @@ class RegionSIFTConfig:
     masked_min_points_per_cell: int = 1
     masked_max_deficient_cells: int = 1
     masked_missing_penalty_weight: float = 0.25
+    masked_sampling_gradient: bool = True
+
+    # Cheap evidence diagnostics. Shadow never overrides the legacy decision.
+    confidence_mode: str = 'legacy'
+    confidence_cell_stability: bool = True
+    confidence_score_band_relative: float = 0.05
+    confidence_basin_prominence_relative: float = 0.03
+    confidence_max_width_px: float = 4.0
+    confidence_min_cell_stability: float = 0.75
+    confidence_height_span_max_mm: Optional[float] = None
 
     # Rotated epipolar band dimensions.  With unit steps this is 5 x 75
     # candidates: 75 samples along the line and 5 across it.
@@ -101,6 +111,28 @@ class RegionSIFTConfig:
 
     # Post-search local disparity plane; rejected searches are never rescued.
     local_plane_refine: bool = False
+    # Independent center localization; mutually exclusive with LocalPlane.
+    center_refine_enabled: bool = False
+    center_refine_points: int = 9  # Automatic anchors plus P.
+    center_refine_width_px: int = 12
+    center_refine_height_px: int = 12
+    center_refine_max_support_radius_px: float = 24.0  # Nominal radius, excludes blur halo.
+    center_refine_radius_px: float = 2.0
+    center_refine_step_px: float = 1.0
+    center_refine_max_radius_px: float = 6.0
+    center_refine_spatial_sigma_px: float = 4.0
+    center_refine_min_point_distance_px: float = 1.0
+    center_refine_min_points: int = 6
+    center_refine_min_group_fraction: float = 0.7
+    center_refine_min_weight_fraction: float = 0.7
+    center_refine_min_valid_fraction: float = 0.6
+    center_refine_min_quadrants: int = 3
+    center_refine_min_gain: float = 1.0
+    center_refine_min_relative_gain: float = 0.02
+    center_refine_min_valley_depth: float = 0.02
+    center_refine_max_score_ratio: float = 0.98
+    center_refine_competitor_exclusion_px: float = 1.0
+    center_refine_max_score: float = 500.0
     refine_radius_px: float = 2.0
     refine_sample_step_px: float = 1.0
     refine_model_levels: int = 3
@@ -143,6 +175,11 @@ class RegionSIFTError(RuntimeError):
 
 
 def _validate_config(config: RegionSIFTConfig) -> None:
+    from Algorithm.region_sift_confidence import validate_config as validate_confidence
+    try:
+        validate_confidence(config)
+    except ValueError as exc:
+        raise RegionSIFTError(str(exc)) from exc
     from Algorithm.masked_sift_descriptor import validate_config
     try:
         validate_config(config)
@@ -152,6 +189,8 @@ def _validate_config(config: RegionSIFTConfig) -> None:
     validate_search_config(config)
     from Algorithm.region_sift_refinement import validate_refinement_config
     validate_refinement_config(config)
+    from Algorithm.region_sift_center_refinement import validate_center_config
+    validate_center_config(config)
     if config.grid_rows <= 0 or config.grid_cols <= 0:
         raise RegionSIFTError("grid_rows/grid_cols must be positive")
     if config.grid_rows % 2 == 0 or config.grid_cols % 2 == 0:
@@ -282,9 +321,16 @@ def select_region_points(
         if excluded[center_y, center_x]:
             raise RegionSIFTError('匹配失敗: P overlaps specular pixels or lacks reflection-free support')
 
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=config.sobel_ksize)
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=config.sobel_ksize)
-    magnitude = cv2.magnitude(gx, gy)
+    if config.use_masked_sift and config.masked_sampling_gradient and excluded is not None:
+        from Algorithm.masked_sift_descriptor import compute_masked_sampling_gradient
+        magnitude, sampling_valid = compute_masked_sampling_gradient(
+            gray, excluded, (x0, y0, x1, y1), config)
+        # P was checked above. Only automatic anchors need a valid gradient stencil.
+        excluded = excluded | ~sampling_valid
+    else:
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=config.sobel_ksize)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=config.sobel_ksize)
+        magnitude = cv2.magnitude(gx, gy)
 
     click_pixel = (center_x, center_y)
     center_row = config.grid_rows // 2
@@ -1088,6 +1134,10 @@ def run_region_sift_matching(
             "warped_right_gray": warped_right,
             "warped_valid_mask": warped_valid,
             "warped_specular_mask": warped_specular,
+            "left_specular_mask": left_spec_mask,
+            "left_gray": left_gray,
+            "left_audit_context_roi": _left_context_roi(config, left_roi, left_gray.shape),
+            "right_audit_context_roi": right_context_roi,
             "reject_specular": bool(reject_specular),
             "specular_check_support": bool(config.specular_check_support and not config.use_masked_sift),
             "line_right": band["line_right"],
@@ -1103,6 +1153,13 @@ def run_region_sift_matching(
             "candidate_centers_warp": centers,
             "candidate_group_scores": group_scores,
             "candidate_objective_scores": objective_scores,
+            # Row order follows valid candidate indices; no descriptor recomputation.
+            'evidence_candidate_indices': np.asarray(sorted(valid_row_by_candidate), dtype=int),
+            'evidence_distances': np.stack([candidate_distances[i] for i in sorted(valid_row_by_candidate)]),
+            'evidence_texture_distances': right_frames['texture_distance'],
+            'evidence_missing_penalties': right_frames['missing_penalty'],
+            'evidence_common_fractions': right_frames['common_fraction'],
+            'evidence_pair_valid': right_frames['pair_valid'],
             'candidate_trimmed_scores': trimmed_scores,
             'candidate_balanced_scores': balanced_scores,
             'candidate_frame_penalties': frame_penalties,
@@ -1155,6 +1212,20 @@ def run_region_sift_matching(
             "total_cell_count": config.grid_rows * config.grid_cols,
             "elapsed_ms": (time.perf_counter() - started) * 1000.0,
         }
+        if funnel.get('diagnostic_only'):
+            from Algorithm.masked_sift_descriptor import group_validity
+            gate = group_validity(best_right_frames['masked_point_valid'][None],
+                                  point_metadata, config, return_details=True)
+            debug.update(diagnostic_only=True, valid_candidate_count=0,
+                         diagnostic_valid_points=int(gate['valid_count'][0]),
+                         diagnostic_required_points=int(gate['required']),
+                         diagnostic_deficient_cells=int(gate['deficient_cell_count'][0]))
+            # Retain the selected rejected group only for inspection, never measurement.
+            debug['candidate_group_scores'] = np.full_like(group_scores, np.inf)
+            debug['candidate_objective_scores'] = np.full_like(objective_scores, np.inf)
+            base_result.update(region_debug=debug, m_pt=None, method='',
+                reject_reason='匹配失敗: 自製 SIFT 無候選具足夠有效／共同覆蓋或影像 support（顯示最接近通過候選，僅供診斷）')
+            return base_result
         rejection = None
         informative_left = (left_descriptors[left_masked['valid_points']]
                             if left_masked is not None else left_descriptors)
@@ -1180,7 +1251,7 @@ def run_region_sift_matching(
             base_result["region_debug"] = debug
             return base_result
 
-        if (config.max_objective_score_ratio is not None
+        if (config.confidence_mode != 'active' and config.max_objective_score_ratio is not None
                 and np.isfinite(objective_score_ratio)
                 and objective_score_ratio > float(config.max_objective_score_ratio)):
             base_result["reject_reason"] = (
@@ -1203,6 +1274,17 @@ def run_region_sift_matching(
         base_result["reject_reason"] = str(exc)
         return base_result
     finally:
+        if (standalone and config.confidence_mode != 'legacy'
+                and not (base_result.get('region_debug') or {}).get('diagnostic_only')):
+            timing_next('可信度分析（含 cell 穩定性）')
+            from Algorithm.region_sift_confidence import finalize_confidence
+            finalize_confidence(base_result, config)
+        if (standalone and config.center_refine_enabled
+                and not (base_result.get('region_debug') or {}).get('diagnostic_only')):
+            timing_next('中心局部精修')
+            from Algorithm.region_sift_center_refinement import refine_center
+            refine_center(base_result, img_left_gray, point_p, cand, K_L, config,
+                          left_spec_mask=left_spec_mask)
         # Also report work completed before a rejected/invalid match. Stage
         # durations are disjoint; repeated descriptor/scoring batches add up.
         timing_next(None)

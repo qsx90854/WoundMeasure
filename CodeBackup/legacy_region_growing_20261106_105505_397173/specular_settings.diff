@@ -1,0 +1,17 @@
+--- backup/Algorithm/specular_settings.py
++++ Algorithm/specular_settings.py
+@@ -37,6 +37,14 @@
+     'open_kernel_px': '形態學 opening 核大小，必須為正奇數',
+     'close_kernel_px': '形態學 closing 核大小，必須為正奇數',
+     'dilate_px': '最終遮罩向外擴張半徑 px；0 不擴張',
++    'enable_region_growing': '預設 False；以形態學前的亮點作種子，生長後再做 opening/closing/dilation',
++    'grow_radius_px': '8 鄰接最多生長步數（0～32）；原始種子固定，0 不擴張',
++    'grow_local_hot_min': '生長像素比局部背景至少亮多少（0～255）',
++    'grow_gray_min': '生長像素最低灰階亮度（0～255）',
++    'grow_s_max': '生長用最大 S；與白度條件取 OR（0～255）',
++    'grow_whiteness_max': '生長用 RGB 最大最小差上限；與 S 條件取 OR',
++    'grow_color_max': '與最近原始種子的色差上限：BGR 各除以最大通道×255，再取最大通道差',
++
+ }
+ 
+ 

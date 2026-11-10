@@ -1,0 +1,49 @@
+{
+  "video": "D:\\Lightglue\\2026_1103_ZebraCamera_02video\\1105\\GigaImage_FailedVideo_High_20261105_150713.mp4",
+  "indices": [
+    250,
+    550
+  ],
+  "roi": [
+    650,
+    50,
+    1300,
+    930
+  ],
+  "roi_end_exclusive": true,
+  "threshold": 35,
+  "normalize": true,
+  "positive_only": true,
+  "calibration": "Off",
+  "baseline": {
+    "block_width_px": 64,
+    "block_height_px": 64,
+    "v_percentile": 90.0,
+    "rgb_percentile": 90.0,
+    "local_hot_percentile": 90.0,
+    "v_min": 120.0,
+    "v_max": 245.0,
+    "rgb_min": 120.0,
+    "rgb_max": 250.0,
+    "local_hot_min": 35.0,
+    "local_hot_max": 45.0,
+    "gray_min": 120.0,
+    "gray_below_v": 10.0,
+    "s_max": 50.0,
+    "whiteness_max": 30.0,
+    "background_sigma": 9.0,
+    "enable_prominence_gate": true,
+    "prominence_min": 10.0,
+    "prominence_mad_multiplier": 2.0,
+    "enable_strong_highlight_exception": true,
+    "strong_v_min": 250.0,
+    "strong_s_max": 30.0,
+    "strong_whiteness_max": 20.0,
+    "interpolate_thresholds": true,
+    "open_kernel_px": 1,
+    "close_kernel_px": 5,
+    "dilate_px": 0
+  },
+  "opencv": "4.13.0",
+  "numpy": "2.4.4"
+}

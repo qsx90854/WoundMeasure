@@ -1,0 +1,288 @@
+--- backup/video_frame_difference_ui.py
++++ video_frame_difference_ui.py
+@@ -1,6 +1,6 @@
+ """Single-video seven-panel frame difference / spatial-specular inspector.
+ Run: Scripts/python.exe video_frame_difference_ui.py
+-Frame indices are zero-based. Difference is abs(gray1-gray2) > threshold.
++Frame indices are zero-based. Optional robust ROI calibration and positive-only difference.
+ """
+ from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+@@ -24,19 +24,76 @@
+     return (slice(y0,y1),slice(x0,x1)),(x1-x0)*(y1-y0)
+ 
+ 
+-def frame_difference(first,second,threshold,roi=None,normalize=False):
++def robust_linear_fit(reference,target):
++    """Fit target = a*reference+b with Huber IRLS; ignore clipped pixels."""
++    x=reference.ravel().astype(np.float64);y=target.ravel().astype(np.float64)
++    keep=(x>0)&(x<255)&(y>0)&(y<255)
++    x=x[keep];y=y[keep]
++    if x.size<32:raise ValueError('校正 ROI 至少需要 32 個未飽和的對應像素')
++    # Bound fitting cost for large ROIs, keeping deterministic spatial coverage.
++    if x.size>20000:
++        sample=np.linspace(0,x.size-1,20000,dtype=int);x=x[sample];y=y[sample]
++    if np.std(x)<2:raise ValueError('校正 ROI 亮度變化不足，請包含更多紋理或灰階變化')
++    design=np.column_stack((x,np.ones_like(x)))
++    coef=np.linalg.lstsq(design,y,rcond=None)[0]
++    for _ in range(30):
++        residual=y-design@coef
++        sigma=max(0.5,1.4826*np.median(np.abs(residual-np.median(residual))))
++        weights=np.minimum(1.,1.345*sigma/np.maximum(np.abs(residual),1e-12))
++        if np.sqrt(np.average((x-np.average(x,weights=weights))**2,weights=weights))<2:
++            raise ValueError('校正有效像素的亮度變化不足，請重新選取校正 ROI')
++        root=np.sqrt(weights)
++        updated=np.linalg.lstsq(design*root[:,None],y*root,rcond=None)[0]
++        if np.max(np.abs(updated-coef))<1e-6:
++            coef=updated;break
++        coef=updated
++    a,b=map(float,coef)
++    if not np.isfinite(coef).all() or a<=0:
++        raise ValueError('校正無有效正向亮度關係，請檢查對齊與校正 ROI')
++    residual=y-design@coef
++    return a,b,dict(n=int(x.size),mae=float(np.median(np.abs(residual))))
++
++
++def calibrate_reference(first,second,calibration_roi,mode):
++    """Predict frame2's non-specular gray intensity from frame1 (no clipping)."""
++    if first.shape!=second.shape:raise ValueError('兩影格尺寸不同')
++    if calibration_roi is None:raise ValueError('請先框選兩幀皆無反光的校正 ROI（青色虛線）')
++    region,_=roi_slice(first.shape,calibration_roi)
++    if mode=='Gray':
++        source=cv2.cvtColor(first,cv2.COLOR_BGR2GRAY)
++        target=cv2.cvtColor(second,cv2.COLOR_BGR2GRAY)
++        a,b,info=robust_linear_fit(source[region],target[region])
++        return source.astype(np.float32)*a+b,[('Gray',a,b,info)]
++    if mode!='BGR':raise ValueError('未知校正模式')
++    predicted=np.empty(first.shape,np.float32);details=[]
++    for c,name in enumerate('BGR'):
++        a,b,info=robust_linear_fit(first[region][:,:,c],second[region][:,:,c])
++        predicted[:,:,c]=first[:,:,c].astype(np.float32)*a+b
++        details.append((name,a,b,info))
++    return cv2.cvtColor(predicted,cv2.COLOR_BGR2GRAY),details
++
++
++def frame_difference(first,second,threshold,roi=None,normalize=False,positive_only=False,predicted_gray=None):
+     if first.shape != second.shape: raise ValueError('兩影格尺寸不同')
+     if not 0 <= threshold <= 255: raise ValueError('門檻必須介於 0～255')
+     region,_=roi_slice(first.shape,roi)
+     grays=[cv2.cvtColor(image[region],cv2.COLOR_BGR2GRAY) for image in (first,second)]
++    if predicted_gray is not None:
++        if normalize:raise ValueError('線性校正與 min-max normalize 不可同時使用')
++        if predicted_gray.shape!=first.shape[:2]:raise ValueError('校正影像尺寸不同')
++        grays[0]=predicted_gray[region]
+     if normalize:
+         # Independent ROI min-max scaling; constant patches map to zero.
+         # Keep float precision until thresholding (no uint8 rounding).
+         for i,gray in enumerate(grays):
+             low,high=float(gray.min()),float(gray.max())
+             grays[i]=(gray.astype(np.float32)-low)*(255.0/(high-low)) if high>low else np.zeros(gray.shape,np.float32)
+-    difference=np.zeros(first.shape[:2],np.float32 if normalize else np.uint8)
+-    local=cv2.absdiff(*grays)
++    use_float=normalize or positive_only or predicted_gray is not None
++    difference=np.zeros(first.shape[:2],np.float32 if use_float else np.uint8)
++    if use_float:
++        residual=grays[1].astype(np.float32)-grays[0].astype(np.float32)
++        local=np.maximum(residual,0) if positive_only else np.abs(residual)
++    else:local=cv2.absdiff(*grays)
+     difference[region]=local
+     mask=np.zeros(first.shape[:2],np.uint8);mask[region]=(local > threshold).astype(np.uint8)*255
+     return difference,mask
+@@ -76,6 +133,7 @@
+         self.current_index=0;self.desired_current=0
+         self.worker=ThreadPoolExecutor(max_workers=1);self.future=None;self.pending_pair=None;self.pending_current=None
+         self.closed=False;self.playing=False;self.play_timer=None;self.slider_timer=None;self.setting_slider=False
++        self.calibration_roi=None;self.calibration_patches=[];self.roi_kind='analysis';self.calibration_cache=None
+         self.roi=None;self.roi_selecting=False;self.roi_drag=None;self.roi_patches=[]
+         self.drag=None;self.pair_revision=0;self.active_pair_revision=0;self.job=None
+         self.mode=tk.StringVar(value='V2' if enabled else 'Legacy');self.alpha=tk.DoubleVar(value=.55)
+@@ -83,6 +141,8 @@
+         self.show_tp=tk.BooleanVar(value=True);self.show_fn=tk.BooleanVar(value=True);self.show_fp=tk.BooleanVar(value=True)
+         self.show_crosshair=tk.BooleanVar(value=False)
+         self.normalize_gray=tk.BooleanVar(value=False)
++        self.calibration_mode=tk.StringVar(value='Off');self.positive_only=tk.BooleanVar(value=False)
++        self.calibration_text=tk.StringVar(value='校正尚未啟用；先選兩幀皆無明顯反光且有灰階變化的區域。')
+         self.index1=tk.StringVar(value='0');self.index2=tk.StringVar(value='1');self.current=tk.StringVar(value='0')
+         self.status=tk.StringVar(value='請載入影片；index 從 0 開始。滾輪縮放、左鍵拖曳，七個面板同步。')
+         top=ttk.Frame(root,padding=5);top.pack(fill='x')
+@@ -99,7 +159,7 @@
+             entry=ttk.Entry(pair,textvariable=var,width=8);entry.pack(side='left');entry.bind('<Return>',lambda e:self.apply_pair())
+             ttk.Button(pair,text='取目前幀',command=lambda v=var:self.capture_current(v)).pack(side='left',padx=3)
+         ttk.Button(pair,text='分析兩幀',command=self.apply_pair).pack(side='left',padx=5)
+-        ttk.Label(pair,text='灰階絕對差 >').pack(side='left',padx=5)
++        ttk.Label(pair,text='差異門檻 >').pack(side='left',padx=5)
+         entry=ttk.Entry(pair,textvariable=self.threshold,width=6);entry.pack(side='left');entry.bind('<Return>',lambda e:self.draw())
+         ttk.Button(pair,text='更新門檻',command=self.draw).pack(side='left',padx=3)
+         ttk.Label(pair,text='反光模式').pack(side='left',padx=5)
+@@ -116,15 +176,25 @@
+         self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用七個面板。')
+         ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
+         norm_bar=ttk.Frame(root,padding=5);norm_bar.pack(fill='x')
+-        ttk.Checkbutton(norm_bar,text='ROI 灰階 normalize 後相減',variable=self.normalize_gray,command=self.draw).pack(side='left',padx=4)
++        self.normalize_button=ttk.Checkbutton(norm_bar,text='ROI 灰階 normalize 後相減',variable=self.normalize_gray,command=self.draw)
++        self.normalize_button.pack(side='left',padx=4)
+         ttk.Label(norm_bar,text='兩幀各自 min-max 到 0～255；無 ROI 使用全圖；灰階為常數時設為 0。僅影響差異與 GT 比較。').pack(side='left',padx=8)
++        calibration_bar=ttk.Frame(root,padding=5);calibration_bar.pack(fill='x')
++        self.calibration_button=ttk.Button(calibration_bar,text='框選校正 ROI',command=lambda:self.toggle_roi('calibration'))
++        self.calibration_button.pack(side='left',padx=3)
++        ttk.Button(calibration_bar,text='清除校正 ROI',command=self.clear_calibration_roi).pack(side='left',padx=3)
++        ttk.Label(calibration_bar,text='Robust 線性校正').pack(side='left',padx=5)
++        combo=ttk.Combobox(calibration_bar,textvariable=self.calibration_mode,values=('Off','Gray','BGR'),width=7,state='readonly')
++        combo.pack(side='left');combo.bind('<<ComboboxSelected>>',lambda e:self.calibration_changed())
++        ttk.Checkbutton(calibration_bar,text='單向差異：只找 index2 變亮',variable=self.positive_only,command=self.draw).pack(side='left',padx=8)
++        ttk.Label(root,textvariable=self.calibration_text,wraplength=1450).pack(anchor='w',padx=10)
+         compare_bar=ttk.Frame(root,padding=5);compare_bar.pack(fill='x')
+         ttk.Label(compare_bar,text='比較圖（差異 mask 作為 GT，index2 反光 mask 作為預測）：').pack(side='left',padx=4)
+         for label,var in [('綠色：都有偵測 TP',self.show_tp),('深藍：漏偵測 FN',self.show_fn),('紅色：多偵測 FP',self.show_fp)]:
+             ttk.Checkbutton(compare_bar,text=label,variable=var,command=self.draw).pack(side='left',padx=5)
+         ttk.Label(compare_bar,text='未勾選與兩者皆無的像素顯示黑色；統計不受勾選影響。').pack(side='left',padx=5)
+         self.slider=ttk.Scale(root,from_=0,to=1,command=self.slider_seek);self.slider.pack(fill='x',padx=12)
+-        ttk.Label(root,text='差異使用灰階絕對差，可選 normalize；不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
++        ttk.Label(root,text='差異可選絕對差／單向變亮；校正只影響差異與 GT，不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
+         self.figure=Figure(figsize=(14,8),facecolor='#202020');self.axes=[];self.artists=[]
+         titles=['Current frame','index1: original','index2: original','Absolute grayscale difference mask','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
+         for i,title in enumerate(titles):
+@@ -143,6 +213,8 @@
+         for ax in self.axes:
+             box=Rectangle((0,0),0,0,fill=False,edgecolor='yellow',linewidth=1.5,zorder=20,visible=False)
+             ax.add_patch(box);self.roi_patches.append(box)
++            calibration_box=Rectangle((0,0),0,0,fill=False,edgecolor='cyan',linestyle='--',linewidth=1.5,zorder=21,visible=False)
++            ax.add_patch(calibration_box);self.calibration_patches.append(calibration_box)
+         self.figure.subplots_adjust(left=.035,right=.98,bottom=.04,top=.94,wspace=.12,hspace=.22)
+         self.canvas=FigureCanvasTkAgg(self.figure,master=root);self.canvas.get_tk_widget().pack(fill='both',expand=True)
+         for event,callback in [('scroll_event',self.scroll),('button_press_event',self.press),('motion_notify_event',self.motion),('button_release_event',self.release)]:self.canvas.mpl_connect(event,callback)
+@@ -184,27 +256,52 @@
+         y1=int(np.clip(np.ceil(np.round(max(start[1],end[1])+.5,9)),0,h))
+         return (x0,y0,x1,y1) if x1>x0 and y1>y0 else None
+ 
+-    def show_roi(self,roi):
+-        for box in self.roi_patches:
++    def show_roi(self,roi,kind='analysis'):
++        for box in (self.calibration_patches if kind=='calibration' else self.roi_patches):
+             box.set_visible(roi is not None)
+             if roi is not None:
+                 x0,y0,x1,y1=roi;box.set_bounds(x0-.5,y0-.5,x1-x0,y1-y0)
+         self.canvas.draw_idle()
+ 
+-    def toggle_roi(self):
+-        if self.roi_selecting:self.cancel_roi();return
++    def toggle_roi(self,kind='analysis'):
++        if self.roi_selecting and self.roi_kind==kind:self.cancel_roi();return
++        self.cancel_roi()
+         if all(im is None for im in self.images):return
+-        self.pause();self.drag=None;self.roi_selecting=True
+-        self.roi_button.configure(text='取消框選 (Esc)')
++        self.pause();self.drag=None;self.roi_selecting=True;self.roi_kind=kind
++        (self.calibration_button if kind=='calibration' else self.roi_button).configure(text='取消框選 (Esc)')
+         self.roi_text.set('在任一已有影像的面板按住左鍵框選；放開即套用，Esc 取消。')
+ 
+     def cancel_roi(self):
+         self.roi_selecting=False;self.roi_drag=None;self.drag=None
+         self.roi_button.configure(text='框選 ROI');self.show_roi(self.roi)
++        self.calibration_button.configure(text='框選校正 ROI');self.show_roi(self.calibration_roi,'calibration')
+         if self.roi is None:self.roi_text.set('分析全圖；可在任一面板框選，同步套用七個面板。')
+         else:
+             x0,y0,x1,y1=self.roi
+             self.roi_text.set(f'ROI x={x0}, y={y0}, 寬={x1-x0}, 高={y1-y0}；百分比分母={(x1-x0)*(y1-y0)} pixels。反光全圖偵測，僅顯示／統計 ROI。')
++
++    def clear_calibration_roi(self):
++        self.calibration_roi=None;self.calibration_cache=None;self.cancel_roi();self.draw()
++
++    def calibration_changed(self):
++        enabled=self.calibration_mode.get()!='Off'
++        if enabled:self.normalize_gray.set(False)
++        self.normalize_button.configure(state='disabled' if enabled else 'normal')
++        self.draw()
++
++    def calibrated_reference(self):
++        mode=self.calibration_mode.get()
++        if mode=='Off':
++            self.calibration_text.set('校正 OFF；黃色框＝分析 ROI，青色虛線＝校正 ROI。')
++            return None
++        key=(id(self.images[1]),id(self.images[2]),self.calibration_roi,mode)
++        if self.calibration_cache is None or self.calibration_cache[0]!=key:
++            predicted,details=calibrate_reference(self.images[1],self.images[2],self.calibration_roi,mode)
++            self.calibration_cache=(key,predicted,details)
++        _,predicted,details=self.calibration_cache
++        info=' | '.join(f'{name}: a={a:.3f}, b={b:+.2f}, median|res|={d["mae"]:.2f}, n={d["n"]}' for name,a,b,d in details)
++        self.calibration_text.set(f'校正 ROI {self.calibration_roi}；預測 index2 = a × index1 + b；{info}')
++        return predicted
+ 
+     def clear_roi(self):
+         self.roi=None;self.cancel_roi();self.draw()
+@@ -222,7 +319,7 @@
+             self.update_crosshair(event)
+             return
+         if event.x is None or event.y is None:return
+-        inverse,start=self.roi_drag;self.show_roi(self.selected_roi(start,inverse.transform((event.x,event.y))))
++        inverse,start=self.roi_drag;self.show_roi(self.selected_roi(start,inverse.transform((event.x,event.y))),self.roi_kind)
+         self.update_crosshair(event)
+ 
+     def release(self,event):
+@@ -232,7 +329,9 @@
+             end=inverse.transform((event.x,event.y))
+             if np.linalg.norm(np.asarray(end)-start)>=1.:
+                 roi=self.selected_roi(start,end)
+-                if roi is not None:self.roi=roi
++                if roi is not None:
++                    if self.roi_kind=='calibration':self.calibration_roi=roi;self.calibration_cache=None
++                    else:self.roi=roi
+         self.cancel_roi();self.draw()
+ 
+     def scroll(self,event):
+@@ -256,7 +355,7 @@
+         self.source=source;self.pending_pair=None;self.pending_current=None
+         self.images=[source.image.copy(),None,None];self.pair_results=None;self.pair_indices=None
+         self.hide_crosshair()
+-        self.roi=None;self.cancel_roi()
++        self.roi=None;self.calibration_roi=None;self.calibration_cache=None;self.cancel_roi()
+         self.current_index=self.desired_current=0;self.current.set('0');self.index1.set('0');self.index2.set(str(min(1,source.count-1)))
+         self.slider.configure(to=max(1,source.count-1));self.setting_slider=True;self.slider.set(0);self.setting_slider=False
+         self.video_info.configure(text=f'{Path(path).name} | {source.count} frames | {source.fps:g} FPS')
+@@ -342,6 +441,7 @@
+             self.pause();messagebox.showerror('處理失敗',str(exc),parent=self.root);self.status.set('處理失敗，保留上次結果。');self.dispatch();return
+         if job[0]=='pair' and job[2]==self.pair_revision:
+             self.images[1:]=result[0];self.pair_results=result[1];self.pair_indices=job[1];self.pair_mode=job[3]
++            self.calibration_cache=None
+             self.status.set(f'已分析 F{job[1][0]} / F{job[1][1]} | {job[3]} | 左／右偵測 {result[1][0][1]:.1f}/{result[1][1][1]:.1f} ms')
+         elif job[0]=='current' and job[1]==self.desired_current:
+             self.images[0]=result;self.current_index=job[1];self.current.set(str(job[1]))
+@@ -356,14 +456,22 @@
+         frames=[self.images[0],self.images[1],self.images[2],None,None,None,None]
+         titles=[f'Current F{self.current_index}','index1: original','index2: original','abs(gray1-gray2) > threshold','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
+         if self.pair_results is not None:
+-            try:threshold=float(self.threshold.get());difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi,self.normalize_gray.get())
+-            except ValueError:
+-                self.status.set('門檻請輸入 0～255 的有效數字。');return
++            error=None
++            try:
++                threshold=float(self.threshold.get())
++                predicted=self.calibrated_reference()
++                difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi,self.normalize_gray.get(),self.positive_only.get(),predicted)
++            except ValueError as exc:
++                error=str(exc);self.calibration_text.set(f'差異／GT 尚未產生：{error}')
++                mask=np.zeros(self.images[1].shape[:2],np.uint8)
++                threshold=0
+             frames[3]=cv2.cvtColor(mask,cv2.COLOR_GRAY2BGR)
+             region,area=roi_slice(mask.shape,self.roi)
+             scope='ROI' if self.roi is not None else 'full'
+-            diff_mode='normalized' if self.normalize_gray.get() else 'raw'
+-            titles[3]=f'{diff_mode} abs diff > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
++            diff_mode=self.calibration_mode.get() if self.calibration_mode.get()!='Off' else ('normalized' if self.normalize_gray.get() else 'raw')
++            direction='positive' if self.positive_only.get() else 'absolute'
++            diff_mode=f'{diff_mode} {direction}'
++            titles[3]=f'{diff_mode} diff > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
+             for i in range(2):
+                 shown_mask=np.zeros_like(self.pair_results[i][0])
+                 shown_mask[region]=self.pair_results[i][0][region]
+@@ -375,6 +483,10 @@
+                 (self.show_tp.get(),self.show_fn.get(),self.show_fp.get()))
+             titles[6]=(f'GT: {diff_mode} difference | Prediction: F{self.pair_indices[1]}\n'
+                        f'TP={counts["tp"]} FN={counts["fn"]} FP={counts["fp"]} | {scope}={counts["area"]} px')
++            if error is not None:
++                # Do not display stale or seemingly valid GT when calibration failed.
++                frames[6]=np.zeros_like(frames[3]);titles[3]='Difference unavailable - check calibration / threshold'
++                titles[6]='GT comparison unavailable'
+         for ax,artist,image,title in zip(self.axes,self.artists,frames,titles):
+             if image is None:continue
+             artist.set_data(cv2.cvtColor(image,cv2.COLOR_BGR2RGB));h,w=image.shape[:2];artist.set_extent((-.5,w-.5,h-.5,-.5));ax.set_title(title,color='white',fontsize=10)

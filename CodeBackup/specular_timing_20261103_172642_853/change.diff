@@ -1,0 +1,95 @@
+--- backup
++++ depth_measure_multi_aruco_sbs_camera_v7_demo_zebra_GradSIFTDebug.py
+@@ -2571,8 +2571,12 @@
+         combined_mask, spatial_mask, temporal_mask = compute_locked_spec_masks(bgr, frame_idx, wound_prediction)
+         return combined_mask
+ 
+-    def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None):
++    def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None,
++                                  *, timing_out=None, timing_label=None):
++        from time import perf_counter
++        _mask_started = perf_counter()
+         adaptive_spatial_mask = compute_wound_adaptive_spatial_mask(bgr, wound_prediction)
++        _spatial_finished = perf_counter()
+         combined_mask, spatial_mask, temporal_mask = compute_rt_aligned_temporal_specular_mask_bgr(
+             bgr,
+             frame_idx,
+@@ -2584,6 +2588,22 @@
+             preprocess_gray_fn=preprocess_gray,
+             base_mask=adaptive_spatial_mask,
+         )
++        _temporal_finished = perf_counter()
++        _mask_times = dict(
++            spatial_ms=(_spatial_finished - _mask_started) * 1000.,
++            temporal_ms=(_temporal_finished - _spatial_finished) * 1000.,
++            total_ms=(_temporal_finished - _mask_started) * 1000.)
++        if timing_out is not None:
++            timing_out.update(_mask_times)
++        _backend = ('V2' if use_specular_model_v2 else
++                    'Legacy adaptive' if adaptive_spatial_mask is not None else 'Fixed fallback')
++        _label = timing_label or 'frame'
++        _temporal_name = ('temporal+merge' if adaptive_spatial_mask is not None
++                          else 'fixed-spatial+temporal+merge')
++        print(f"[Specular Timing] {_label} F{frame_idx} | {_backend} | "
++              f"spatial={_mask_times['spatial_ms']:.1f} ms | "
++              f"{_temporal_name}={_mask_times['temporal_ms']:.1f} ms | "
++              f"total={_mask_times['total_ms']:.1f} ms")
+         return combined_mask, spatial_mask, temporal_mask
+         
+     # 去畸變處理挑選出的最優左右圖
+@@ -2616,6 +2636,7 @@
+     sift = cv2.SIFT_create(contrastThreshold=0.005)
+     orb = cv2.ORB_create(nfeatures=1000)
+     
++    _startup_plane_started = time.perf_counter()
+     # 優先使用進度條執行期間在背景預先計算的平面
+     global_plane_n = video_data.get('global_plane_n')
+     global_plane_c = video_data.get('global_plane_c')
+@@ -2647,6 +2668,8 @@
+         log_and_print(
+             "[Height Plane] Marker-pose plane unavailable; height display will remain in legacy mode")
+     
++    _startup_plane_ms = (time.perf_counter() - _startup_plane_started) * 1000.
++
+     # 預設直接鎖定
+     locked_L = imgA_bgr.copy()
+     locked_R = imgB_bgr.copy()
+@@ -2654,9 +2677,24 @@
+     locked_R_clean = locked_R.copy()
+     locked_L_idx = video_data['idx_B']
+     locked_R_idx = video_data['idx_A']
+-    locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
+-    locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
++    _startup_left_mask_times, _startup_right_mask_times = {}, {}
++    locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(
++        locked_L_clean, locked_L_idx, timing_out=_startup_left_mask_times, timing_label='left')
++    locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(
++        locked_R_clean, locked_R_idx, timing_out=_startup_right_mask_times, timing_label='right')
+     startup_timer.stage("全域平面+左右高光遮罩")
++    _startup_mask_parent_ms = startup_timer.stages[-1][1] * 1000.
++    _startup_temporal_label = ('時間反光+遮罩合併' if use_wound_adaptive_spatial_specular or use_specular_model_v2
++                               else 'Fixed空間+時間反光+合併')
++    _startup_mask_detail = [
++        ('平面取得/建立與檢查', _startup_plane_ms),
++        ('左圖空間反光', _startup_left_mask_times['spatial_ms']),
++        ('左圖' + _startup_temporal_label, _startup_left_mask_times['temporal_ms']),
++        ('右圖空間反光', _startup_right_mask_times['spatial_ms']),
++        ('右圖' + _startup_temporal_label, _startup_right_mask_times['temporal_ms']),
++    ]
++    _startup_mask_detail.append(('其餘初始化/影像複製/日誌',
++        max(0., _startup_mask_parent_ms - sum(value for _, value in _startup_mask_detail))))
+     live_L = False
+     live_R = False
+     has_set_L = True
+@@ -9633,6 +9671,11 @@
+             first_render = False
+             startup_timer.stage("首次繪製")
+             startup_timer.report()
++            print(f"      ↳ [全域平面+左右高光遮罩細分] parent={_startup_mask_parent_ms:.1f} ms "
++                  "（下列為細分，不另加計啟動總時間）")
++            for _name, _ms in _startup_mask_detail:
++                _pct = 100. * _ms / max(_startup_mask_parent_ms, 1e-12)
++                print(f"         - {_name}: {_ms:.1f} ms ({_pct:.1f}% of stage)")
+         if UI_RENDER_PROFILE:
+             finished = render_finished
+             render_stats.append(((prepared - started) * 1000,

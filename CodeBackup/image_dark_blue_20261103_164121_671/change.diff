@@ -1,0 +1,34 @@
+--- backup
++++ specular_image_pair_ui.py
+@@ -15,7 +15,7 @@
+ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+ from Algorithm.specular_detection import (
+     BlockSpatialSpecularConfig, compute_specular_mask_bgr_block_adaptive,
+-    compute_specular_mask_bgr, overlay_specular_mask_rgb)
++    compute_specular_mask_bgr)
+ from Algorithm.specular_model_v2 import SpecularModelV2Config, detect_specular_model_v2
+ from Algorithm.specular_settings import show_specular_settings
+ from Algorithm.specular_model_v2_settings import show_specular_model_v2_settings
+@@ -105,7 +105,7 @@
+         view.pack(side='left', padx=8); view.bind('<<ComboboxSelected>>', lambda e: self.draw())
+         ttk.Label(bar, text='疊圖透明度').pack(side='left')
+         ttk.Scale(bar, from_=0, to=1, variable=self.alpha, command=lambda v: self.draw()).pack(side='left')
+-        ttk.Label(root, text='淺藍＝空間反光排除區；V2 uncertain 不列入。僅處理載入原圖，不執行去畸變、時間反光或 warp。').pack(anchor='w', padx=10)
++        ttk.Label(root, text='深藍＝空間反光排除區；V2 uncertain 不列入。僅處理載入原圖，不執行去畸變、時間反光或 warp。').pack(anchor='w', padx=10)
+         self.figure = Figure(figsize=(12,7), facecolor='#202020')
+         left = self.figure.add_subplot(121)
+         right = self.figure.add_subplot(122, sharex=left, sharey=left)
+@@ -195,7 +195,12 @@
+             rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+             if result is not None:
+                 mask = result[0]
+-                if self.display.get() == '疊圖': rgb = overlay_specular_mask_rgb(rgb,mask,alpha=self.alpha.get())
++                if self.display.get() == '疊圖':
++                    color = np.empty_like(rgb)
++                    color[:] = (0, 0, 160)
++                    selected = mask > 0
++                    blend = cv2.addWeighted(rgb, 1-self.alpha.get(), color, self.alpha.get(), 0)
++                    rgb[selected] = blend[selected]
+                 elif self.display.get() == '遮罩': rgb = np.repeat(mask[...,None],3,axis=2)
+             artist.set_data(rgb)
+             h,w = image.shape[:2]

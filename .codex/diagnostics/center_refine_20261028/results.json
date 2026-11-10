@@ -1,0 +1,141 @@
+[
+  {
+    "label": "opencv",
+    "enabled": false,
+    "height_mm": 15.528544732684447,
+    "right": [
+      1323.86474609375,
+      252.31919860839844
+    ],
+    "rejection": null,
+    "center": null
+  },
+  {
+    "label": "opencv",
+    "enabled": true,
+    "height_mm": 15.528544732684447,
+    "right": [
+      1323.86474609375,
+      252.31919860839844
+    ],
+    "rejection": null,
+    "center": {
+      "status": "fallback",
+      "applied": false,
+      "reason": "center minimum is shallow or ambiguous",
+      "descriptor_rows": 50,
+      "descriptor_batches": 1,
+      "left_descriptor_rows": 10,
+      "elapsed_ms": 364.09860011190176,
+      "original_center_right": [
+        1323.86474609375,
+        252.31919860839844
+      ],
+      "history": [
+        {
+          "radius": 2.0,
+          "action": "fallback",
+          "reason": "center minimum is shallow or ambiguous"
+        }
+      ],
+      "actual_left_support_max_px": 34.0,
+      "decision": {
+        "index": 3,
+        "shift": 1.0,
+        "original_score": 370.72535385994127,
+        "best_score": 350.0933712794764,
+        "gain": 20.631982580464864,
+        "relative_depth": 0.010383708260049251,
+        "competitor_ratio": 0.8979055913570586,
+        "action": "fallback",
+        "reason": "center minimum is shallow or ambiguous"
+      },
+      "original_height_mm": 15.528544732684447,
+      "final_height_mm": 15.528544732684447
+    }
+  },
+  {
+    "label": "custom_actual_mask",
+    "enabled": false,
+    "height_mm": null,
+    "right": null,
+    "rejection": "匹配失敗: coarse localization unclear: insufficient valid coarse coverage",
+    "center": null
+  },
+  {
+    "label": "custom_actual_mask",
+    "enabled": true,
+    "height_mm": null,
+    "right": null,
+    "rejection": "匹配失敗: coarse localization unclear: insufficient valid coarse coverage",
+    "center": {
+      "status": "skipped",
+      "applied": false,
+      "reason": "original match rejected",
+      "descriptor_rows": 0,
+      "descriptor_batches": 0,
+      "left_descriptor_rows": 0,
+      "elapsed_ms": 0.14540005940943956
+    }
+  },
+  {
+    "label": "custom_empty_mask_control",
+    "enabled": false,
+    "height_mm": 15.52639467235793,
+    "right": [
+      1322.910888671875,
+      252.1116943359375
+    ],
+    "rejection": null,
+    "center": null
+  },
+  {
+    "label": "custom_empty_mask_control",
+    "enabled": true,
+    "height_mm": 15.995060121410804,
+    "right": [
+      1323.1160888671875,
+      251.19857788085938
+    ],
+    "rejection": null,
+    "center": {
+      "status": "applied",
+      "applied": true,
+      "reason": "center score and geometry verified",
+      "descriptor_rows": 50,
+      "descriptor_batches": 1,
+      "left_descriptor_rows": 10,
+      "elapsed_ms": 21.935699973255396,
+      "original_center_right": [
+        1322.910888671875,
+        252.1116943359375
+      ],
+      "history": [
+        {
+          "radius": 2.0,
+          "action": "apply",
+          "reason": "distinct center minimum"
+        }
+      ],
+      "actual_left_support_max_px": 38.0,
+      "decision": {
+        "index": 3,
+        "shift": 1.0,
+        "original_score": 336.6825738338151,
+        "best_score": 327.9534002789251,
+        "gain": 8.729173554890053,
+        "relative_depth": 0.02589285930246947,
+        "competitor_ratio": 0.8442114781511725,
+        "action": "apply",
+        "reason": "distinct center minimum"
+      },
+      "center_shift_px": 1.0,
+      "refined_center_right": [
+        1323.1160888671875,
+        251.19857788085938
+      ],
+      "original_height_mm": 15.52639467235793,
+      "final_height_mm": 15.995060121410804
+    }
+  }
+]

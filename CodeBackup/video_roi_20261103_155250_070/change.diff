@@ -1,0 +1,169 @@
+--- backup
++++ specular_video_pair_ui.py
+@@ -17,6 +17,18 @@
+ DARK_BLUE_BGR = (160, 0, 0)
+ 
+ 
++def normalize_roi(start, end, size):
++    """Clip to shared pixel bounds, then shrink right/bottom to even dimensions."""
++    w,h = size
++    if w < 2 or h < 2: return None
++    x0 = int(np.clip(np.floor(min(start[0],end[0])+.5),0,w))
++    y0 = int(np.clip(np.floor(min(start[1],end[1])+.5),0,h))
++    x1 = int(np.clip(np.ceil(max(start[0],end[0])+.5),0,w))
++    y1 = int(np.clip(np.ceil(max(start[1],end[1])+.5),0,h))
++    x1 -= (x1-x0)%2; y1 -= (y1-y0)%2
++    return (x0,y0,x1,y1) if x1-x0 >= 2 and y1-y0 >= 2 else None
++
++
+ def render_video_frame(image, mask, display, alpha):
+     """One shared renderer for preview and exported frames (uint8 BGR)."""
+     if mask is None or display == '原圖': return image.copy()
+@@ -30,7 +42,7 @@
+ 
+ 
+ def export_videos(paths, output_dir, extension, mode, legacy, v2, display, alpha,
+-                  cancel, progress):
++                  cancel, progress, roi=None):
+     """Export independent full-length videos using private decoders; no audio.
+ 
+     All files stay .partial until both videos finish. Cleanup only files created
+@@ -54,6 +66,11 @@
+             if target.exists() or partial.exists(): raise FileExistsError(str(target))
+             pending.append((partial,target))
+             h,w = source.image.shape[:2]
++            if roi is not None:
++                x0,y0,x1,y1 = roi
++                if not (0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h):
++                    raise ValueError(f'ROI 超出 {label} 影片範圍')
++                w,h = x1-x0,y1-y0
+             if w % 2 or h % 2:
+                 raise ValueError('影片尺寸含奇數邊長；為避免編碼器靜默裁切，請先轉成偶數尺寸。')
+             writer = cv2.VideoWriter(str(partial),cv2.VideoWriter_fourcc(*codec),source.fps,(w,h))
+@@ -62,7 +79,9 @@
+                 if cancel.is_set(): return dict(cancelled=True, files=[])
+                 image,_ = source.read_at(index/source.fps)
+                 mask = None if display == '原圖' else detect_pair([image],mode,legacy,v2)[0][0]
+-                writer.write(render_video_frame(image,mask,display,alpha))
++                rendered = render_video_frame(image,mask,display,alpha)
++                if roi is not None: rendered = rendered[y0:y1,x0:x1]
++                writer.write(np.ascontiguousarray(rendered))
+                 done += 1
+                 if done == total or done % 5 == 0 or index == 0:
+                     progress.put((done,total,label,index+1,source.count))
+@@ -131,6 +150,10 @@
+ 
+ class SpecularVideoPairUI(SpecularPairUI):
+     def __init__(self, root):
++        self.roi = None
++        self.roi_selecting = False
++        self.roi_drag = None
++        self.roi_patches = []
+         self.sources = [None,None]
+         self.indices = [None,None]
+         self.position = 0.
+@@ -180,10 +203,83 @@
+         ttk.Button(export_bar,text='取消匯出',command=self.export_cancel.set).pack(side='left',padx=3)
+         self.export_message = tk.StringVar(value='完整左右影片分開匯出；保留各自 FPS／尺寸，使用目前顯示模式與透明度，無音訊。')
+         ttk.Label(export_bar,textvariable=self.export_message).pack(side='left',padx=8)
++        roi_bar = ttk.Frame(root,padding=5)
++        roi_bar.pack(fill='x',before=self.canvas.get_tk_widget())
++        self.roi_button = ttk.Button(roi_bar,text='框選錄影 ROI',command=self.toggle_roi)
++        self.roi_button.pack(side='left',padx=3)
++        ttk.Button(roi_bar,text='清除 ROI／匯出全圖',command=self.clear_roi).pack(side='left',padx=3)
++        self.roi_message = tk.StringVar(value='匯出全圖；框選時兩邊同像素座標同步，ROI 寬高自動對齊偶數。')
++        ttk.Label(roi_bar,textvariable=self.roi_message).pack(side='left',padx=8)
++        from matplotlib.patches import Rectangle
++        for ax in self.axes:
++            patch = Rectangle((0,0),0,0,fill=False,edgecolor='#FFFF00',linewidth=1.6,zorder=20,visible=False)
++            ax.add_patch(patch); self.roi_patches.append(patch)
++        root.bind('<Escape>',lambda e:self.cancel_roi())
+         self.slider = ttk.Scale(root,from_=0,to=1,command=self.slider_seek)
+         self.slider.pack(fill='x',padx=12,before=self.canvas.get_tk_widget())
+         ttk.Label(root,text='依 FPS 換算時間同步（不同起拍時間需先對齊）；逐格以左片 FPS 為準。播放逐步完成偵測，較慢時不保證即時速度。',padding=5).pack(fill='x',before=self.canvas.get_tk_widget())
+         self.status.set('載入一或兩支影片。滾輪／拖曳任一圖，另一圖同步；雙擊恢復全圖。')
++
++    def common_size(self):
++        shapes = [im.shape[:2] for im in self.images if im is not None]
++        return (min(s[1] for s in shapes),min(s[0] for s in shapes)) if shapes else (0,0)
++
++    def update_roi_overlay(self, roi):
++        for patch in self.roi_patches:
++            patch.set_visible(roi is not None)
++            if roi is not None:
++                x0,y0,x1,y1 = roi
++                patch.set_bounds(x0-.5,y0-.5,x1-x0,y1-y0)
++        if hasattr(self,'canvas'): self.canvas.draw_idle()
++
++    def toggle_roi(self):
++        if self.roi_selecting: self.cancel_roi(); return
++        if not any(im is not None for im in self.images): return
++        self.pause(); self.drag = None
++        self.roi_selecting = True
++        self.roi_button.configure(text='取消框選 (Esc)')
++        self.roi_message.set('請在任一圖按住左鍵拖出 ROI；兩側同步，限共同有效畫面；放開後恢復平移。')
++
++    def cancel_roi(self):
++        self.roi_selecting = False; self.roi_drag = None; self.drag = None
++        if hasattr(self,'roi_button'): self.roi_button.configure(text='框選錄影 ROI')
++        self.update_roi_overlay(self.roi)
++        if hasattr(self,'roi_message'):
++            if self.roi is None: self.roi_message.set('匯出全圖；框選時兩邊同像素座標同步，ROI 寬高自動對齊偶數。')
++            else:
++                x0,y0,x1,y1 = self.roi
++                self.roi_message.set(f'匯出 ROI：x={x0}, y={y0}, 寬={x1-x0}, 高={y1-y0} px（左右相同；全圖偵測後裁切）')
++
++    def clear_roi(self):
++        self.roi = None
++        self.cancel_roi()
++
++    def press(self,event):
++        if not self.roi_selecting: return super().press(event)
++        if event.button != 1 or event.inaxes not in self.axes or event.xdata is None: return
++        side = self.axes.index(event.inaxes)
++        if self.images[side] is None: return
++        self.roi_drag = (event.inaxes.transData.frozen().inverted(),(event.xdata,event.ydata))
++
++    def motion(self,event):
++        if self.roi_drag is None:
++            if not self.roi_selecting: super().motion(event)
++            return
++        if event.x is None or event.y is None: return
++        inverse,start = self.roi_drag
++        end = inverse.transform((event.x,event.y))
++        self.update_roi_overlay(normalize_roi(start,end,self.common_size()))
++
++    def release(self,event):
++        if self.roi_drag is None: return super().release(event)
++        inverse,start = self.roi_drag
++        if event is not None and event.x is not None and event.y is not None:
++            selected = normalize_roi(start,inverse.transform((event.x,event.y)),self.common_size())
++            if selected is not None: self.roi = selected
++        self.cancel_roi()
++
++    def scroll(self,event):
++        if self.roi_drag is None: super().scroll(event)
+ 
+     def draw(self):
+         if not hasattr(self,'artists'): return
+@@ -212,10 +308,10 @@
+         self.export_cancel.clear()
+         self.export_progress = queue.SimpleQueue()
+         self.export_button.configure(state='disabled')
+-        self.export_message.set(f'匯出中：{self.mode.get()}／{self.display.get()}（參數已固定）')
++        self.export_message.set(f'匯出中：{self.mode.get()}／{self.display.get()}（參數及 ROI 已固定）')
+         self.export_future = self.worker.submit(export_videos,tuple(self.paths),destination,
+             self.export_format.get(),self.mode.get(),self.legacy,self.v2,
+-            self.display.get(),self.alpha.get(),self.export_cancel,self.export_progress)
++            self.display.get(),self.alpha.get(),self.export_cancel,self.export_progress,self.roi)
+         self.root.after(100,self.poll_export)
+ 
+     def poll_export(self):
+@@ -267,6 +363,7 @@
+         self.sources[side] = source
+         self.paths[side] = path
+         self.images[side] = source.image
++        self.clear_roi()
+         self.results[side] = None
+         self.reset_view = True
+         self.slider.configure(to=max(self.end_time(),.001))

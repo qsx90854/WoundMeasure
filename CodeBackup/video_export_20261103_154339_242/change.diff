@@ -1,0 +1,193 @@
+--- backup
++++ specular_video_pair_ui.py
+@@ -4,12 +4,86 @@
+ """
+ from pathlib import Path
+ import math
++import queue
++import threading
+ import time
+ import tkinter as tk
+ from tkinter import ttk, filedialog, messagebox
+ import cv2
+ import numpy as np
+ from specular_image_pair_ui import SpecularPairUI, detect_pair
++
++
++DARK_BLUE_BGR = (160, 0, 0)
++
++
++def render_video_frame(image, mask, display, alpha):
++    """One shared renderer for preview and exported frames (uint8 BGR)."""
++    if mask is None or display == '原圖': return image.copy()
++    if display == '遮罩': return cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
++    out = image.copy()
++    selected = mask > 0
++    color = np.empty_like(image); color[:] = DARK_BLUE_BGR
++    blend = cv2.addWeighted(image, 1-float(alpha), color, float(alpha), 0)
++    out[selected] = blend[selected]
++    return out
++
++
++def export_videos(paths, output_dir, extension, mode, legacy, v2, display, alpha,
++                  cancel, progress):
++    """Export independent full-length videos using private decoders; no audio.
++
++    All files stay .partial until both videos finish. Cleanup only files created
++    by this job; the caller supplies a new, exclusive output directory.
++    """
++    output_dir = Path(output_dir)
++    codec = 'mp4v' if extension == 'mp4' else 'MJPG'
++    pending = []
++    completed = False
++    sources = []
++    writer = None
++    try:
++        for side, path in enumerate(paths):
++            if path is not None: sources.append((side, VideoSource(path)))
++        total = sum(source.count for _,source in sources)
++        done = 0
++        for side,source in sources:
++            label = 'left' if side == 0 else 'right'
++            target = output_dir / f'{label}_{display}.{extension}'
++            partial = output_dir / f'{label}.partial.{extension}'
++            if target.exists() or partial.exists(): raise FileExistsError(str(target))
++            pending.append((partial,target))
++            h,w = source.image.shape[:2]
++            if w % 2 or h % 2:
++                raise ValueError('影片尺寸含奇數邊長；為避免編碼器靜默裁切，請先轉成偶數尺寸。')
++            writer = cv2.VideoWriter(str(partial),cv2.VideoWriter_fourcc(*codec),source.fps,(w,h))
++            if not writer.isOpened(): raise ValueError(f'無法建立 {extension.upper()} 編碼器，請改用另一種格式。')
++            for index in range(source.count):
++                if cancel.is_set(): return dict(cancelled=True, files=[])
++                image,_ = source.read_at(index/source.fps)
++                mask = None if display == '原圖' else detect_pair([image],mode,legacy,v2)[0][0]
++                writer.write(render_video_frame(image,mask,display,alpha))
++                done += 1
++                if done == total or done % 5 == 0 or index == 0:
++                    progress.put((done,total,label,index+1,source.count))
++            writer.release(); writer = None
++            # Catch silent writer failures before publishing any completed video.
++            check = cv2.VideoCapture(str(partial))
++            try:
++                ok,_ = check.read()
++                if not ok or int(check.get(cv2.CAP_PROP_FRAME_COUNT)) != source.count:
++                    raise ValueError(f'匯出驗證失敗：{partial.name}')
++            finally: check.release()
++        if cancel.is_set(): return dict(cancelled=True, files=[])
++        for partial,target in pending: partial.rename(target)
++        completed = True
++        return dict(cancelled=False,files=[str(target) for _,target in pending])
++    finally:
++        if writer is not None: writer.release()
++        for _,source in sources: source.close()
++        if not completed:
++            for partial,_ in pending:
++                if partial.exists(): partial.unlink()
+ 
+ 
+ class VideoSource:
+@@ -67,6 +141,9 @@
+         self.slider_timer = None
+         self.setting_slider = False
+         self.reset_view = False
++        self.export_future = None
++        self.export_cancel = threading.Event()
++        self.export_progress = queue.SimpleQueue()
+         super().__init__(root)
+         root.title('雙影片空間反光偵測 — 同步時間／縮放／平移')
+         # Reuse image-viewer widgets and all detector/settings implementations.
+@@ -77,6 +154,9 @@
+                 if label == '載入左圖': widget.configure(text='載入左影片')
+                 elif label == '載入右圖': widget.configure(text='載入右影片')
+                 elif label == '重算兩圖': widget.configure(text='重算目前幀')
++        for widget in root.winfo_children():
++            if isinstance(widget,ttk.Label) and '淺藍' in str(widget.cget('text')):
++                widget.configure(text='深藍＝空間反光排除區；V2 uncertain 不列入。不執行去畸變、時間反光或 warp。')
+         controls = ttk.Frame(root,padding=6)
+         controls.pack(fill='x',before=self.canvas.get_tk_widget())
+         self.play_button = ttk.Button(controls,text='播放',command=self.toggle_play)
+@@ -90,10 +170,75 @@
+         ttk.Button(controls,text='跳轉',command=self.jump).pack(side='left',padx=3)
+         self.clock_label = ttk.Label(controls,text='0.000 / 0.000 s')
+         self.clock_label.pack(side='right')
++        export_bar = ttk.Frame(root,padding=5)
++        export_bar.pack(fill='x',before=self.canvas.get_tk_widget())
++        self.export_format = tk.StringVar(value='mp4')
++        ttk.Combobox(export_bar,textvariable=self.export_format,values=('mp4','avi'),
++                     state='readonly',width=5).pack(side='left',padx=3)
++        self.export_button = ttk.Button(export_bar,text='匯出左右影片',command=self.export_movies)
++        self.export_button.pack(side='left',padx=3)
++        ttk.Button(export_bar,text='取消匯出',command=self.export_cancel.set).pack(side='left',padx=3)
++        self.export_message = tk.StringVar(value='完整左右影片分開匯出；保留各自 FPS／尺寸，使用目前顯示模式與透明度，無音訊。')
++        ttk.Label(export_bar,textvariable=self.export_message).pack(side='left',padx=8)
+         self.slider = ttk.Scale(root,from_=0,to=1,command=self.slider_seek)
+         self.slider.pack(fill='x',padx=12,before=self.canvas.get_tk_widget())
+         ttk.Label(root,text='依 FPS 換算時間同步（不同起拍時間需先對齊）；逐格以左片 FPS 為準。播放逐步完成偵測，較慢時不保證即時速度。',padding=5).pack(fill='x',before=self.canvas.get_tk_widget())
+         self.status.set('載入一或兩支影片。滾輪／拖曳任一圖，另一圖同步；雙擊恢復全圖。')
++
++    def draw(self):
++        if not hasattr(self,'artists'): return
++        for i,(image,result,ax,artist) in enumerate(zip(self.images,self.results,self.axes,self.artists)):
++            if image is None: continue
++            mask = None if result is None else result[0]
++            frame = render_video_frame(image,mask,self.display.get(),self.alpha.get())
++            artist.set_data(cv2.cvtColor(frame,cv2.COLOR_BGR2RGB))
++            h,w = image.shape[:2]
++            artist.set_extent((-.5,w-.5,h-.5,-.5))
++            ax.set_title(f'{"Left" if i == 0 else "Right"} | {Path(self.paths[i]).name} | {w} x {h}',color='white')
++        self.canvas.draw_idle()
++
++    def export_movies(self):
++        if self.export_future is not None: return
++        if not any(path is not None for path in self.paths):
++            messagebox.showinfo('匯出影片','請先載入影片。',parent=self.root); return
++        self.pause()
++        folder = filedialog.askdirectory(parent=self.root,title='選擇匯出影片資料夾（自動建立獨立子資料夾）')
++        if not folder: return
++        try:
++            destination = Path(folder)/f'specular_export_{time.strftime("%Y%m%d_%H%M%S")}_{time.time_ns()%1000000000:09d}'
++            destination.mkdir(exist_ok=False)
++        except Exception as exc:
++            messagebox.showerror('無法建立輸出目錄',str(exc),parent=self.root); return
++        self.export_cancel.clear()
++        self.export_progress = queue.SimpleQueue()
++        self.export_button.configure(state='disabled')
++        self.export_message.set(f'匯出中：{self.mode.get()}／{self.display.get()}（參數已固定）')
++        self.export_future = self.worker.submit(export_videos,tuple(self.paths),destination,
++            self.export_format.get(),self.mode.get(),self.legacy,self.v2,
++            self.display.get(),self.alpha.get(),self.export_cancel,self.export_progress)
++        self.root.after(100,self.poll_export)
++
++    def poll_export(self):
++        if self.closed: return
++        latest = None
++        while True:
++            try: latest = self.export_progress.get_nowait()
++            except queue.Empty: break
++        if latest is not None:
++            done,total,side,index,count = latest
++            self.export_message.set(f'匯出 {100*done/total:.1f}% | {side} {index}/{count} | {done}/{total} frames')
++        if not self.export_future.done(): self.root.after(100,self.poll_export); return
++        future,self.export_future = self.export_future,None
++        self.export_button.configure(state='normal')
++        try:
++            result = future.result()
++            if result['cancelled']: self.export_message.set('已取消匯出，未完成檔案已移除。')
++            else:
++                self.export_message.set('匯出完成：'+str(Path(result['files'][0]).parent))
++                messagebox.showinfo('匯出完成','\n'.join(result['files']),parent=self.root)
++        except Exception as exc:
++            self.export_message.set('匯出失敗，未完成檔案已移除。')
++            messagebox.showerror('匯出失敗',str(exc),parent=self.root)
+ 
+     def end_time(self):
+         return min((s.last_time for s in self.sources if s is not None),default=0.)
+@@ -215,6 +360,7 @@
+         super().settings()
+ 
+     def close(self):
++        self.export_cancel.set()
+         self.pause()
+         self.closed = True
+         if self.slider_timer is not None: self.root.after_cancel(self.slider_timer)

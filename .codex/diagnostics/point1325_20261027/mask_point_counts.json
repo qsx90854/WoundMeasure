@@ -1,0 +1,954 @@
+[
+  {
+    "cell": 10,
+    "mask": "actual",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 5,
+        "required": 21,
+        "deficient": 5,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 19,
+        "commonFail": 23,
+        "meanCommon": 0.3503131568431854,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 4,
+        "required": 21,
+        "deficient": 6,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 20,
+        "commonFail": 24,
+        "meanCommon": 0.3557836711406708,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 4,
+        "required": 21,
+        "deficient": 7,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 19,
+        "commonFail": 24,
+        "meanCommon": 0.34995970129966736,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 5,
+        "required": 21,
+        "deficient": 6,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 17,
+        "commonFail": 23,
+        "meanCommon": 0.3804302513599396,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 6,
+        "required": 21,
+        "deficient": 5,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 18,
+        "commonFail": 22,
+        "meanCommon": 0.3863860070705414,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 27,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 27,
+        "commonFail": 1,
+        "meanCommon": 0.6629284024238586,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 439.2210037064749
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.751973569393158,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 503.2889849812265
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 10,
+    "mask": "left_only",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 394.2719268798828
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 398.077880859375
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 412.7691650390625
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 435.4119110107422
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 467.0333124497921
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 451.9896178970969
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.9999990463256836,
+        "leftCoverageMean": 0.9999991655349731,
+        "medianL2": 474.9330139160156
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 10,
+    "mask": "right_only",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 5,
+        "required": 21,
+        "deficient": 5,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 19,
+        "commonFail": 23,
+        "meanCommon": 0.3542826175689697,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 4,
+        "required": 21,
+        "deficient": 6,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 20,
+        "commonFail": 24,
+        "meanCommon": 0.357782781124115,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 4,
+        "required": 21,
+        "deficient": 7,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 19,
+        "commonFail": 24,
+        "meanCommon": 0.3500291407108307,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 5,
+        "required": 21,
+        "deficient": 6,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 17,
+        "commonFail": 23,
+        "meanCommon": 0.3783314526081085,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 6,
+        "required": 21,
+        "deficient": 5,
+        "groupOK": false,
+        "leftValid": 28,
+        "rightValid": 18,
+        "commonFail": 22,
+        "meanCommon": 0.38783401250839233,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 27,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 27,
+        "commonFail": 1,
+        "meanCommon": 0.663102924823761,
+        "leftCoverageMean": 1.0,
+        "medianL2": 439.2210037064749
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 0.7540646195411682,
+        "leftCoverageMean": 1.0,
+        "medianL2": 503.35632598533886
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 10,
+    "mask": "empty",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 394.2719268798828
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 398.077880859375
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 412.7691650390625
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 455.4177551269531
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 471.7206726074219
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 452.04249572753906
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 28,
+        "required": 21,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 28,
+        "rightValid": 28,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 474.9330139160156
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 40,
+    "mask": "actual",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 34,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 54,
+        "commonFail": 30,
+        "meanCommon": 0.5386092662811279,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 632.9365781223303
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 33,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 57,
+        "commonFail": 31,
+        "meanCommon": 0.5298162698745728,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 642.6466224060223
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 33,
+        "required": 48,
+        "deficient": 1,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 56,
+        "commonFail": 31,
+        "meanCommon": 0.5144965052604675,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 665.3530250970091
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 34,
+        "required": 48,
+        "deficient": 1,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 55,
+        "commonFail": 30,
+        "meanCommon": 0.5227161049842834,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 621.9884053547296
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 32,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 58,
+        "commonFail": 32,
+        "meanCommon": 0.5230420827865601,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 699.5420580746252
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 49,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 60,
+        "commonFail": 15,
+        "meanCommon": 0.6120899319648743,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 510.88136059217896
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 51,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 59,
+        "commonFail": 13,
+        "meanCommon": 0.6065865755081177,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 521.2900925918658
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 40,
+    "mask": "left_only",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 437.86970341591746
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 417.64099160835207
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 411.31626892089844
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 426.7321099075158
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 447.5511474609375
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 479.61541748046875
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 0.9766989946365356,
+        "leftCoverageMean": 0.989176332950592,
+        "medianL2": 484.289023632419
+      }
+    ],
+    "reason": null
+  },
+  {
+    "cell": 40,
+    "mask": "right_only",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 27,
+        "required": 48,
+        "deficient": 1,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 52,
+        "commonFail": 37,
+        "meanCommon": 0.5063115358352661,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 28,
+        "required": 48,
+        "deficient": 1,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 53,
+        "commonFail": 36,
+        "meanCommon": 0.5063375234603882,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 26,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 53,
+        "commonFail": 38,
+        "meanCommon": 0.4987834393978119,
+        "leftCoverageMean": 1.0,
+        "medianL2": 724.0773439350247
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 34,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 53,
+        "commonFail": 30,
+        "meanCommon": 0.5224168300628662,
+        "leftCoverageMean": 1.0,
+        "medianL2": 614.1776572796537
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 35,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 55,
+        "commonFail": 29,
+        "meanCommon": 0.5227439999580383,
+        "leftCoverageMean": 1.0,
+        "medianL2": 591.7418260098833
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 43,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 57,
+        "commonFail": 21,
+        "meanCommon": 0.5888108015060425,
+        "leftCoverageMean": 1.0,
+        "medianL2": 540.8965218382648
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 47,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": false,
+        "leftValid": 64,
+        "rightValid": 58,
+        "commonFail": 17,
+        "meanCommon": 0.592192530632019,
+        "leftCoverageMean": 1.0,
+        "medianL2": 532.5743284411362
+      }
+    ],
+    "reason": "\u5339\u914d\u5931\u6557: \u81ea\u88fd SIFT \u7121\u5019\u9078\u5177\u8db3\u5920\u6709\u6548\uff0f\u5171\u540c\u8986\u84cb\u6216\u5f71\u50cf support"
+  },
+  {
+    "cell": 40,
+    "mask": "empty",
+    "rows": [
+      {
+        "offset": [
+          25.0,
+          -2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 413.4862518310547
+      },
+      {
+        "offset": [
+          25.0,
+          -1.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 413.12774658203125
+      },
+      {
+        "offset": [
+          25.0,
+          0.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 397.8979949951172
+      },
+      {
+        "offset": [
+          25.0,
+          1.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 433.07704162597656
+      },
+      {
+        "offset": [
+          25.0,
+          2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 440.95697021484375
+      },
+      {
+        "offset": [
+          -21.0,
+          -2.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 484.93804931640625
+      },
+      {
+        "offset": [
+          -29.0,
+          0.0
+        ],
+        "valid": 64,
+        "required": 48,
+        "deficient": 0,
+        "groupOK": true,
+        "leftValid": 64,
+        "rightValid": 64,
+        "commonFail": 0,
+        "meanCommon": 1.0,
+        "leftCoverageMean": 1.0,
+        "medianL2": 483.3351593017578
+      }
+    ],
+    "reason": null
+  }
+]

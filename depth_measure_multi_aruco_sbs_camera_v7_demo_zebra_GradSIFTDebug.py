@@ -1,4 +1,4 @@
-"""
+﻿"""
 depth_measure_multi_aruco_sbs_camera.py
 ================
 互動式深度量測工具 (SBS 併排影片 + JSON 標定參數版本)。
@@ -27,6 +27,7 @@ import onnxruntime as ort
 from Algorithm import aruco_pose as aruco_algo
 from Algorithm.aruco_id_filter import filter_marker_detections, filter_marker_mapping
 from Algorithm import camera_preprocess as camera_algo
+from Algorithm.image_pair_input import load_image_pair, create_pair_session
 # Isolated temporal RT implementation; the original video_pose_analysis.py is
 # intentionally retained unchanged for direct A/B fallback.
 #from Algorithm import video_pose_analysis_temporal as video_pose_algo #old version
@@ -53,6 +54,9 @@ from Algorithm.Region_SIFT_Matching import (
     run_region_sift_matching,
 )
 from Algorithm.region_sift_settings import show_region_sift_settings
+from Algorithm.region_sift_disparity_debug import collect_disparity_audit, DisparityAuditViewer
+from Algorithm.region_sift_center_refinement import (
+    attach_center_heights, summary_for_log as center_summary_for_log, CenterRefinementViewer)
 from Algorithm.specular_settings import show_specular_settings
 from Algorithm.specular_model_v2 import (
     SpecularModelV2Config, detect_specular_model_v2, overlay_specular_v2_uncertain,
@@ -92,18 +96,31 @@ ENABLE_WOUND_AI = False                           # False: 不載入傷口 AI �
 SPATIAL_BLOCK_CONFIG = BlockSpatialSpecularConfig(
     block_width_px=64,
     block_height_px=64,
-    v_percentile= 10,#90.0,
-    rgb_percentile=5.0, #92
-    local_hot_percentile=10,#85.0,
-    interpolate_thresholds=True,
-    dilate_px=0,
-    enable_prominence_gate=True,           # False 回到原本三條分支 OR 的結果
-    prominence_min=3.0,                    # 局部亮度突出門檻下限；降低較寬鬆
-    prominence_mad_multiplier=2.0,         # 區塊亮度差 MAD 倍數；降低較寬鬆
+    v_percentile=90.0,
+    rgb_percentile=90.0,
+    local_hot_percentile=90.0,
+    v_min=120.0,
+    v_max=245.0,
+    rgb_min=120.0,
+    rgb_max=250.0,
+    local_hot_min=35.0,
+    local_hot_max=45.0,
+    gray_min=120.0,
+    gray_below_v=10.0,
+    s_max=50.0,
+    whiteness_max=30.0,
+    background_sigma=9.0,
+    enable_prominence_gate=True,
+    prominence_min=10.0,
+    prominence_mad_multiplier=2.0,
     enable_strong_highlight_exception=True,
-    strong_v_min=250.0,                    # 強反光例外：近飽和 + 同時符合兩項顏色限制
+    strong_v_min=250.0,
     strong_s_max=30.0,
     strong_whiteness_max=20.0,
+    interpolate_thresholds=True,
+    open_kernel_px=1,
+    close_kernel_px=5,
+    dilate_px=0,
 )
 _WOUND_DETECTOR = None
 _WOUND_DETECTOR_ERROR_LOGGED = False
@@ -171,6 +188,8 @@ MAX_DEPTH_MM          = 2000                       # 深度超過此值視為無
 DEFAULT_WOUND_HEIGHT_OFFSET_MM = 0.0              # 未使用自定義平面時，Wound Height 顯示扣除值 (mm)
 MIN_BASELINE_MM       = 35.0#8.0                        # 最小基準線限制 (mm)
 MAX_BASELINE_MM       = 220.0                      # 最大基準線限制 (mm)
+IMAGE_PAIR_MIN_BASELINE_MM = 10.0                  # 僅載入兩張圖片模式
+IMAGE_PAIR_MAX_BASELINE_MM = 300.0
 AUTO_CALC_INTERVAL_SEC = 0.2                       # 連續計算模式下的計算時間間隔 (秒)
 ENFORCE_COPLANAR      = False                      # 強制共面對齊優化
 SAVE_ARUCO_DEBUG_IMG  = False                      # 是否存出 ArUco 偵測結果圖片
@@ -178,6 +197,7 @@ ENABLE_POSE_SMOOTHING  = True                      # 是否啟用時序平滑濾
 POSE_SMOOTHING_ALPHA   = 0.3                         # 平滑係數
 ENABLE_ECC_REFINEMENT_DEFAULT = False              # Grad-SIFT/ORB debug：先關閉點擊匹配後的 ECC 精修
 ENABLE_CLAHE_DEFAULT  = False                      # 預設是否啟用 CLAHE
+REJECT_SPECULAR_CANDIDATES_DEFAULT = False         # Reject SpecPts 預設關閉；自製 descriptor 仍使用空間遮罩
 CLAHE_CLIP_LIMIT      = 2.0                        # CLAHE 對比度限制閾值 (數值愈大對比愈強，雜訊也愈大)
 CLAHE_TILE_GRID_SIZE  = (8, 8)                     # CLAHE 分塊大小 (8, 8) 代表 8x8 的網格
 ENABLE_IMPROVED_MATCHING_DEFAULT = False          # 預設是否啟用改良版特徵匹配流程 (高光遮罩 + Harris Corner + 收緊幾何門檻 + 金字塔 ECC)
@@ -218,8 +238,12 @@ GRAD_SIFT_GUIDED_RATIO_TEST   = 0.95                       # guided fallback use
 # False skips window creation AND drawing, including the SIFT Debug button.
 REGION_SIFT_SHOW_COARSE_FINE_WINDOW = True
 REGION_SIFT_SHOW_AMBIGUITY_WINDOW = True
+REGION_SIFT_DISPARITY_DEBUG_DEFAULT = False  # Off: no local table calculation or drawing
 
 REGION_SIFT_CONFIG = RegionSIFTConfig(
+    center_refine_enabled=False,  # On = center-only post-search correction; Off = original pipeline.
+    confidence_mode='shadow',  # 分析新可信度，但維持舊接受/拒絕規則
+    masked_sampling_gradient=True,  # 自製算子取點不讀反光亮度
     two_stage_search=True,
     grid_rows=3,
     grid_cols=3,
@@ -1212,7 +1236,7 @@ def configure_world_marker_sift_rt_refine():
            "final R/t uses marker-only world optimization; SIFT is validation_only"))
 
 
-def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None):
+def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode="average", range_mode="fixed", progress_callback=None, frames_override=None):
     video_pose_algo.log_and_print = log_and_print
     configure_world_marker_sift_rt_refine()
     video_pose_algo.RECORD_SAVE_DIR = RECORD_SAVE_DIR
@@ -1247,6 +1271,15 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         'candidates_per_side': int(ANGLE_GUIDED_CANDIDATES_PER_SIDE),
         'pair_score_weight': float(ANGLE_GUIDED_PAIR_SCORE_WEIGHT),
     }
+    fixed_pair = frames_override is not None
+    saved_baseline_margin = video_pose_algo.PAIR_CANDIDATE_MIN_BASELINE_MARGIN_MM
+    if fixed_pair:
+        if len(frames_override) != 2:
+            raise ValueError('Image-pair input requires exactly two images: right/A, left/B')
+        start_n, end_n, select_mode, range_mode = 1, 1, 'best', 'fixed'
+        selection_mode = 'fixed_image_pair'
+        angle_guided_config['enabled'] = False
+        log_and_print('[Image pair] Fixed right/A=0, left/B=1; automatic frame selection disabled')
     log_and_print(
         f"🧭 [Frame pair mode] {selection_mode} | "
         f"direction={ANGLE_GUIDED_DIRECTION_MODE} | "
@@ -1256,15 +1289,27 @@ def analyze_video_frames(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_
         f"🎯 [RT SIFT ROI config] enabled={bool(ENABLE_RT_SIFT_ROI)} | "
         f"ratio={feature_roi_ratio} | scale={float(RT_SIFT_IMAGE_SCALE):.3f} | "
         "ArUco=full-frame | pair-geometry=full-frame")
-    return video_pose_algo.analyze_video_frames(
+    if fixed_pair:
+        video_pose_algo.MIN_BASELINE_MM = IMAGE_PAIR_MIN_BASELINE_MM
+        video_pose_algo.MAX_BASELINE_MM = IMAGE_PAIR_MAX_BASELINE_MM
+        # Fixed image experiments use an exact 10 mm lower gate, not 10+2 mm.
+        video_pose_algo.PAIR_CANDIDATE_MIN_BASELINE_MARGIN_MM = 0.0
+    try:
+        return video_pose_algo.analyze_video_frames(
         video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm,
         select_mode, range_mode, progress_callback=progress_callback,
         detection_roi_ratio=None,
         feature_roi_ratio=feature_roi_ratio,
         pair_geometry_roi_ratio=None,
         angle_guided_config=angle_guided_config,
-        allowed_marker_ids=ARUCO_ALLOWED_PATTERN_IDS
-    )
+        allowed_marker_ids=ARUCO_ALLOWED_PATTERN_IDS,
+        frames_override=frames_override, frames_are_undistorted=False,
+        pattern_guided=not fixed_pair, local_window=not fixed_pair
+        )
+    finally:
+        video_pose_algo.MIN_BASELINE_MM = MIN_BASELINE_MM
+        video_pose_algo.MAX_BASELINE_MM = MAX_BASELINE_MM
+        video_pose_algo.PAIR_CANDIDATE_MIN_BASELINE_MARGIN_MM = saved_baseline_margin
 
 _clahe_cache = {}
 
@@ -2126,6 +2171,9 @@ def save_measurement_to_txt(video_path, res, cand, wound_z_offset, custom_plane_
     }
     if isinstance(shared_plane_diag, dict):
         json_data["shared_pattern_plane_diag"] = shared_plane_diag
+    _center_report = (res.get('region_debug') or {}).get('center_refinement')
+    if _center_report is not None:
+        json_data['center_refinement'] = center_summary_for_log(_center_report)
     if isinstance(block_log, dict):
         json_data["debug_metric_block_audit"] = block_log
     if "multi_res" in res:
@@ -2189,14 +2237,14 @@ def ui_failure_reason_english(reason):
 
 def select_video_source():
     import tkinter as tk
-    from tkinter import filedialog
+    from tkinter import filedialog, messagebox
 
     root = tk.Tk()
-    root.title("Interactive Measurement - Select Video Source")
+    root.title("Interactive Measurement - Select Source")
     
     # 設置視窗大小與置中
     window_width = 450
-    window_height = 200
+    window_height = 280
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
     x_c = (screen_width - window_width) // 2
@@ -2213,7 +2261,7 @@ def select_video_source():
     selected_path = {"path": None, "action": None}
 
     # 標題
-    title_label = tk.Label(root, text="Choose a video source for depth measurement:", font=title_font, fg="#FFFFFF", bg="#2D2D2D", pady=25)
+    title_label = tk.Label(root, text="Choose a source for depth measurement:", font=title_font, fg="#FFFFFF", bg="#2D2D2D", pady=25)
     title_label.pack()
 
     def on_camera():
@@ -2232,6 +2280,22 @@ def select_video_source():
             root.destroy()
         else:
             selected_path["action"] = None
+
+    def on_images():
+        types = [("Image Files", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"), ("All Files", "*.*")]
+        left = filedialog.askopenfilename(parent=root, title="Select LEFT image (UI left)", filetypes=types)
+        if not left:
+            return
+        right = filedialog.askopenfilename(parent=root, title="Select RIGHT image (UI right)", filetypes=types)
+        if not right:
+            return
+        try:
+            load_image_pair(left, right)
+        except (OSError, ValueError, cv2.error) as exc:
+            messagebox.showerror('Image pair', str(exc), parent=root)
+            return
+        selected_path.update(action='images', path=(left, right))
+        root.destroy()
 
     # 按鈕容器
     btn_frame = tk.Frame(root, bg="#2D2D2D")
@@ -2267,11 +2331,14 @@ def select_video_source():
     )
     btn_file.pack(side="right", padx=15)
 
+    tk.Button(root, text="載入左／右兩張圖片", font=btn_font, command=on_images,
+              bg="#7755AA", fg="white", width=30, height=2, relief="flat").pack(pady=12)
+
     root.mainloop()
 
     return selected_path["action"], selected_path["path"]
 
-def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode, range_mode):
+def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, select_mode, range_mode, frames_override=None):
     import tkinter as tk
     from tkinter import ttk
     import threading
@@ -2323,7 +2390,8 @@ def analyze_video_with_progress_bar(video_path, start_n, end_n, K_L, dist_L, mtx
         try:
             res = analyze_video_frames(
                 video_path, start_n, end_n, K_L, dist_L, mtx_L, marker_size_mm, 
-                select_mode, range_mode, progress_callback=progress_callback
+                select_mode, range_mode, progress_callback=progress_callback,
+                frames_override=frames_override
             )
             result_container["data"] = res
         except Exception as e:
@@ -2441,6 +2509,8 @@ def main():
     
     # 0. 選擇影片來源 (UI 視窗)
     action, selected_path = select_video_source()
+    measurement_min_baseline = IMAGE_PAIR_MIN_BASELINE_MM if action == 'images' else MIN_BASELINE_MM
+    measurement_max_baseline = IMAGE_PAIR_MAX_BASELINE_MM if action == 'images' else MAX_BASELINE_MM
     if action is None:
         print("❌ 未選擇任何影片來源，程式結束。")
         sys.exit(0)
@@ -2454,6 +2524,7 @@ def main():
         sys.exit(1)
         
     global VIDEO_PATH
+    image_pair = None
     if action == "camera":
         recorded_path = record_video_from_camera(
             mtxL_o, distL, ACTUAL_MARKER_SIZE_MM)
@@ -2461,6 +2532,12 @@ def main():
             print("❌ 錄影失敗或未錄製影片，程式結束。")
             sys.exit(1)
         VIDEO_PATH = recorded_path
+    elif action == 'images':
+        image_pair = load_image_pair(*selected_path)
+        VIDEO_PATH = create_pair_session(*selected_path, image_pair[0].shape,
+                                        RECORD_SAVE_DIR, PARAMS_JSON_PATH)
+        log_and_print(f'[Image pair] LEFT={selected_path[0]} | RIGHT={selected_path[1]}')
+        log_and_print(f'[Image pair] Output: {VIDEO_PATH}')
     else:
         if not selected_path or not os.path.exists(selected_path):
             print("❌ 載入檔案無效或取消選取，程式結束。")
@@ -2473,15 +2550,18 @@ def main():
     # 1. The intrinsics loaded above are shared by live preview and analysis.
     
     # 由於去畸變時需要影像尺寸，我們先用 VideoCapture 打開影片讀取第一影格取得原影像寬高
-    cap_temp = cv2.VideoCapture(VIDEO_PATH)
-    if not cap_temp.isOpened():
-        print(f"❌ 無法開啟影片檔: {VIDEO_PATH}")
-        sys.exit(1)
-    ret, first_frame = cap_temp.read()
-    cap_temp.release()
-    if not ret:
-        print("❌ 無法讀取影片首影格")
-        sys.exit(1)
+    if image_pair is not None:
+        first_frame = image_pair[0]
+    else:
+        cap_temp = cv2.VideoCapture(VIDEO_PATH)
+        if not cap_temp.isOpened():
+            print(f"❌ 無法開啟影片檔: {VIDEO_PATH}")
+            sys.exit(1)
+        ret, first_frame = cap_temp.read()
+        cap_temp.release()
+        if not ret:
+            print("❌ 無法讀取影片首影格")
+            sys.exit(1)
         
     h_raw, w_raw = first_frame.shape[:2]
     w_alg = w_raw
@@ -2496,7 +2576,8 @@ def main():
     
     # 預先建立去畸變查找表
     log_and_print("🔄 正在分析影片中開頭與結尾影格的 ArUco 標籤與最優姿態對...")
-    video_data = analyze_video_with_progress_bar(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE, FRAME_RANGE_MODE)
+    video_data = analyze_video_with_progress_bar(VIDEO_PATH, START_FRAME_COUNT, END_FRAME_COUNT, KL, distL, mtxL_o, ACTUAL_MARKER_SIZE_MM, POSE_SELECT_MODE, FRAME_RANGE_MODE,
+        frames_override=[image_pair[1], image_pair[0]] if image_pair is not None else None)
     if video_data is None:
         print("❌ 影片 Pose 分析失敗，無法啟動測量工具")
         sys.exit(1)
@@ -2504,7 +2585,7 @@ def main():
     _angle_final = _angle_diag.get('final_selected_pair', {}) or {}
     _angle_pair = _angle_final.get('pair_measurement') or {}
     log_and_print(
-        f"⏱️ [Frame pair result] mode={FRAME_PAIR_SELECTION_MODE} | "
+        f"⏱️ [Frame pair result] mode={'fixed_image_pair' if image_pair is not None else FRAME_PAIR_SELECTION_MODE} | "
         f"status={_angle_diag.get('status', 'N/A')} | "
         f"A/right=F{video_data.get('idx_A')} "
         f"{_angle_pair.get('incidence_A_deg', 'N/A')}deg | "
@@ -2547,8 +2628,12 @@ def main():
         combined_mask, spatial_mask, temporal_mask = compute_locked_spec_masks(bgr, frame_idx, wound_prediction)
         return combined_mask
 
-    def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None):
+    def compute_locked_spec_masks(bgr, frame_idx=None, wound_prediction=None,
+                                  *, timing_out=None, timing_label=None):
+        from time import perf_counter
+        _mask_started = perf_counter()
         adaptive_spatial_mask = compute_wound_adaptive_spatial_mask(bgr, wound_prediction)
+        _spatial_finished = perf_counter()
         combined_mask, spatial_mask, temporal_mask = compute_rt_aligned_temporal_specular_mask_bgr(
             bgr,
             frame_idx,
@@ -2560,6 +2645,22 @@ def main():
             preprocess_gray_fn=preprocess_gray,
             base_mask=adaptive_spatial_mask,
         )
+        _temporal_finished = perf_counter()
+        _mask_times = dict(
+            spatial_ms=(_spatial_finished - _mask_started) * 1000.,
+            temporal_ms=(_temporal_finished - _spatial_finished) * 1000.,
+            total_ms=(_temporal_finished - _mask_started) * 1000.)
+        if timing_out is not None:
+            timing_out.update(_mask_times)
+        _backend = ('V2' if use_specular_model_v2 else
+                    'Legacy adaptive' if adaptive_spatial_mask is not None else 'Fixed fallback')
+        _label = timing_label or 'frame'
+        _temporal_name = ('temporal+merge' if adaptive_spatial_mask is not None
+                          else 'fixed-spatial+temporal+merge')
+        print(f"[Specular Timing] {_label} F{frame_idx} | {_backend} | "
+              f"spatial={_mask_times['spatial_ms']:.1f} ms | "
+              f"{_temporal_name}={_mask_times['temporal_ms']:.1f} ms | "
+              f"total={_mask_times['total_ms']:.1f} ms")
         return combined_mask, spatial_mask, temporal_mask
         
     # 去畸變處理挑選出的最優左右圖
@@ -2592,6 +2693,7 @@ def main():
     sift = cv2.SIFT_create(contrastThreshold=0.005)
     orb = cv2.ORB_create(nfeatures=1000)
     
+    _startup_plane_started = time.perf_counter()
     # 優先使用進度條執行期間在背景預先計算的平面
     global_plane_n = video_data.get('global_plane_n')
     global_plane_c = video_data.get('global_plane_c')
@@ -2623,6 +2725,8 @@ def main():
         log_and_print(
             "[Height Plane] Marker-pose plane unavailable; height display will remain in legacy mode")
     
+    _startup_plane_ms = (time.perf_counter() - _startup_plane_started) * 1000.
+
     # 預設直接鎖定
     locked_L = imgA_bgr.copy()
     locked_R = imgB_bgr.copy()
@@ -2630,9 +2734,24 @@ def main():
     locked_R_clean = locked_R.copy()
     locked_L_idx = video_data['idx_B']
     locked_R_idx = video_data['idx_A']
-    locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(locked_L_clean, locked_L_idx)
-    locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(locked_R_clean, locked_R_idx)
+    _startup_left_mask_times, _startup_right_mask_times = {}, {}
+    locked_L_spec_mask, locked_L_spec_spatial_mask, locked_L_spec_temporal_mask = compute_locked_spec_masks(
+        locked_L_clean, locked_L_idx, timing_out=_startup_left_mask_times, timing_label='left')
+    locked_R_spec_mask, locked_R_spec_spatial_mask, locked_R_spec_temporal_mask = compute_locked_spec_masks(
+        locked_R_clean, locked_R_idx, timing_out=_startup_right_mask_times, timing_label='right')
     startup_timer.stage("全域平面+左右高光遮罩")
+    _startup_mask_parent_ms = startup_timer.stages[-1][1] * 1000.
+    _startup_temporal_label = ('時間反光+遮罩合併' if use_wound_adaptive_spatial_specular or use_specular_model_v2
+                               else 'Fixed空間+時間反光+合併')
+    _startup_mask_detail = [
+        ('平面取得/建立與檢查', _startup_plane_ms),
+        ('左圖空間反光', _startup_left_mask_times['spatial_ms']),
+        ('左圖' + _startup_temporal_label, _startup_left_mask_times['temporal_ms']),
+        ('右圖空間反光', _startup_right_mask_times['spatial_ms']),
+        ('右圖' + _startup_temporal_label, _startup_right_mask_times['temporal_ms']),
+    ]
+    _startup_mask_detail.append(('其餘初始化/影像複製/日誌',
+        max(0., _startup_mask_parent_ms - sum(value for _, value in _startup_mask_detail))))
     live_L = False
     live_R = False
     has_set_L = True
@@ -3040,6 +3159,8 @@ def main():
         show_search=REGION_SIFT_SHOW_COARSE_FINE_WINDOW,
         show_ambiguity=REGION_SIFT_SHOW_AMBIGUITY_WINDOW)
     region_diagnostic_latest = {'result': None}
+    disparity_audit_viewer = DisparityAuditViewer()
+    center_refinement_viewer = CenterRefinementViewer()
     height_profile = None
     profile_disabled_widgets = []
     debug_region_state = {
@@ -3303,7 +3424,7 @@ def main():
     c14 = Button(ax_c14, "[X] Epi-band Search" if ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT else "[ ] Epi-band Search", **btn_opt_style)
     c15 = Button(ax_c15, "[ ] Show Spatial", **btn_opt_style)
     c16 = Button(ax_c16, "[ ] Show Temporal", **btn_opt_style)
-    c17 = Button(ax_c17, "[X] Reject SpecPts", **btn_opt_style)
+    c17 = Button(ax_c17, "[X] Reject SpecPts" if REJECT_SPECULAR_CANDIDATES_DEFAULT else "[ ] Reject SpecPts", **btn_opt_style)
     c19 = Button(ax_c19, "[X] Adaptive Spatial", **btn_opt_style)
     btn_specular_settings = Button(
         ax_btn_specular_settings, "舊版反光參數", useblit=False, **btn_opt_style)
@@ -3334,7 +3455,8 @@ def main():
                   'epipolar_band_search': ENABLE_EPIPOLAR_BAND_SEARCH_DEFAULT,
                   'show_spatial_specular_mask': False,
                   'show_temporal_specular_mask': False,
-                  'reject_specular_candidates': True,
+                  'reject_specular_candidates': REJECT_SPECULAR_CANDIDATES_DEFAULT,
+                  'disparity_debug': REGION_SIFT_DISPARITY_DEBUG_DEFAULT,
                   'adaptive_spatial_specular': True,
                   'show_high_grad_points': False,
                   'show_mid_grad_points': False,
@@ -4724,13 +4846,13 @@ def main():
                     'g_kptsB': None, 'g_rect': None,
                     'fail_reason': '未偵測到 ArUco', 'u': u, 'v': v, 'trajectory': None}
         bsl = cand.get('baseline', 0.0)
-        if bsl < MIN_BASELINE_MM or bsl > MAX_BASELINE_MM:
-            print(f"❌ [測量失敗] 基準線不合規範 ({bsl:.2f} mm，限制: {MIN_BASELINE_MM}~{MAX_BASELINE_MM} mm)")
+        if bsl < measurement_min_baseline or bsl > measurement_max_baseline:
+            print(f"❌ [測量失敗] 基準線不合規範 ({bsl:.2f} mm，限制: {measurement_min_baseline}~{measurement_max_baseline} mm)")
             return {'pt': None, 'p3d': None, 'd': None, 'method': '', 'neighbors': [],
                     'g_ptsA': None, 'g_ptsB': None, 'g_groups': None,
                     'g_refA': None, 'g_refB': None, 'g_refA_groups': None, 'g_refB_groups': None,
                     'g_kptsB': None, 'g_rect': None,
-                    'fail_reason': f'視差不合規範({MIN_BASELINE_MM}~{MAX_BASELINE_MM}mm)', 'u': u, 'v': v, 'trajectory': None}
+                    'fail_reason': f'視差不合規範({measurement_min_baseline}~{measurement_max_baseline}mm)', 'u': u, 'v': v, 'trajectory': None}
 
         # 1. 只有在需要匹配點的模式下進行匹配
         if MEASURE_MODE in ("dual_direct", "multi_dedrift"):
@@ -4772,6 +4894,63 @@ def main():
                     t_prof['Region-SIFT匹配'] = time.perf_counter() - _t_blk
                     region_search_history = region_result.get('search_history', [])
                     region_config = region_result.get('effective_config', region_config)
+                    if region_config.confidence_mode != 'legacy':
+                        from Algorithm.region_sift_confidence import attach_height_span, format_confidence
+                        _height_start = time.perf_counter()
+                        _hn, _hc, _hl = get_selected_height_plane()
+                        _hoff = DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                        if custom_plane_fitted:
+                            _hn, _hc, _hl = custom_plane_n, custom_plane_c, 'Custom Plane'
+                            _hoff = 0.0
+                        def _confidence_triangulate(right_pt):
+                            try:
+                                xyz = triangulate_point_3d((u, v), right_pt, KL, cand['K_R'],
+                                                          cand['R_rel'], cand['t_rel'], F=cand.get('F'))
+                            except cv2.error as exc:
+                                raise ValueError(str(exc)) from exc
+                            right_xyz = cand['R_rel'] @ xyz + np.asarray(cand['t_rel']).reshape(3)
+                            if right_xyz[2] <= 0:
+                                raise ValueError('candidate behind right camera')
+                            return xyz
+                        attach_height_span(region_result, _confidence_triangulate,
+                            None if _hn is None else np.asarray(_hn).reshape(3),
+                            None if _hc is None else np.asarray(_hc).reshape(3),
+                            offset=_hoff, label=f'{_hl}; F{cand.get("idx")}', max_depth=MAX_DEPTH_MM)
+                        t_prof['候選高度範圍（三角化）'] = time.perf_counter() - _height_start
+                        for _confidence_line in format_confidence(region_result.get('confidence')):
+                            print(_confidence_line)
+                    if region_config.center_refine_enabled:
+                        _center_height_start = time.perf_counter()
+                        _cn, _cc, _cl = get_selected_height_plane()
+                        _coffset = DEFAULT_WOUND_HEIGHT_OFFSET_MM
+                        if custom_plane_fitted:
+                            _cn, _cc, _cl = custom_plane_n, custom_plane_c, 'Custom Plane'
+                            _coffset = 0.0
+                        attach_center_heights(region_result,
+                            lambda q: triangulate_point_3d((u, v), q, KL, cand['K_R'],
+                                cand['R_rel'], cand['t_rel'], F=cand.get('F')),
+                            None if _cn is None else np.asarray(_cn).reshape(3),
+                            None if _cc is None else np.asarray(_cc).reshape(3),
+                            offset=_coffset, max_depth=MAX_DEPTH_MM)
+                        _cr = region_result.get('center_refinement', {})
+                        print(f'[CenterRefine] {_cr.get("status")} | {_cr.get("reason")} | '
+                              f'extra rows L/R={_cr.get("left_descriptor_rows",0)}/{_cr.get("descriptor_rows",0)} | '
+                              f'{_cr.get("elapsed_ms",0):.1f}ms')
+                        print(f'  point: {_cr.get("original_center_right")} -> {region_result.get("m_pt")} | '
+                              f'along shift={_cr.get("center_shift_px",0):+.3f}px | '
+                              f'center scores={_cr.get("decision",{})}')
+                        print(f'  Wound Height ({_cl}, before fusion): '
+                              f'{_cr.get("original_height_mm")} -> {_cr.get("final_height_mm")} mm')
+                        t_prof['中心精修高度對照'] = time.perf_counter() - _center_height_start
+                    if snap_view_state.get('disparity_debug', False):
+                        _audit_start = time.perf_counter()
+                        _audit = collect_disparity_audit(region_result, (u, v), enabled=True)
+                        if isinstance(region_result.get('region_debug'), dict):
+                            region_result['region_debug']['disparity_audit'] = _audit
+                        t_prof['視差一致性診斷（不改匹配）'] = time.perf_counter() - _audit_start
+                        print(f'[Region-SIFT DisparityDebug] {_audit["status"]} | '
+                              f'{len(_audit["candidates"])} candidates | extra rows={_audit["descriptor_rows"]} | '
+                              f'{_audit["elapsed_ms"]:.1f}ms | {_audit["reason"]}')
                     for stage in region_search_history:
                         valley = stage.get('valley', {})
                         print(f"[Region-SIFT Search] round={stage['round']} {stage['stage']} | "
@@ -4845,7 +5024,8 @@ def main():
                         candidate_p3ds = []
                         for candidate_pt in (region_debug['best_center_right'],
                                              None if second_candidate is None else second_candidate['center_right'],
-                                             region_debug.get('refinement', {}).get('refined_center_right')):
+                                             region_debug.get('refinement', {}).get('refined_center_right'),
+                                             region_debug.get('center_refinement', {}).get('refined_center_right')):
                             xyz = None
                             if candidate_pt is not None:
                                 try:
@@ -6498,6 +6678,7 @@ def main():
         debug_region_state['records'] = []
         debug_region_state['selected_index'] = None
         debug_region_state['support_artists'] = []
+        debug_region_state['mask_debug'] = None
 
     def select_region_sift_debug_point(index=None, screen_xy=None,
                                        announce=False, refresh=False):
@@ -6545,6 +6726,7 @@ def main():
             if support_artist in debug_region_artists:
                 debug_region_artists.remove(support_artist)
         support_artists = []
+        cell_summary = ''
         for support_ax, support_point, radius_key in (
                 (ax_debug_A, point_left, 'left_support_radius_px'),
                 (ax_debug_B, point_warp, 'right_support_radius_px')):
@@ -6557,6 +6739,91 @@ def main():
                 edgecolor='#FFFF66', linestyle=':', linewidth=1.0, zorder=6)
             support_ax.add_patch(support_box)
             support_artists.append(support_box)
+            audit = debug_region_state.get('mask_debug')
+            if audit is not None and audit['config'].use_masked_sift:
+                from Algorithm.region_sift_sampling_audit import sampling_weights
+                side = 'left' if support_ax is ax_debug_A else 'right'
+                xx, yy, weights = sampling_weights(record[side+'_scale_px'], record[side+'_angle_deg'])
+                footprint = np.pad((weights.sum(axis=0) > 0).astype(float), 1)
+                roi = audit.get(side + '_audit_context_roi')
+                origin = np.asarray(roi[:2] if roi is not None else (0, 0))
+                center = np.rint(support_point - origin) + origin
+                outline = support_ax.contour(
+                    np.arange(footprint.shape[1])+xx.min()+center[0]-1,
+                    np.arange(footprint.shape[0])+yy.min()+center[1]-1,
+                    footprint, levels=[.5], colors='white', linewidths=1.3, zorder=8)
+                if hasattr(outline, 'remove'):
+                    support_artists.append(outline)
+                else:
+                    support_artists.extend(outline.collections)
+            audit = debug_region_state.get('mask_debug')
+            if audit is not None and audit['config'].use_masked_sift:
+                left_cells = audit.get('left_masked_coverage')
+                right_cells = audit['right_frames'].get('masked_cell_fraction')
+                if left_cells is not None and right_cells is not None:
+                    lc, rc = np.asarray(left_cells[selected]), np.asarray(right_cells[selected])
+                    common_cells = np.maximum(0., lc + rc - 1.)
+                    threshold = audit['config'].masked_min_cell_fraction
+                    usable = common_cells >= threshold
+                    side = 'left' if support_ax is ax_debug_A else 'right'
+                    fractions = lc if side == 'left' else rc
+                    theta = np.deg2rad(record[side + '_angle_deg'])
+                    rotation = np.array([[np.cos(theta), -np.sin(theta)],
+                                         [np.sin(theta), np.cos(theta)]])
+                    width = 1.5 * record[side + '_scale_px']
+                    center = np.rint(support_point)
+                    for k in range(16):
+                        row, col = divmod(k, 4)
+                        corners = np.array([[col-2, row-2], [col-1, row-2],
+                                            [col-1, row-1], [col-2, row-1]])
+                        corners = (corners * width) @ rotation.T + center
+                        color = '#00E5FF' if usable[k] else '#FF5030'
+                        patch = Polygon(corners, closed=True, fill=not usable[k],
+                            facecolor=color, edgecolor=color, alpha=.22 if not usable[k] else .65,
+                            linestyle='--' if not usable[k] else ':', linewidth=1., zorder=6)
+                        support_ax.add_patch(patch)
+                        support_artists.append(patch)
+                        mid = corners.mean(axis=0)
+                        text = support_ax.text(*mid, f'{fractions[k]:.2f}', color=color,
+                            fontsize=6, ha='center', va='center', zorder=10,
+                            bbox=dict(facecolor='black', alpha=.5, pad=.2, edgecolor='none'))
+                        support_artists.append(text)
+                    left_fraction = float(audit['left_masked_packet']['valid_fraction'][selected])
+                    right_fraction = float(audit['right_frames']['masked_valid_fraction'][selected])
+                    aggregate = float(np.mean(np.where(usable, common_cells, 0.)))
+                    rejected = ','.join(f'{k//4+1}:{k%4+1}' for k in np.flatnonzero(~usable)) or 'none'
+                    cell_summary = (
+                        f"\n4x4 bins (weighted overlap): cyan=used, red=excluded; labels=side coverage; cell common>={threshold:.2f}"
+                        f"\npoint coverage L/R={left_fraction:.2f}/{right_fraction:.2f}"
+                        f" (need {audit['config'].masked_min_valid_fraction:.2f}); common={aggregate:.2f}"
+                        f" (need {audit['config'].masked_min_common_fraction:.2f})"
+                        f"\nExcluded cells (row:col, 1-based): {rejected}; frame valid L/R="
+                        f"{bool(audit['left_frames']['valid'][selected])}/{bool(audit['right_frames']['valid'][selected])}")
+            mask_debug = debug_region_state.get('mask_debug')
+            if (mask_debug is not None and mask_debug['config'].use_masked_sift
+                    and mask_debug.get('reject_specular')):
+                from Algorithm.masked_sift_descriptor import descriptor_exclusion_overlay
+                side = 'left' if support_ax is ax_debug_A else 'right'
+                mask = mask_debug.get('left_specular_mask' if side == 'left'
+                                      else 'warped_specular_mask')
+                if mask is not None:
+                    excluded, (x0, y0) = descriptor_exclusion_overlay(
+                        mask, support_point, record[side + '_scale_px'],
+                        record[side + '_angle_deg'], radius, mask_debug['config'])
+                    if np.any(excluded):
+                        # Padding closes contours even when the whole crop is masked.
+                        padded = np.pad(excluded.astype(float), 1)
+                        contours = support_ax.contour(
+                            np.arange(padded.shape[1]) + x0 - 1,
+                            np.arange(padded.shape[0]) + y0 - 1,
+                            padded, levels=[0.5], colors=['#FF40D0'],
+                            linestyles='--', linewidths=1.5, zorder=9)
+                        # Matplotlib <3.8 exposes individual collections instead.
+                        if hasattr(contours, 'remove'):
+                            support_artists.append(contours)
+                        else:
+                            support_artists.extend(contours.collections)
+
         debug_region_artists.extend(support_artists)
         debug_region_state['support_artists'] = support_artists
         if DEBUG_LEFT_PANEL_ENABLED:
@@ -6569,7 +6836,7 @@ def main():
                   f"angle={float(record.get('left_angle_deg', 0.0)):.1f}deg, "
                   f"support={float(record.get('left_support_radius_px', 0.0)):.1f}px"
                 + f"\nreliable scale/angle pair={record.get('scale_pair_reliable')}/"
-                  f"{record.get('angle_pair_reliable')}; dotted=full support bounds")
+                  f"{record.get('angle_pair_reliable')}; yellow=full support; white=sampling footprint; double-click point: cell audit")
         if DEBUG_RIGHT_PANEL_ENABLED:
             dbg_info_B.set_text(
                 debug_region_state.get('base_right_text', '')
@@ -6582,7 +6849,7 @@ def main():
                   f"angle={float(record.get('right_angle_deg', 0.0)):.1f}deg | "
                   f"scale-ratio={float(record.get('scale_ratio', 0.0)):.2f}, "
                   f"dAngle={float(record.get('angle_delta_deg', 0.0)):+.1f}deg"
-                + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px")
+                + f" | support={float(record.get('right_support_radius_px', 0.0)):.1f}px" + cell_summary)
         if announce:
             print(
                 f"   [Region-SIFT point] {label} cell={cell_text} "
@@ -6743,6 +7010,12 @@ def main():
         if DEBUG_RIGHT_PANEL_ENABLED:
             dbg_final_B.set_offsets([np.asarray(debug['best_center_warp']).reshape(2)])
         refinement = debug.get('refinement', {})
+        center_report = debug.get('center_refinement', {})
+        if center_report.get('applied') and DEBUG_RIGHT_PANEL_ENABLED:
+            cp = np.asarray(center_report['refined_center_warp'])
+            dbg_final_B.set_offsets([cp])
+            debug_region_artists.append(ax_debug_B.scatter([cp[0]], [cp[1]],
+                marker='*', s=150, c='#00FF88', edgecolors='black', zorder=12))
         if refinement.get('applied'):
             refined_center = np.asarray(refinement['refined_center_warp'])
             if DEBUG_RIGHT_PANEL_ENABLED:
@@ -6952,9 +7225,38 @@ def main():
             coverage = debug['right_frames'].get('masked_common_fraction')
             if coverage is not None:
                 base_right_text += f'\nMasked common coverage min/mean={np.min(coverage):.2f}/{np.mean(coverage):.2f}'
+        if cfg.use_masked_sift:
+            valid_pairs = np.asarray(debug['right_frames'].get('masked_point_valid', []), bool)
+            deficient = []
+            for row in range(cfg.grid_rows):
+                for col in range(cfg.grid_cols):
+                    ids = [i for i, rec in enumerate(records)
+                           if rec['cell_row'] == row and rec['cell_col'] == col]
+                    count = int(valid_pairs[ids].sum()) if ids else 0
+                    if count < cfg.masked_min_points_per_cell:
+                        deficient.append(f'{row+1}:{col+1}={count}/{cfg.masked_min_points_per_cell}')
+                        for axis, shift in ((ax_debug_A, np.zeros(2)),
+                                            (ax_debug_B, np.asarray(debug['best_displacement_warp']))):
+                            if not debug_axis_enabled(axis):
+                                continue
+                            box = Rectangle((x0 + col*cfg.cell_width_px + shift[0],
+                                             y0 + row*cfg.cell_height_px + shift[1]),
+                                cfg.cell_width_px, cfg.cell_height_px,
+                                fill=False, edgecolor='#FF8800', linestyle='--',
+                                linewidth=2., zorder=5)
+                            axis.add_patch(box)
+                            debug_region_artists.append(box)
+
+            base_right_text += '\nDeficient Region cells (row:col=valid/required): ' + (', '.join(deficient) or 'none')
+        if debug.get('diagnostic_only'):
+            base_left_text = 'REJECTED CANDIDATE - DIAGNOSTIC ONLY\n' + base_left_text
+            base_right_text = (f"DIAGNOSTIC ONLY: valid points {debug['diagnostic_valid_points']}/"
+                f"{debug['diagnostic_required_points']} required; deficient Region cells "
+                f"{debug['diagnostic_deficient_cells']}/{cfg.masked_max_deficient_cells} allowed\n" + base_right_text)
         if res.get('fail_reason'):
             base_right_text += f"\nResult: {res['fail_reason']}"
         debug_region_state['records'] = records
+        debug_region_state['mask_debug'] = debug
         debug_region_state['base_left_text'] = base_left_text
         debug_region_state['base_right_text'] = base_right_text
         if DEBUG_LEFT_PANEL_ENABLED:
@@ -6973,6 +7275,9 @@ def main():
         if res is None:
             print('[Region-SIFT Debug] No candidate scores; first measure a Region-SIFT point.')
             return
+        if display:
+            disparity_audit_viewer.show(res, enabled=view_state.get('disparity_debug', False))
+            center_refinement_viewer.show(res, enabled=region_diagnostics.show_ambiguity)
         if not isinstance(res.get('region_debug'), dict):
             if display:
                 region_diagnostics.show(res)
@@ -7699,9 +8004,18 @@ def main():
         if event.inaxes == ax_debug_A:
             if event.x is not None and event.y is not None:
                 if view_state.get('region_sift', False):
-                    select_region_sift_debug_point(
+                    selected = select_region_sift_debug_point(
                         screen_xy=(event.x, event.y),
                         announce=True, refresh=True)
+                    audit = debug_region_state.get('mask_debug')
+                    if (selected and getattr(event, 'dblclick', False) and audit is not None
+                            and audit['config'].use_masked_sift):
+                        from Algorithm.region_sift_sampling_audit import SamplingAuditWindow
+                        old_window = debug_region_state.pop('sampling_window', None)
+                        if old_window is not None:
+                            plt.close(old_window.fig)
+                        debug_region_state['sampling_window'] = SamplingAuditWindow(
+                            audit, debug_region_state['selected_index'])
                 else:
                     select_grad_descriptor_audit(
                         screen_xy=(event.x, event.y),
@@ -8023,6 +8337,37 @@ def main():
     btn_region_diagnostics.label.set_color('#E0E0E0')
     btn_region_diagnostics.label.set_fontsize(7)
     btn_region_diagnostics.on_clicked(show_region_diagnostics)
+    # A separate row below existing controls; no overlap with coordinate inputs.
+    ax_btn_disparity_debug = fig.add_axes([0.05, control_row_y[6]-0.030, 0.15, control_h])
+    btn_disparity_debug = Button(ax_btn_disparity_debug,
+        '視差一致性: On' if view_state['disparity_debug'] else '視差一致性: Off',
+        useblit=False, **btn_opt_style)
+    btn_disparity_debug.label.set_color('#E0E0E0')
+    btn_disparity_debug.label.set_fontsize(7)
+    btn_disparity_debug.ax.patch.set_edgecolor('#00BFFF')
+
+    def on_disparity_debug(event):
+        if block_accuracy_state['mode'] != 'idle' or (height_profile is not None and height_profile.enabled):
+            depth_text.set_text('請先完成 Block 統計或關閉拖曳剖面，再切換視差診斷')
+            request_blit_refresh()
+            return
+        enabled = not view_state['disparity_debug']
+        view_state['disparity_debug'] = enabled
+        btn_disparity_debug.label.set_text('視差一致性: On' if enabled else '視差一致性: Off')
+        if not enabled:
+            disparity_audit_viewer.close()
+        depth_text.set_text('視差診斷已開啟；請重新點選（不修改匹配結果）' if enabled
+                            else '視差診斷已關閉；停止局部表格計算與繪圖')
+        request_blit_refresh()
+
+    btn_disparity_debug.on_clicked(on_disparity_debug)
+    ax_btn_center_refine = fig.add_axes([0.21, control_row_y[6]-0.030, 0.15, control_h])
+    btn_center_refine = Button(ax_btn_center_refine,
+        '中心精修: On' if REGION_SIFT_CONFIG.center_refine_enabled else '中心精修: Off',
+        useblit=False, **btn_opt_style)
+    btn_center_refine.label.set_color('#E0E0E0')
+    btn_center_refine.label.set_fontsize(7)
+    btn_center_refine.ax.patch.set_edgecolor('#00FF88')
     ax_btn_height_profile = fig.add_axes([0.415, control_row_y[5], 0.15, control_h])
     btn_height_profile = Button(ax_btn_height_profile, '拖曳高度剖面', useblit=False, **btn_opt_style)
     btn_height_profile.label.set_color('#E0E0E0')
@@ -8048,9 +8393,14 @@ def main():
         if block_accuracy_state['mode'] != 'idle':
             raise ValueError('請先完成或取消 Block 誤差統計，再修改參數')
         previous = REGION_SIFT_CONFIG
+        from Algorithm.region_sift_center_refinement import validate_center_config
+        validate_center_config(updated)
         REGION_SIFT_CONFIG = updated
         btn_sift_backend.label.set_text('Descriptor: 自製' if updated.use_masked_sift else 'Descriptor: OpenCV')
         btn_region_refine.label.set_text('視差微調: On' if updated.local_plane_refine else '視差微調: Off')
+        btn_center_refine.label.set_text('中心精修: On' if updated.center_refine_enabled else '中心精修: Off')
+        if not updated.center_refine_enabled:
+            center_refinement_viewer.close()
         # Left descriptor cache keys include the whole immutable config;
         # the next measurement also creates a new click-local cache.
         for name, value in vars(updated).items():
@@ -8074,12 +8424,25 @@ def main():
         from dataclasses import replace
         try:
             apply_region_settings(replace(REGION_SIFT_CONFIG,
-                local_plane_refine=not REGION_SIFT_CONFIG.local_plane_refine))
+                local_plane_refine=not REGION_SIFT_CONFIG.local_plane_refine,
+                center_refine_enabled=False))
         except ValueError as exc:
             depth_text.set_text(str(exc))
             request_blit_refresh()
 
     btn_region_refine.on_clicked(on_region_refine)
+
+    def on_center_refine(event):
+        from dataclasses import replace
+        try:
+            apply_region_settings(replace(REGION_SIFT_CONFIG,
+                center_refine_enabled=not REGION_SIFT_CONFIG.center_refine_enabled,
+                local_plane_refine=False))
+        except ValueError as exc:
+            depth_text.set_text(str(exc))
+            request_blit_refresh()
+
+    btn_center_refine.on_clicked(on_center_refine)
 
     def on_region_settings(event):
         if block_accuracy_state['mode'] != 'idle':
@@ -8864,6 +9227,8 @@ def main():
                    btn_rt_sift, btn_height_plane, btn_metric_blocks, btn_shared_plane,
                    btn_top2_geo, btn_h_residual, btn_rt_warp_view]
         widgets.extend([text_region_u, text_region_v, btn_region_replay,
+                        btn_disparity_debug,
+                        btn_center_refine,
                         btn_region_settings, btn_sift_backend, btn_region_refine, btn_specular_settings,
                         btn_specular_v2, btn_specular_v2_settings])
         return widgets
@@ -9204,6 +9569,8 @@ def main():
                               if point is not None else np.empty((0, 2)))
         # Replay the stored candidate scores, geometry and plane; never remeasure.
         region_diagnostics.show(result)
+        disparity_audit_viewer.show(result, enabled=view_state.get('disparity_debug', False))
+        center_refinement_viewer.show(result, enabled=region_diagnostics.show_ambiguity)
         request_blit_refresh()
 
     height_profile = DragHeightProfile(
@@ -9218,7 +9585,7 @@ def main():
                      ax_c10, ax_c11, ax_c12, ax_c13, ax_c14, ax_c15, ax_c16, ax_c17, ax_c19,
                      ax_region_u, ax_region_v, ax_btn_region_replay, ax_btn_region_settings,
                      ax_btn_region_diagnostics, ax_btn_height_profile, ax_btn_sift_backend,
-                     ax_btn_region_refine]),
+                     ax_btn_region_refine, ax_btn_disparity_debug, ax_btn_center_refine]),
         ('#00FF88', [ax_btn_specular_settings, ax_btn_specular_v2, ax_btn_specular_v2_settings]),
         ('#FFAA00', [ax_btn_lock_L, ax_btn_lock_R, ax_btn_hide_R, ax_btn_norm,
                      ax_btn_calc, ax_btn_auto_calc, ax_btn_grad,
@@ -9361,6 +9728,11 @@ def main():
             first_render = False
             startup_timer.stage("首次繪製")
             startup_timer.report()
+            print(f"      ↳ [全域平面+左右高光遮罩細分] parent={_startup_mask_parent_ms:.1f} ms "
+                  "（下列為細分，不另加計啟動總時間）")
+            for _name, _ms in _startup_mask_detail:
+                _pct = 100. * _ms / max(_startup_mask_parent_ms, 1e-12)
+                print(f"         - {_name}: {_ms:.1f} ms ({_pct:.1f}% of stage)")
         if UI_RENDER_PROFILE:
             finished = render_finished
             render_stats.append(((prepared - started) * 1000,
@@ -9381,6 +9753,8 @@ def main():
     render_timer.add_callback(render_pending)
     def stop_rendering(event):
         render_timer.stop()
+        disparity_audit_viewer.close()
+        center_refinement_viewer.close()
         # Return to the source menu even when diagnostic windows remain open.
         fig.canvas.manager.window.quit()
 

@@ -1,0 +1,80 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -24,14 +24,21 @@
+     return (slice(y0,y1),slice(x0,x1)),(x1-x0)*(y1-y0)
+ 
+ 
+-def frame_difference(first,second,threshold,roi=None):
++def frame_difference(first,second,threshold,roi=None,normalize=False):
+     if first.shape != second.shape: raise ValueError('兩影格尺寸不同')
+     if not 0 <= threshold <= 255: raise ValueError('門檻必須介於 0～255')
+     region,_=roi_slice(first.shape,roi)
+-    difference=np.zeros(first.shape[:2],np.uint8)
+-    local=cv2.absdiff(cv2.cvtColor(first[region],cv2.COLOR_BGR2GRAY),cv2.cvtColor(second[region],cv2.COLOR_BGR2GRAY))
++    grays=[cv2.cvtColor(image[region],cv2.COLOR_BGR2GRAY) for image in (first,second)]
++    if normalize:
++        # Independent ROI min-max scaling; constant patches map to zero.
++        # Keep float precision until thresholding (no uint8 rounding).
++        for i,gray in enumerate(grays):
++            low,high=float(gray.min()),float(gray.max())
++            grays[i]=(gray.astype(np.float32)-low)*(255.0/(high-low)) if high>low else np.zeros(gray.shape,np.float32)
++    difference=np.zeros(first.shape[:2],np.float32 if normalize else np.uint8)
++    local=cv2.absdiff(*grays)
+     difference[region]=local
+-    mask=np.zeros_like(difference);mask[region]=(local > threshold).astype(np.uint8)*255
++    mask=np.zeros(first.shape[:2],np.uint8);mask[region]=(local > threshold).astype(np.uint8)*255
+     return difference,mask
+ 
+ 
+@@ -75,6 +82,7 @@
+         self.display=tk.StringVar(value='疊圖');self.threshold=tk.StringVar(value='30')
+         self.show_tp=tk.BooleanVar(value=True);self.show_fn=tk.BooleanVar(value=True);self.show_fp=tk.BooleanVar(value=True)
+         self.show_crosshair=tk.BooleanVar(value=False)
++        self.normalize_gray=tk.BooleanVar(value=False)
+         self.index1=tk.StringVar(value='0');self.index2=tk.StringVar(value='1');self.current=tk.StringVar(value='0')
+         self.status=tk.StringVar(value='請載入影片；index 從 0 開始。滾輪縮放、左鍵拖曳，七個面板同步。')
+         top=ttk.Frame(root,padding=5);top.pack(fill='x')
+@@ -107,13 +115,16 @@
+         ttk.Checkbutton(roi_bar,text='同步十字游標',variable=self.show_crosshair,command=self.hide_crosshair).pack(side='left',padx=8)
+         self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用七個面板。')
+         ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
++        norm_bar=ttk.Frame(root,padding=5);norm_bar.pack(fill='x')
++        ttk.Checkbutton(norm_bar,text='ROI 灰階 normalize 後相減',variable=self.normalize_gray,command=self.draw).pack(side='left',padx=4)
++        ttk.Label(norm_bar,text='兩幀各自 min-max 到 0～255；無 ROI 使用全圖；灰階為常數時設為 0。僅影響差異與 GT 比較。').pack(side='left',padx=8)
+         compare_bar=ttk.Frame(root,padding=5);compare_bar.pack(fill='x')
+         ttk.Label(compare_bar,text='比較圖（差異 mask 作為 GT，index2 反光 mask 作為預測）：').pack(side='left',padx=4)
+         for label,var in [('綠色：都有偵測 TP',self.show_tp),('深藍：漏偵測 FN',self.show_fn),('紅色：多偵測 FP',self.show_fp)]:
+             ttk.Checkbutton(compare_bar,text=label,variable=var,command=self.draw).pack(side='left',padx=5)
+         ttk.Label(compare_bar,text='未勾選與兩者皆無的像素顯示黑色；統計不受勾選影響。').pack(side='left',padx=5)
+         self.slider=ttk.Scale(root,from_=0,to=1,command=self.slider_seek);self.slider.pack(fill='x',padx=12)
+-        ttk.Label(root,text='差異以原始灰階直接相減，不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
++        ttk.Label(root,text='差異使用灰階絕對差，可選 normalize；不做影像對齊；白色＝差異大於門檻。深藍＝反光排除區。選定兩幀不會隨播放改變。').pack(anchor='w',padx=10)
+         self.figure=Figure(figsize=(14,8),facecolor='#202020');self.axes=[];self.artists=[]
+         titles=['Current frame','index1: original','index2: original','Absolute grayscale difference mask','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
+         for i,title in enumerate(titles):
+@@ -345,13 +356,14 @@
+         frames=[self.images[0],self.images[1],self.images[2],None,None,None,None]
+         titles=[f'Current F{self.current_index}','index1: original','index2: original','abs(gray1-gray2) > threshold','index1: specular','index2: specular','Difference GT vs index2: TP / FN / FP']
+         if self.pair_results is not None:
+-            try:threshold=float(self.threshold.get());difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi)
++            try:threshold=float(self.threshold.get());difference,mask=frame_difference(self.images[1],self.images[2],threshold,self.roi,self.normalize_gray.get())
+             except ValueError:
+                 self.status.set('門檻請輸入 0～255 的有效數字。');return
+             frames[3]=cv2.cvtColor(mask,cv2.COLOR_GRAY2BGR)
+             region,area=roi_slice(mask.shape,self.roi)
+             scope='ROI' if self.roi is not None else 'full'
+-            titles[3]=f'abs(gray1-gray2) > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
++            diff_mode='normalized' if self.normalize_gray.get() else 'raw'
++            titles[3]=f'{diff_mode} abs diff > {threshold:g} | {scope}: {np.count_nonzero(mask)}/{area} ({100*np.count_nonzero(mask)/area:.2f}%)'
+             for i in range(2):
+                 shown_mask=np.zeros_like(self.pair_results[i][0])
+                 shown_mask[region]=self.pair_results[i][0][region]
+@@ -361,7 +373,7 @@
+                 titles[i+4]=f'F{self.pair_indices[i]} | {self.pair_mode} {scope}: {count}/{area} ({100*count/area:.2f}%)'
+             frames[6],counts=compare_masks(mask,self.pair_results[1][0],self.roi,
+                 (self.show_tp.get(),self.show_fn.get(),self.show_fp.get()))
+-            titles[6]=(f'GT: difference | Prediction: F{self.pair_indices[1]}\n'
++            titles[6]=(f'GT: {diff_mode} difference | Prediction: F{self.pair_indices[1]}\n'
+                        f'TP={counts["tp"]} FN={counts["fn"]} FP={counts["fp"]} | {scope}={counts["area"]} px')
+         for ax,artist,image,title in zip(self.axes,self.artists,frames,titles):
+             if image is None:continue

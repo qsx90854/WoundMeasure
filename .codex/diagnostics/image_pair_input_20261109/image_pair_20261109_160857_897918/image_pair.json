@@ -1,0 +1,13 @@
+{
+  "source_type": "image_pair",
+  "left_image": "D:\\Lightglue\\lg_env\\.codex\\diagnostics\\image_pair_input_20261109\\left.png",
+  "right_image": "D:\\Lightglue\\lg_env\\.codex\\diagnostics\\image_pair_input_20261109\\right.png",
+  "width": 1920,
+  "height": 1080,
+  "calibration": "D:\\Lightglue\\lg_env\\calibration_result_Zebra_1_monocular.json",
+  "frame_mapping": {
+    "0": "right/A",
+    "1": "left/B"
+  },
+  "input_pixels": "raw, not undistorted"
+}

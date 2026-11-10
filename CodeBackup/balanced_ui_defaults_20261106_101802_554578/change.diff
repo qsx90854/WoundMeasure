@@ -1,0 +1,64 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -14,8 +14,42 @@
+ from specular_image_pair_ui import SpecularPairUI, read_main_defaults, detect_pair
+ from specular_video_pair_ui import VideoSource, render_video_frame
+ from Algorithm.frame_specular_candidates import DEFAULTS as CHANGE_DEFAULTS, specular_change_candidates
++from Algorithm.specular_detection import BlockSpatialSpecularConfig
+ from Algorithm.specular_settings import show_specular_settings
+ from Algorithm.specular_model_v2_settings import show_specular_model_v2_settings
++
++
++# Balanced Legacy preset from the 2026-11-05 F250/F550 experiment.
++# Local to this viewer; does not depend on experiment files at runtime.
++BALANCED_LEGACY_CONFIG = BlockSpatialSpecularConfig(
++    block_width_px=64,
++    block_height_px=64,
++    v_percentile=90.0,
++    rgb_percentile=90.0,
++    local_hot_percentile=80.0,
++    v_min=140.0,
++    v_max=245.0,
++    rgb_min=120.0,
++    rgb_max=250.0,
++    local_hot_min=15.0,
++    local_hot_max=45.0,
++    gray_min=80.0,
++    gray_below_v=50.0,
++    s_max=120,
++    whiteness_max=45,
++    background_sigma=5.0,
++    enable_prominence_gate=True,
++    prominence_min=20.0,
++    prominence_mad_multiplier=2.0,
++    enable_strong_highlight_exception=True,
++    strong_v_min=250.0,
++    strong_s_max=30.0,
++    strong_whiteness_max=20.0,
++    interpolate_thresholds=True,
++    open_kernel_px=1,
++    close_kernel_px=1,
++    dilate_px=0,
++)
+ 
+ 
+ def roi_slice(shape,roi):
+@@ -129,7 +163,8 @@
+     # Reuse linked navigation only; do not initialize the two-image layout.
+     def __init__(self,root):
+         self.root=root;root.title('單影片：雙影格差異與空間反光偵測');root.geometry('1500x950')
+-        self.legacy,self.v2,enabled=read_main_defaults()
++        _,self.v2,_=read_main_defaults()
++        self.legacy=BALANCED_LEGACY_CONFIG
+         self.source=None;self.images=[None,None,None];self.pair_results=None;self.pair_indices=None
+         self.current_index=0;self.desired_current=0
+         self.worker=ThreadPoolExecutor(max_workers=1);self.future=None;self.pending_pair=None;self.pending_current=None
+@@ -137,7 +172,7 @@
+         self.calibration_roi=None;self.calibration_patches=[];self.roi_kind='analysis';self.calibration_cache=None
+         self.roi=None;self.roi_selecting=False;self.roi_drag=None;self.roi_patches=[]
+         self.drag=None;self.pair_revision=0;self.active_pair_revision=0;self.job=None
+-        self.mode=tk.StringVar(value='V2' if enabled else 'Legacy');self.alpha=tk.DoubleVar(value=.55)
++        self.mode=tk.StringVar(value='Legacy');self.alpha=tk.DoubleVar(value=.55)
+         self.display=tk.StringVar(value='疊圖');self.threshold=tk.StringVar(value='30')
+         self.show_tp=tk.BooleanVar(value=True);self.show_fn=tk.BooleanVar(value=True);self.show_fp=tk.BooleanVar(value=True)
+         self.show_crosshair=tk.BooleanVar(value=False)

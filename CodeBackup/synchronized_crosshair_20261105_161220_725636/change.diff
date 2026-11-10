@@ -1,0 +1,97 @@
+--- backup
++++ video_frame_difference_ui.py
+@@ -74,6 +74,7 @@
+         self.mode=tk.StringVar(value='V2' if enabled else 'Legacy');self.alpha=tk.DoubleVar(value=.55)
+         self.display=tk.StringVar(value='疊圖');self.threshold=tk.StringVar(value='30')
+         self.show_tp=tk.BooleanVar(value=True);self.show_fn=tk.BooleanVar(value=True);self.show_fp=tk.BooleanVar(value=True)
++        self.show_crosshair=tk.BooleanVar(value=False)
+         self.index1=tk.StringVar(value='0');self.index2=tk.StringVar(value='1');self.current=tk.StringVar(value='0')
+         self.status=tk.StringVar(value='請載入影片；index 從 0 開始。滾輪縮放、左鍵拖曳，七個面板同步。')
+         top=ttk.Frame(root,padding=5);top.pack(fill='x')
+@@ -103,6 +104,7 @@
+         roi_bar=ttk.Frame(root,padding=5);roi_bar.pack(fill='x')
+         self.roi_button=ttk.Button(roi_bar,text='框選 ROI',command=self.toggle_roi);self.roi_button.pack(side='left',padx=3)
+         ttk.Button(roi_bar,text='清除 ROI／全圖',command=self.clear_roi).pack(side='left',padx=3)
++        ttk.Checkbutton(roi_bar,text='同步十字游標',variable=self.show_crosshair,command=self.hide_crosshair).pack(side='left',padx=8)
+         self.roi_text=tk.StringVar(value='分析全圖；可在任一面板框選，同步套用七個面板。')
+         ttk.Label(roi_bar,textvariable=self.roi_text).pack(side='left',padx=8)
+         compare_bar=ttk.Frame(root,padding=5);compare_bar.pack(fill='x')
+@@ -119,6 +121,13 @@
+             ax.set_facecolor('#111111');ax.tick_params(colors='white');ax.set_title(title,color='white',fontsize=10)
+             ax.set_aspect('equal',adjustable='box');self.axes.append(ax)
+             self.artists.append(ax.imshow(np.zeros((1,1,3),np.uint8),origin='upper',interpolation='nearest'))
++        from matplotlib import patheffects
++        self.crosshairs=[]
++        for ax in self.axes:
++            marker,=ax.plot([],[],marker='+',markersize=10,markeredgewidth=1.3,
++                           color='white',linestyle='None',visible=False,zorder=30)
++            marker.set_path_effects([patheffects.Stroke(linewidth=3,foreground='black'),patheffects.Normal()])
++            self.crosshairs.append(marker)
+         from matplotlib.patches import Rectangle
+         for ax in self.axes:
+             box=Rectangle((0,0),0,0,fill=False,edgecolor='yellow',linewidth=1.5,zorder=20,visible=False)
+@@ -126,9 +135,33 @@
+         self.figure.subplots_adjust(left=.035,right=.98,bottom=.04,top=.94,wspace=.12,hspace=.22)
+         self.canvas=FigureCanvasTkAgg(self.figure,master=root);self.canvas.get_tk_widget().pack(fill='both',expand=True)
+         for event,callback in [('scroll_event',self.scroll),('button_press_event',self.press),('motion_notify_event',self.motion),('button_release_event',self.release)]:self.canvas.mpl_connect(event,callback)
++        self.canvas.mpl_connect('figure_leave_event',self.hide_crosshair)
++        self.canvas.mpl_connect('axes_leave_event',self.hide_crosshair)
+         ttk.Label(root,textvariable=self.status,padding=5).pack(fill='x')
+         root.protocol('WM_DELETE_WINDOW',self.close);root.bind('<Escape>',lambda e:self.cancel_roi())
+         self.home()
++
++    def hide_crosshair(self,event=None):
++        changed=any(marker.get_visible() for marker in self.crosshairs)
++        for marker in self.crosshairs:marker.set_visible(False)
++        if changed:self.canvas.draw_idle()
++
++    def update_crosshair(self,event):
++        if not self.show_crosshair.get() or event.inaxes not in self.axes or event.x is None or event.y is None:
++            self.hide_crosshair();return
++        panel=self.axes.index(event.inaxes)
++        if (panel==0 and self.images[0] is None) or (panel>0 and self.pair_results is None):
++            self.hide_crosshair();return
++        # Transform after panning so the marker stays under the pointer.
++        x,y=event.inaxes.transData.inverted().transform((event.x,event.y))
++        image=self.images[0] if panel==0 else self.images[1]
++        h,w=image.shape[:2]
++        if not (-.5<=x<w-.5 and -.5<=y<h-.5):
++            self.hide_crosshair();return
++        for i,marker in enumerate(self.crosshairs):
++            available=self.images[0] is not None if i==0 else self.pair_results is not None
++            marker.set_data([x],[y]);marker.set_visible(available)
++        self.canvas.draw_idle()
+ 
+     def selected_roi(self,start,end):
+         image=next((im for im in self.images if im is not None),None)
+@@ -175,9 +208,11 @@
+     def motion(self,event):
+         if self.roi_drag is None:
+             if not self.roi_selecting:super().motion(event)
++            self.update_crosshair(event)
+             return
+         if event.x is None or event.y is None:return
+         inverse,start=self.roi_drag;self.show_roi(self.selected_roi(start,inverse.transform((event.x,event.y))))
++        self.update_crosshair(event)
+ 
+     def release(self,event):
+         if self.roi_drag is None:return super().release(event)
+@@ -190,7 +225,9 @@
+         self.cancel_roi();self.draw()
+ 
+     def scroll(self,event):
+-        if self.roi_drag is None:super().scroll(event)
++        if self.roi_drag is None:
++            super().scroll(event)
++            self.update_crosshair(event)
+ 
+     def pause(self):
+         self.playing=False
+@@ -207,6 +244,7 @@
+         if self.source is not None:self.source.close()
+         self.source=source;self.pending_pair=None;self.pending_current=None
+         self.images=[source.image.copy(),None,None];self.pair_results=None;self.pair_indices=None
++        self.hide_crosshair()
+         self.roi=None;self.cancel_roi()
+         self.current_index=self.desired_current=0;self.current.set('0');self.index1.set('0');self.index2.set(str(min(1,source.count-1)))
+         self.slider.configure(to=max(1,source.count-1));self.setting_slider=True;self.slider.set(0);self.setting_slider=False
